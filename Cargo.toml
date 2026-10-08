@@ -1,0 +1,41 @@
+[workspace]
+resolver = "3"
+members = ["crates/workhouse-core", "crates/workhouse-python"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+arrow = { version = "60", default-features = false, features = ["csv", "ffi", "prettyprint", "ipc", "ipc_compression", "chrono-tz"] }
+parquet = { version = "60", default-features = false, features = ["arrow", "snap", "zstd", "lz4", "flate2-zlib-rs", "brotli", "simdutf8"] }
+rayon = "1.12"
+hashbrown = "0.17"
+foldhash = "0.2"
+memmap2 = "0.9"
+bytes = "1.12"
+glob = "0.3"
+sqlparser = "0.63"
+thiserror = "2"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+parking_lot = "0.12"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 16
+debug = false
+panic = "unwind"
+
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+
+# quick iteration builds: maturin develop --profile fast
+[profile.fast]
+inherits = "release"
+lto = "off"
+codegen-units = 64
+incremental = true

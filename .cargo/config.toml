@@ -1,0 +1,4 @@
+# native code for local builds only: a cross build (e.g. Linux wheels for a
+# remote kernel) picks its own CPU level
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-cpu=native"]

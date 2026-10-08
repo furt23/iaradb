@@ -1,0 +1,136 @@
+"use client";
+
+import CreateNewFolderOutlined from "@mui/icons-material/CreateNewFolderOutlined";
+import DeleteOutline from "@mui/icons-material/DeleteOutlineOutlined";
+import DownloadOutlined from "@mui/icons-material/DownloadOutlined";
+import DriveFileRenameOutline from "@mui/icons-material/DriveFileRenameOutline";
+import FileCopyOutlined from "@mui/icons-material/FileCopyOutlined";
+import LinkOutlined from "@mui/icons-material/LinkOutlined";
+import MenuBookOutlined from "@mui/icons-material/MenuBookOutlined";
+import NoteAddOutlined from "@mui/icons-material/NoteAddOutlined";
+import OpenInNewOutlined from "@mui/icons-material/OpenInNewOutlined";
+import VerticalSplitOutlined from "@mui/icons-material/VerticalSplitOutlined";
+import Divider from "@mui/material/Divider";
+import ListItemIcon from "@mui/material/ListItemIcon";
+import Menu from "@mui/material/Menu";
+import MenuItem from "@mui/material/MenuItem";
+import { useRouter } from "next/navigation";
+import { useState, type ReactNode } from "react";
+
+import { useGuard, useNotify } from "@/features/shell/notify";
+import { useWorkbench } from "@/features/workbench/WorkbenchProvider";
+import { unwrap } from "@/lib/action";
+import { duplicateEntry } from "@/server/actions/files";
+import type { FileNode } from "@/server/workspace/files";
+
+import { DeleteEntryDialog } from "./DeleteEntryDialog";
+import { NewFolderDialog } from "./NewFolderDialog";
+import { NewNotebookDialog } from "./NewNotebookDialog";
+import { RenameDialog } from "./RenameDialog";
+
+export interface FileMenuTarget {
+  node: FileNode;
+  /** anchor element, or a pointer position (right-click) */
+  anchor: HTMLElement | { x: number; y: number };
+  /** the page that shows the file, if any */
+  href: string | null;
+}
+
+type Dialog = { kind: "rename" | "delete" | "folder" | "notebook"; path: string } | null;
+
+function Item({ icon, label, onClick, danger }: { icon: ReactNode; label: string; onClick(): void; danger?: boolean }) {
+  return (
+    <MenuItem onClick={onClick} sx={danger ? { color: "error.main" } : undefined}>
+      <ListItemIcon sx={danger ? { color: "error.main" } : undefined}>{icon}</ListItemIcon>
+      {label}
+    </MenuItem>
+  );
+}
+
+/** Actions on any entry of the file tree: open, rename / move, duplicate, download, delete, new items in folders. */
+export function FileMenu({ target, onClose }: { target: FileMenuTarget | null; onClose(): void }) {
+  const { act } = useWorkbench();
+  const [dialog, setDialog] = useState<Dialog>(null);
+  const guard = useGuard();
+  const notify = useNotify();
+  const router = useRouter();
+
+  const node = target?.node;
+  const anchor = target?.anchor;
+  // a pointer position (not `instanceof HTMLElement`: this also renders on the server)
+  const point = anchor && "x" in anchor ? anchor : null;
+  const run = (fn: (n: FileNode) => void | Promise<void>) => () => {
+    if (!node) return;
+    onClose();
+    void fn(node);
+  };
+  const open = (kind: NonNullable<Dialog>["kind"]) => run((n) => setDialog({ kind, path: n.path }));
+  const duplicate = run((n) =>
+    guard(async () => {
+      const copy = unwrap(await duplicateEntry(n.path));
+      notify(`Created ${copy.path}`, "success");
+      router.refresh();
+    }),
+  );
+  const copyPath = run(async (n) => {
+    await navigator.clipboard.writeText(n.path);
+    notify(`Copied ${n.path}`, "success");
+  });
+  const download = run((n) => {
+    window.location.href = `/api/workspace-file?path=${encodeURIComponent(n.path)}`;
+  });
+
+  const items: ReactNode[] = [];
+  if (node?.kind === "notebook") {
+    items.push(
+      <Item key="open" icon={<MenuBookOutlined fontSize="small" />} label="Open" onClick={run((n) => act({ type: "open", path: n.path }, true))} />,
+      <Item key="side" icon={<VerticalSplitOutlined fontSize="small" />} label="Open in a new pane" onClick={run((n) => act({ type: "openToSide", path: n.path }, true))} />,
+      <Divider key="d1" />,
+    );
+  } else if (node?.kind === "dir") {
+    items.push(
+      <Item key="nb" icon={<NoteAddOutlined fontSize="small" />} label="New notebook here…" onClick={open("notebook")} />,
+      <Item key="folder" icon={<CreateNewFolderOutlined fontSize="small" />} label="New folder…" onClick={open("folder")} />,
+      <Divider key="d1" />,
+    );
+  } else if (target?.href) {
+    const href = target.href;
+    items.push(
+      <Item key="open" icon={<OpenInNewOutlined fontSize="small" />} label="Open" onClick={run(() => router.push(href))} />,
+      <Divider key="d1" />,
+    );
+  }
+  items.push(
+    <Item key="rename" icon={<DriveFileRenameOutline fontSize="small" />} label="Rename / move…" onClick={open("rename")} />,
+    <Item key="dup" icon={<FileCopyOutlined fontSize="small" />} label="Duplicate" onClick={duplicate} />,
+  );
+  if (node && node.kind !== "dir" && node.kind !== "notebook") {
+    items.push(<Item key="dl" icon={<DownloadOutlined fontSize="small" />} label="Download" onClick={download} />);
+  }
+  items.push(
+    <Item key="copy" icon={<LinkOutlined fontSize="small" />} label="Copy path" onClick={copyPath} />,
+    <Divider key="d2" />,
+    <Item key="delete" icon={<DeleteOutline fontSize="small" />} label="Delete…" onClick={open("delete")} danger />,
+  );
+
+  const close = () => setDialog(null);
+  return (
+    <>
+      <Menu
+        open={target !== null}
+        onClose={onClose}
+        anchorEl={anchor && !point ? (anchor as HTMLElement) : null}
+        anchorReference={point ? "anchorPosition" : "anchorEl"}
+        anchorPosition={point ? { top: point.y, left: point.x } : undefined}
+        slotProps={{ list: { dense: true, "aria-label": node ? `actions for ${node.name}` : undefined } }}
+      >
+        {items}
+      </Menu>
+      <RenameDialog path={dialog?.kind === "rename" ? dialog.path : null} onClose={close} />
+      <DeleteEntryDialog path={dialog?.kind === "delete" ? dialog.path : null} onClose={close} />
+      <NewFolderDialog parent={dialog?.kind === "folder" ? dialog.path : null} onClose={close} />
+      <NewNotebookDialog open={dialog?.kind === "notebook"} folder={dialog?.path ?? "notebooks"} onClose={close} />
+    </>
+  );
+}
+

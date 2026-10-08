@@ -1,0 +1,30 @@
+[package]
+name = "workhouse-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+arrow.workspace = true
+parquet.workspace = true
+rayon.workspace = true
+hashbrown.workspace = true
+foldhash.workspace = true
+memmap2.workspace = true
+bytes.workspace = true
+glob.workspace = true
+sqlparser.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+parking_lot.workspace = true
+memchr = "2"
+# remote storage (object_store; the "s3" feature adds Amazon S3)
+object_store = { version = "0.14", default-features = false, features = ["tokio"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "time", "sync", "macros"] }
+futures = { version = "0.3", default-features = false, features = ["std"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"], optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+
+[features]
+default = []
+s3 = ["object_store/aws-base", "object_store/reqwest", "object_store/ring", "dep:reqwest", "dep:rustls"]

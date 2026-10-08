@@ -1,0 +1,18 @@
+{
+  "name": "@workhouse/protocol",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Types of the Workhouse kernel protocol (mirrors python/workhouse/kernel)",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

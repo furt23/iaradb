@@ -1,0 +1,21 @@
+[package]
+name = "workhouse-python"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "_workhouse"
+crate-type = ["cdylib"]
+
+[dependencies]
+workhouse-core = { path = "../workhouse-core" }
+arrow.workspace = true
+chrono.workspace = true
+pyo3 = { version = "0.29", features = ["abi3-py310", "extension-module"] }
+parking_lot.workspace = true
+mimalloc = { version = "0.1", default-features = false }
+
+[features]
+default = ["s3"]
+s3 = ["workhouse-core/s3"]

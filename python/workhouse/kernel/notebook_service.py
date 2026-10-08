@@ -1,0 +1,265 @@
+"""The open notebook: its source, cell states, values and reactive execution.
+
+Running a cell also runs every cell that depends on it (and ancestors that
+never ran or were edited since), in dependency order, as marimo does.
+
+Notebook files belong to the Studio (protocol v2): it sends a notebook's
+source when opening it and writes back the source the kernel returns on
+create / save (``persist=False``). Kernels on the Studio's machine may still
+read and write the files themselves (``persist=True``, the default).
+"""
+
+from __future__ import annotations
+
+import threading
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from workhouse.kernel.cell_runner import CellRunner, Emit, Outcome
+from workhouse.kernel.notebook import marimo_io
+from workhouse.kernel.notebook.graph import DependencyGraph
+from workhouse.kernel.notebook.model import Cell, Notebook
+from workhouse.workspaces import Workspace
+
+
+@dataclass
+class CellState:
+    status: str = "idle"  # idle | queued | running | done | error | cancelled
+    output: dict[str, Any] | None = None
+    streams: list[dict[str, str]] = field(default_factory=list)
+    elapsed_ms: float | None = None
+    defs: tuple[str, ...] = ()
+    #: code of the last run (a cell whose code differs is stale)
+    code_run: str | None = None
+    #: status before being queued (restored if the run is interrupted)
+    prev_status: str = "idle"
+
+    def view(self, code: str) -> dict[str, Any]:
+        stale = self.code_run is not None and self.code_run != code and self.status in ("done", "error")
+        return {
+            "status": self.status,
+            "stale": stale,
+            "output": self.output,
+            "streams": self.streams,
+            "elapsed_ms": self.elapsed_ms,
+        }
+
+
+def resolve_in(root: Path, rel: str) -> Path:
+    """``rel`` inside the workspace root (paths escaping it are refused)."""
+    p = (root / rel).resolve()
+    if p != root and root not in p.parents:
+        raise PermissionError(f"{rel!r} is outside the workspace")
+    return p
+
+
+def summarize(value: Any) -> str:
+    for attr in ("shape",):
+        shape = getattr(value, attr, None)
+        if isinstance(shape, tuple):
+            return " × ".join(map(str, shape))
+    if hasattr(value, "num_rows") and hasattr(value, "num_columns"):
+        return f"{value.num_rows} × {value.num_columns}"
+    text = repr(value)
+    return text if len(text) <= 80 else text[:77] + "..."
+
+
+class NotebookService:
+    def __init__(self, ws: Workspace, runner: CellRunner) -> None:
+        self.ws = ws
+        self.runner = runner
+        self.notebook: Notebook | None = None
+        self.values: dict[str, Any] = {}
+        self.states: dict[str, CellState] = {}
+        self._lock = threading.RLock()
+
+    # -- files ---------------------------------------------------------------
+    def _require(self) -> Notebook:
+        if self.notebook is None:
+            raise RuntimeError("no notebook is open")
+        return self.notebook
+
+    def view(self) -> dict[str, Any]:
+        nb = self._require()
+        with self._lock:
+            return {
+                "path": nb.path.relative_to(self.ws.root).as_posix(),
+                "cells": [c.to_view() for c in nb.cells],
+                "states": {c.id: self.states.setdefault(c.id, CellState()).view(c.code) for c in nb.cells},
+            }
+
+    def open(self, rel: str, source: str | None = None) -> dict[str, Any]:
+        """Open a notebook from ``source`` (sent by the Studio) or its file."""
+        path = resolve_in(self.ws.root, rel)
+        with self._lock:
+            if self.notebook is not None and self.notebook.path == path:
+                return self.view()
+            if source is not None:
+                self._adopt(marimo_io.parse(source, path))
+            elif path.is_file():
+                self._adopt(marimo_io.read(path))
+            else:
+                raise FileNotFoundError(f"notebook {rel!r} does not exist")
+        return self.view()
+
+    def _adopt(self, nb: Notebook) -> None:
+        self.notebook, self.values, self.states = nb, {}, {}
+
+    def rename(self, rel: str) -> dict[str, Any]:
+        """The open notebook moved (the Studio moved its file): same cells,
+        values and outputs under the new path."""
+        path = resolve_in(self.ws.root, rel)
+        with self._lock:
+            self._require().path = path
+        return self.view()
+
+    def create(self, rel: str, persist: bool = True) -> dict[str, Any]:
+        """A new notebook, open; its file is written only when ``persist``."""
+        path = resolve_in(self.ws.root, rel)
+        if path.suffix != ".py":
+            raise ValueError("notebooks are .py files")
+        if persist and path.exists():
+            raise FileExistsError(f"{rel!r} already exists")
+        nb = marimo_io.new_notebook(path)
+        if persist:
+            marimo_io.write(nb)
+        with self._lock:
+            self._adopt(nb)
+            return {**self.view(), "source": marimo_io.serialize(nb)}
+
+    def _sync(self, cells: list[dict[str, Any]] | None) -> Notebook:
+        """Adopt the client's cells (order, code, kinds); forget removed ones."""
+        nb = self._require()
+        if cells is None:
+            return nb
+        nb.cells = [Cell.from_view(v) for v in cells]
+        alive = {c.id for c in nb.cells}
+        for cid in list(self.states):
+            if cid not in alive:
+                for name in self.states.pop(cid).defs:
+                    self.values.pop(name, None)
+        return nb
+
+    def save(self, cells: list[dict[str, Any]] | None, persist: bool = True) -> dict[str, Any]:
+        """Adopt the cells; return the notebook's source (and write it when ``persist``)."""
+        with self._lock:
+            nb = self._sync(cells)
+            source = marimo_io.serialize(nb)
+            if persist:
+                marimo_io.write(nb)
+        return {"path": nb.path.relative_to(self.ws.root).as_posix(), "source": source}
+
+    # -- execution -----------------------------------------------------------
+    def _needs_run(self, cell: Cell) -> bool:
+        s = self.states.get(cell.id)
+        return s is None or s.status != "done" or s.code_run != cell.code
+
+    def _plan(self, graph: DependencyGraph, nb: Notebook, targets: list[str]) -> list[str]:
+        seeds = set(targets)
+        for t in targets:
+            seeds |= {a for a in graph.ancestors(t) if self._needs_run(nb.cell(a))}
+        plan = set(seeds)
+        for s in seeds:
+            plan |= graph.descendants(s)
+        ordered = graph.topological(plan)
+        # cells inside a dependency cycle are reported as errors, not skipped
+        return ordered + [c for c in graph.order if c in plan and c not in ordered]
+
+    def _emit_state(self, emit: Emit, cell: Cell) -> None:
+        emit("cell.state", {"cell_id": cell.id, **self.states[cell.id].view(cell.code)})
+
+    def _finish(self, cell: Cell, outcome: Outcome, defs: tuple[str, ...]) -> None:
+        s = self.states[cell.id]
+        s.status, s.output, s.elapsed_ms, s.code_run = outcome.status, outcome.output, outcome.elapsed_ms, cell.code
+        if outcome.status == "done":
+            self.values.update(outcome.defs)
+            s.defs = defs
+
+    @staticmethod
+    def _blocked(reason: str) -> Outcome:
+        return Outcome("error", {"type": "error", "ename": "Blocked", "evalue": reason, "traceback": ""})
+
+    def run(self, cells: list[dict[str, Any]] | None, targets: list[str] | None, emit: Emit) -> dict[str, Any]:
+        with self._lock:
+            nb = self._sync(cells)
+            # a snapshot: saves arriving during the run may replace nb.cells
+            snapshot = {c.id: c for c in nb.cells}
+            graph = DependencyGraph(nb.cells)
+            order = self._plan(graph, nb, targets if targets is not None else graph.order)
+            for cid in order:
+                st = self.states.setdefault(cid, CellState())
+                st.prev_status, st.status, st.streams = st.status, "queued", []
+                self._emit_state(emit, snapshot[cid])
+        source = nb.path.relative_to(self.ws.root).as_posix()
+        failed: set[str] = set()
+        ran: list[str] = []
+        for i, cid in enumerate(order):
+            cell = snapshot[cid]
+            deps = graph.deps[cid]
+            defs = tuple(sorted(graph.analyses[cid].defs))
+            with self._lock:
+                for name in self.states[cid].defs:
+                    self.values.pop(name, None)
+                self.states[cid].defs = ()
+            if cid in graph.errors:
+                outcome = self._blocked(graph.errors[cid])
+            elif deps.parents & failed:
+                outcome = self._blocked("an upstream cell failed")
+            else:
+                with self._lock:
+                    inputs = {r: self.values[r] for r in deps.refs if r in self.values}
+                    self.states[cid].status = "running"
+                    self._emit_state(emit, cell)
+                outcome = self.runner.run(cell, deps, graph.analyses[cid].defs, inputs, self._stream_into(emit, cid), source)
+                ran.append(cid)
+            with self._lock:
+                self._finish(cell, outcome, defs)
+                self._emit_state(emit, cell)
+            if outcome.status != "done":
+                failed.add(cid)
+            if outcome.status == "cancelled":
+                self._unqueue([snapshot[c] for c in order[i + 1 :]], emit)
+                return {"ran": ran, "interrupted": True}
+        return {"ran": ran, "interrupted": False}
+
+    def _unqueue(self, rest: list[Cell], emit: Emit) -> None:
+        with self._lock:
+            for cell in rest:
+                st = self.states[cell.id]
+                st.status = st.prev_status
+                self._emit_state(emit, cell)
+
+    def _stream_into(self, emit: Emit, cid: str) -> Emit:
+        """Forward events, also keeping stream text in the cell state."""
+
+        def forward(event: str, data: dict[str, Any]) -> None:
+            if event == "cell.stream":
+                with self._lock:
+                    streams = self.states[cid].streams
+                    if streams and streams[-1]["stream"] == data["stream"]:
+                        streams[-1]["text"] += data["text"]
+                    else:
+                        streams.append({"stream": data["stream"], "text": data["text"]})
+            emit(event, data)
+
+        return forward
+
+    def namespace(self) -> dict[str, Any]:
+        """A snapshot of the values cells defined."""
+        with self._lock:
+            return dict(self.values)
+
+    def cells(self) -> list[Cell] | None:
+        """The cells as of the last save (``None``: no notebook is open)."""
+        with self._lock:
+            return None if self.notebook is None else list(self.notebook.cells)
+
+    def variables(self) -> list[dict[str, Any]]:
+        with self._lock:
+            owners = {n: cid for cid, s in self.states.items() for n in s.defs}
+            return [
+                {"name": n, "type": type(v).__name__, "summary": summarize(v), "cell_id": owners.get(n)}
+                for n, v in sorted(self.values.items())
+                if not n.startswith("_") and type(v).__name__ != "module"
+            ]

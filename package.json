@@ -1,0 +1,14 @@
+{
+  "name": "workhouse-studio",
+  "private": true,
+  "description": "Workhouse Studio: a workspace for the Workhouse engine (notebooks, catalog, SQL, Git)",
+  "packageManager": "pnpm@11.13.0",
+  "scripts": {
+    "dev": "pnpm --filter @workhouse/web dev",
+    "build": "pnpm --filter @workhouse/web build",
+    "start": "pnpm --filter @workhouse/web start",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "e2e": "pnpm --filter @workhouse/web e2e"
+  }
+}
