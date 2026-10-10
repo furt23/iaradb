@@ -1,0 +1,114 @@
+import "server-only";
+
+import fs from "node:fs/promises";
+import path from "node:path";
+
+import { jobToml, parseJob, type JobSpec } from "@/lib/jobs";
+import { movedPath } from "@/lib/paths";
+
+import { normalizeRelative } from "../kernel/keys";
+import { exists, resolveWorkspacePath } from "../workspace/files";
+
+/** Job definitions: `jobs/<id>.toml` files of the workspace (versioned with it). */
+
+export const JOBS_DIR = "jobs";
+
+export interface JobProblem {
+  id: string;
+  error: string;
+}
+
+function checkedId(id: string): string {
+  if (!/^[a-z0-9_]{1,64}$/.test(id)) throw new Error(`invalid job id ${id}`);
+  return id;
+}
+
+function fileOf(id: string): string {
+  return resolveWorkspacePath(`${JOBS_DIR}/${checkedId(id)}.toml`);
+}
+
+export async function listJobs(): Promise<{ jobs: JobSpec[]; problems: JobProblem[] }> {
+  let names: string[];
+  try {
+    names = await fs.readdir(resolveWorkspacePath(JOBS_DIR));
+  } catch {
+    return { jobs: [], problems: [] };
+  }
+  const jobs: JobSpec[] = [];
+  const problems: JobProblem[] = [];
+  for (const name of names.filter((n) => n.endsWith(".toml")).sort()) {
+    const id = name.slice(0, -".toml".length);
+    try {
+      jobs.push(parseJob(checkedId(id), await fs.readFile(fileOf(id), "utf8")));
+    } catch (e) {
+      problems.push({ id, error: (e as Error).message });
+    }
+  }
+  return { jobs, problems };
+}
+
+export async function readJob(id: string): Promise<JobSpec> {
+  try {
+    return parseJob(id, await fs.readFile(fileOf(id), "utf8"));
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") throw Object.assign(new Error(`there is no job ${id}`), { type: "NotFound" });
+    throw e;
+  }
+}
+
+async function writeAtomic(file: string, text: string): Promise<void> {
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  await fs.writeFile(tmp, text, "utf8");
+  await fs.rename(tmp, file);
+}
+
+/** Write a job's file (its target must exist). */
+export async function writeJob(spec: JobSpec): Promise<JobSpec> {
+  if (!(await exists(spec.target))) throw new Error(`${spec.target} does not exist`);
+  await writeAtomic(fileOf(spec.id), jobToml(spec));
+  return spec;
+}
+
+/** A job's TOML pointing at `to` instead of `from`: only the target changes (comments and other keys stay). */
+export function retargetToml(toml: string, from: string, to: string): string {
+  const lines = toml.split("\n");
+  const i = lines.findIndex((l) => /^\s*target\s*=/.test(l));
+  if (i >= 0) lines[i] = lines[i].replace(/^(\s*target\s*=\s*)("[^"]*"|'[^']*')/, (_, key: string) => `${key}"${to}"`);
+  // the first line is the comment the Studio writes: "# A Workhouse job: runs <target> ..."
+  const note = `# A Workhouse job: runs ${from}`;
+  if (lines[0]?.startsWith(note)) lines[0] = `# A Workhouse job: runs ${to}${lines[0].slice(note.length)}`;
+  return lines.join("\n");
+}
+
+/** A file or folder moved: the jobs that run it (or a file in it) follow. Returns the ids of the jobs changed. */
+export async function retargetJobs(from: string, to: string): Promise<string[]> {
+  const { jobs } = await listJobs();
+  const changed: string[] = [];
+  for (const job of jobs) {
+    let current: string;
+    try {
+      current = normalizeRelative(job.target);
+    } catch {
+      continue;
+    }
+    const next = movedPath(current, from, to);
+    if (next === null) continue;
+    const file = fileOf(job.id);
+    await writeAtomic(file, retargetToml(await fs.readFile(file, "utf8"), job.target, next));
+    changed.push(job.id);
+  }
+  return changed;
+}
+
+/** An id for a new job, not taken yet. */
+export async function freeJobId(base: string): Promise<string> {
+  for (let n = 1; ; n++) {
+    const id = n === 1 ? base : `${base}_${n}`;
+    if (!(await exists(`${JOBS_DIR}/${id}.toml`))) return id;
+  }
+}
+
+export async function deleteJob(id: string): Promise<void> {
+  await fs.rm(fileOf(id), { force: true });
+}

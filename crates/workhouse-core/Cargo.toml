@@ -20,6 +20,8 @@ parking_lot.workspace = true
 memchr = "2"
 # remote storage (object_store; the "s3" feature adds Amazon S3)
 object_store = { version = "0.14", default-features = false, features = ["tokio"] }
+# the ObjectStore trait is declared with it (the request-counting wrapper implements it)
+async-trait = "0.1"
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "time", "sync", "macros"] }
 futures = { version = "0.3", default-features = false, features = ["std"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"], optional = true }

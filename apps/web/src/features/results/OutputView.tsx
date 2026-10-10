@@ -3,10 +3,13 @@
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import type { CellOutput, ErrorOutput, StreamChunk } from "@workhouse/protocol";
-import ReactMarkdown from "react-markdown";
+import { type ComponentPropsWithoutRef, useMemo } from "react";
+import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { TableOutputView } from "./TableOutputView";
+import { markdownHeadings } from "@/lib/outline";
+
+import { TableOutputView, type ChartProps } from "./TableOutputView";
 
 export function ErrorView({ output }: { output: ErrorOutput }) {
   return (
@@ -23,7 +26,26 @@ export function ErrorView({ output }: { output: ErrorOutput }) {
   );
 }
 
+const HEADING_TAGS = ["h1", "h2", "h3", "h4", "h5", "h6"] as const;
+type HeadingTag = (typeof HEADING_TAGS)[number];
+
+/**
+ * Headings render as before, plus `data-heading-index` (their index among the
+ * text's headings, which the notebook outline scrolls to). The index is looked
+ * up by source line, so it does not depend on the order of rendering.
+ */
+function headingComponents(text: string): Components {
+  const indexByLine = new Map(markdownHeadings(text).map((h) => [h.line, h.index]));
+  const heading = (Tag: HeadingTag) =>
+    function Heading({ node, ...props }: ComponentPropsWithoutRef<HeadingTag> & ExtraProps) {
+      const index = indexByLine.get(node?.position?.start.line ?? -1);
+      return <Tag {...props} data-heading-index={index} />;
+    };
+  return Object.fromEntries(HEADING_TAGS.map((tag) => [tag, heading(tag)])) as Components;
+}
+
 export function Markdown({ text }: { text: string }) {
+  const components = useMemo(() => headingComponents(text), [text]);
   return (
     <Box
       sx={{
@@ -37,7 +59,9 @@ export function Markdown({ text }: { text: string }) {
         "& td, & th": { border: 1, borderColor: "divider", px: 1, py: 0.25 },
       }}
     >
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+        {text}
+      </ReactMarkdown>
     </Box>
   );
 }
@@ -56,10 +80,10 @@ export function Streams({ streams }: { streams: StreamChunk[] }) {
 }
 
 /** Render any cell output. HTML from user code runs in a script-less sandbox. */
-export function OutputView({ output, kernelKey, tableHeight }: { output: CellOutput; kernelKey: string; tableHeight?: number }) {
+export function OutputView({ output, kernelKey, tableHeight, chart, onChart }: { output: CellOutput; kernelKey: string; tableHeight?: number } & ChartProps) {
   switch (output.type) {
     case "table":
-      return <TableOutputView output={output} kernelKey={kernelKey} height={tableHeight} />;
+      return <TableOutputView output={output} kernelKey={kernelKey} height={tableHeight} chart={chart} onChart={onChart} />;
     case "text":
       return (
         <Typography variant="mono" component="pre" sx={{ m: 0, px: 2, py: 1, whiteSpace: "pre-wrap" }}>

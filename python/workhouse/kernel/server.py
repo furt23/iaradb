@@ -1,16 +1,17 @@
 """Request dispatch: immediate methods on the reader thread, user code on a
-single worker thread (so ``interrupt`` is always answered right away), and
-code assistance on a thread of its own (so completions keep working while a
-cell runs)."""
+single worker thread (so ``interrupt`` is always answered right away), code
+assistance on a thread of its own (so completions keep working while a cell
+runs), and slower reads on a small pool."""
 
 from __future__ import annotations
 
 import queue
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from workhouse.kernel.protocol import Channel
-from workhouse.kernel.session import ASSIST, QUEUED, Handler, KernelSession
+from workhouse.kernel.session import ASSIST, BACKGROUND, QUEUED, Handler, KernelSession
 
 _STOP = object()
 
@@ -26,6 +27,7 @@ class KernelServer:
         #: newest request id per (method, cell): older pending ones are skipped
         self._latest: dict[tuple[str, Any], Any] = {}
         self._assistant = threading.Thread(target=self._assist_work, name="workhouse-kernel-assist", daemon=True)
+        self._pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="workhouse-kernel-read")
 
     def _call(self, rid: Any, handler: Handler, params: dict[str, Any]) -> None:
         def emit(event: str, data: dict[str, Any]) -> None:
@@ -90,9 +92,12 @@ class KernelServer:
                     key = (method, params.get("cell_id"))
                     self._latest[key] = rid
                     self._assist.put((rid, handler, params, key))
+                elif method in BACKGROUND:
+                    self._pool.submit(self._call, rid, handler, params)
                 else:
                     self._call(rid, handler, params)
         finally:
             self.session.interruptor.interrupt()
             self._queue.put(_STOP)
             self._assist.put(_STOP)
+            self._pool.shutdown(wait=False, cancel_futures=True)

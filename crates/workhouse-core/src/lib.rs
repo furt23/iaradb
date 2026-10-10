@@ -11,6 +11,7 @@
 //!                          parallel sinks: hash aggregate, join build, sort)
 //! ```
 
+pub mod catalog_names;
 pub mod error;
 pub mod exec;
 pub mod expr;

@@ -1,0 +1,80 @@
+---
+title: Workhouse Python API Reference
+description: High-performance vectorized query engine with a lazy DataFrame API and SQL execution in Python.
+template: splash
+hero:
+  tagline: Parallel, vectorized query execution in Python powered by a Rust core on Apache Arrow. Morsel-driven pipelines, zero-copy interop, and streaming out-of-core capabilities.
+  actions:
+    - text: Quickstart Guide
+      link: /quickstart/
+      icon: right-arrow
+      variant: primary
+    - text: LazyFrame API
+      link: /lazyframe/
+      icon: document
+      variant: secondary
+    - text: Expressions & Functions
+      link: /expressions/
+      icon: puzzle
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## Core Modules & API Surface
+
+<CardGrid stagger>
+  <Card title="LazyFrame API" icon="random">
+    Build optimized logical execution plans lazily. Supports projection, filtering, grouping, distributed joins, sorting, and streaming out-of-core results.
+    [Explore LazyFrame](/lazyframe/)
+  </Card>
+  <Card title="DataFrame (Materialized)" icon="list-format">
+    Inspect materialized Arrow tables in memory. Convert zero-copy to PyArrow, Pandas, and Polars via the Arrow C Stream interface.
+    [Explore DataFrame](/dataframe/)
+  </Card>
+  <Card title="Column Expressions (Expr)" icon="setting">
+    Build vectorized expressions using arithmetic, logical operators, null handling, type casting, mathematical functions, string operations, and date/time manipulation.
+    [Explore Expressions](/expressions/)
+  </Card>
+  <Card title="Window Functions" icon="chart">
+    Apply window calculations via `.over()`, including partition-level and running aggregations, rankings (`rank`, `row_number`), offsets (`shift`, `diff`), and rolling frames.
+    [Explore Window Functions](/window/)
+  </Card>
+  <Card title="SQL & SessionContext" icon="laptop">
+    Query registered tables or in-memory frames using ANSI SQL. Manage schemas, metadata statistics, and write persistent tables to storage.
+    [Explore SQL & Sessions](/sql-session/)
+  </Card>
+  <Card title="Cloud & Object Storage" icon="cloud">
+    Scan and write directly to Amazon S3 and Cloudflare R2 with automatic request coalescing, prefetching, and footer caching.
+    [Explore Storage](/storage/)
+  </Card>
+</CardGrid>
+
+---
+
+## Interactive Example
+
+```python
+import workhouse as wh
+from workhouse import col
+
+# 1. Lazily scan Parquet data
+plan = (
+    wh.scan_parquet("data/sales/*.parquet")
+    .filter(col("amount") > 100.0)
+    .group_by("region")
+    .agg(
+        total_revenue=col("amount").sum(),
+        avg_order=col("amount").mean(),
+        order_count=wh.len(),
+    )
+    .sort("total_revenue", descending=True)
+)
+
+# 2. Inspect the optimized query plan
+print(plan.explain())
+
+# 3. Collect the result in parallel
+df = plan.collect()
+df.show()
+```

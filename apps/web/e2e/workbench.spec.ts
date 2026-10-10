@@ -52,6 +52,7 @@ test("completions, signatures and diagnostics come from the kernel", async ({ pa
 
 test("notebooks open in tabs and split panes, and can be deleted", async ({ page }) => {
   await newNotebook(page, "notebooks/e2e_tabs.py");
+  const tabsUrl = page.url();
   await page.getByRole("link", { name: "tpch_tour.py" }).click();
   await expect(page.getByRole("tab", { name: /tpch_tour/ })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("tab", { name: /e2e_tabs/ })).toBeVisible();
@@ -60,7 +61,7 @@ test("notebooks open in tabs and split panes, and can be deleted", async ({ page
   await page.getByRole("tab", { name: /e2e_tabs/ }).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Move to a new pane" }).click();
   await expect(page.getByRole("tablist", { name: "notebook tabs" })).toHaveCount(2);
-  await expect(page).toHaveURL(/e2e_tabs\.py$/);
+  await expect(page).toHaveURL(tabsUrl);
 
   // delete it from the file tree: its tab and its pane go away
   await page.getByRole("link", { name: "e2e_tabs.py" }).click({ button: "right" });

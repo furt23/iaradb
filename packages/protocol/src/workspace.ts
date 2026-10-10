@@ -34,6 +34,8 @@ export interface KernelInfo {
   root: string;
   name: string;
   tables: TableRef[];
+  /** `main` first (absent from older kernels) */
+  schemas?: string[];
 }
 
 export interface HistoryEntry {

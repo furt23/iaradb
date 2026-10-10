@@ -62,6 +62,10 @@ export async function workspaceName(): Promise<string> {
   return path.basename(config.workspace);
 }
 
+export async function writeConfigText(text: string): Promise<void> {
+  await writeAtomic(path.join(config.workspace, CONFIG_NAME), text);
+}
+
 /** Append a `[tables.x]` section (creating the file with a `[workspace]` header). */
 export async function appendConfigEntry(entry: string): Promise<void> {
   const current = await readConfigText();

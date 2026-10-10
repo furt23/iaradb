@@ -20,7 +20,10 @@ export function AddCellBar({ onAdd, persistent = false }: { onAdd(kind: CellKind
       }}
     >
       {(["python", "sql", "markdown"] as CellKind[]).map((kind) => (
-        <Button key={kind} size="small" startIcon={<Add fontSize="small" />} onClick={() => onAdd(kind)} sx={{ color: "text.secondary", fontSize: 12 }}>
+        <Button key={kind} size="small" startIcon={<Add fontSize="small" />} onClick={() => onAdd(kind)}
+          // keep the editor focused until the click: its blur re-renders Markdown and moves this bar
+          onMouseDown={(e) => e.preventDefault()}
+          sx={{ color: "text.secondary", fontSize: 12 }}>
           {kind === "python" ? "Python" : kind === "sql" ? "SQL" : "Markdown"}
         </Button>
       ))}

@@ -17,6 +17,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, type MouseEvent, type ReactNode } from "react";
 
+import { fileFromPathname, fileHref } from "@/features/workbench/fileIdRegistry";
 import type { FileKind, FileNode } from "@/server/workspace/files";
 
 import { FileMenu, type FileMenuTarget } from "./FileMenu";
@@ -25,7 +26,7 @@ const ICONS: Record<FileKind, ReactNode> = {
   dir: <FolderOutlined fontSize="inherit" />,
   notebook: <MenuBookOutlined fontSize="inherit" sx={{ color: "secondary.main" }} />,
   python: <DataObjectOutlined fontSize="inherit" />,
-  sql: <DescriptionOutlined fontSize="inherit" />,
+  sql: <DescriptionOutlined fontSize="inherit" sx={{ color: "primary.main" }} />,
   data: <TableChartOutlined fontSize="inherit" sx={{ color: "primary.main" }} />,
   text: <DescriptionOutlined fontSize="inherit" />,
   other: <InsertDriveFileOutlined fontSize="inherit" />,
@@ -33,8 +34,8 @@ const ICONS: Record<FileKind, ReactNode> = {
 
 export function hrefOf(node: FileNode): string | null {
   const encoded = node.path.split("/").map(encodeURIComponent).join("/");
-  if (node.kind === "notebook") return `/notebooks/${encoded}`;
-  if (node.kind === "python" || node.kind === "sql" || node.kind === "text") return `/files/${encoded}`;
+  if (node.kind === "notebook" || node.kind === "sql") return fileHref(node.path);
+  if (node.kind === "python" || node.kind === "text") return `/files/${encoded}`;
   return null;
 }
 
@@ -135,7 +136,7 @@ function Nodes({ nodes, depth, expanded, toggle, current, onMenu }: NodesProps) 
 
 function initiallyExpanded(nodes: FileNode[], current: string): Set<string> {
   const open = new Set(nodes.filter((n) => n.kind === "dir" && n.name === "notebooks").map((n) => n.path));
-  const parts = decodeURIComponent(current.replace(/^\/(notebooks|files)\//, "")).split("/");
+  const parts = (fileFromPathname(current) ?? decodeURIComponent(current.replace(/^\/files\//, ""))).split("/");
   for (let i = 1; i < parts.length; i++) open.add(parts.slice(0, i).join("/"));
   return open;
 }

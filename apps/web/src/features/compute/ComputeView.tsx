@@ -4,18 +4,19 @@ import Add from "@mui/icons-material/Add";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
+import Paper from "@mui/material/Paper";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import { useEffect, useState } from "react";
 
-import { useGuard, useNotify } from "@/features/shell/notify";
-import { unwrap } from "@/lib/action";
-import { deleteCluster, engineStatus, startCluster, terminateCluster } from "@/server/actions/clusters";
+import { hourlyCost } from "@/lib/clusterTime";
+import { engineStatus } from "@/server/actions/clusters";
 import type { ClusterView } from "@/server/compute/types";
 
 import { ClusterDialog } from "./ClusterDialog";
 import { ClusterRow, type ClusterActions } from "./ClusterRow";
 import { useCompute } from "./ComputeProvider";
+import { useClusterActions } from "./detail/useClusterActions";
 
 function EngineNote({ cloud, version }: { cloud: boolean; version: string }) {
   const [wheel, setWheel] = useState<string | null | undefined>(undefined);
@@ -42,31 +43,46 @@ function EngineNote({ cloud, version }: { cloud: boolean; version: string }) {
   );
 }
 
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <Paper variant="outlined" sx={{ p: 2 }}>
+      <Typography variant="body2" sx={{ color: "text.secondary" }}>
+        {label}
+      </Typography>
+      <Typography variant="h5" sx={{ fontWeight: 700 }}>
+        {value}
+      </Typography>
+    </Paper>
+  );
+}
+
+/** Running machines, what they cost per hour now, and the notebooks attached to clusters. */
+function Summary({ clusters }: { clusters: ClusterView[] }) {
+  const machines = clusters.filter((c) => c.kind === "ec2" && c.state === "running");
+  const perHour = machines.reduce((sum, c) => sum + (hourlyCost(c) ?? 0), 0);
+  const attached = clusters.reduce((n, c) => n + c.notebooks.length, 0);
+  return (
+    <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(3, 1fr)" }, gap: 1.5 }}>
+      <Stat label="Running" value={String(machines.length)} />
+      <Stat label="≈ $/h now" value={`$${perHour.toFixed(2)}`} />
+      <Stat label="Notebooks attached" value={String(attached)} />
+    </Box>
+  );
+}
+
 /** The Compute page: clusters, their machines and lifecycles. */
 export function ComputeView() {
   const { overview, error, refresh } = useCompute();
   const [dialog, setDialog] = useState<{ edit: ClusterView | null } | null>(null);
   const [now, setNow] = useState(() => Date.now());
-  const guard = useGuard();
-  const notify = useNotify();
+  const clusterActions = useClusterActions(refresh);
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(t);
   }, []);
 
-  const act = (fn: () => Promise<unknown>, done: string) =>
-    void guard(async () => {
-      await fn();
-      notify(done, "success");
-      await refresh();
-    });
-  const actions: ClusterActions = {
-    start: (c) => act(async () => unwrap(await startCluster(c.id)), `Starting ${c.name}: a machine is on its way (2-3 minutes)`),
-    terminate: (c) => act(async () => unwrap(await terminateCluster(c.id)), `Terminating ${c.name}`),
-    edit: (c) => setDialog({ edit: c }),
-    remove: (c) => act(async () => unwrap(await deleteCluster(c.id)), `Deleted ${c.name}`),
-  };
+  const actions: ClusterActions = { ...clusterActions, edit: (c) => setDialog({ edit: c }) };
 
   return (
     <Box sx={{ p: 3, overflow: "auto", flex: 1 }}>
@@ -85,6 +101,7 @@ export function ComputeView() {
         </Button>
       </Box>
       <Stack spacing={1.5}>
+        {overview && <Summary clusters={overview.clusters} />}
         {error && <Alert severity="error">{error}</Alert>}
         {overview && <EngineNote cloud={overview.cloud} version={overview.engineVersion} />}
         {overview?.clusters.map((c) => <ClusterRow key={c.id} cluster={c} now={now} actions={actions} cloud={overview.cloud} />)}

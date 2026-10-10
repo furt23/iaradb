@@ -6,6 +6,7 @@ import path from "node:path";
 import { copyName, isWithin } from "@/lib/paths";
 
 import { normalizeRelative } from "../kernel/keys";
+import * as fileIds from "./fileIds";
 import { isNotebook, resolveWorkspacePath } from "./files";
 
 /** File-tree operations on the workspace (rename / move, duplicate, folders, delete). */
@@ -32,6 +33,8 @@ export async function renameEntry(from: string, to: string): Promise<{ from: str
   const target = resolveWorkspacePath(b);
   await fs.mkdir(path.dirname(target), { recursive: true });
   await fs.rename(resolveWorkspacePath(a), target);
+  // the files keep their ids (and so their URLs)
+  fileIds.moved(a, b);
   return { from: a, to: b };
 }
 
@@ -58,6 +61,7 @@ export async function createFolder(rel: string): Promise<string> {
 export async function deleteEntry(rel: string): Promise<string> {
   const p = guarded(rel);
   await fs.rm(resolveWorkspacePath(p), { recursive: true, force: false });
+  fileIds.removed(p);
   return p;
 }
 

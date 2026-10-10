@@ -1,92 +1,82 @@
 "use client";
 
-import Check from "@mui/icons-material/Check";
-import Memory from "@mui/icons-material/Memory";
-import PlayArrow from "@mui/icons-material/PlayArrow";
-import SettingsOutlined from "@mui/icons-material/SettingsOutlined";
 import Box from "@mui/material/Box";
-import Button from "@mui/material/Button";
-import Divider from "@mui/material/Divider";
-import ListItemIcon from "@mui/material/ListItemIcon";
-import ListItemText from "@mui/material/ListItemText";
 import Menu from "@mui/material/Menu";
-import MenuItem from "@mui/material/MenuItem";
-import Typography from "@mui/material/Typography";
-import Link from "next/link";
 import { useState } from "react";
 
 import { useGuard } from "@/features/shell/notify";
-import { unwrap } from "@/lib/action";
-import { startCluster } from "@/server/actions/clusters";
-import type { ClusterView } from "@/server/compute/types";
+import { isStopped, pickable, showSearch } from "@/lib/clusterPicker";
 
+import { ClusterDialog } from "./ClusterDialog";
 import { useCompute } from "./ComputeProvider";
-import { machineSummary, StateDot, stateLabel } from "./ClusterState";
+import { StartClusterButton } from "./picker/ClusterActionButtons";
+import { ClusterMenuFooter } from "./picker/ClusterMenuFooter";
+import { ClusterMenuItems } from "./picker/ClusterMenuItems";
+import { ClusterSearch } from "./picker/ClusterSearch";
+import { ClusterTrigger } from "./picker/ClusterTrigger";
+import { CurrentClusterCard } from "./picker/CurrentClusterCard";
 
 /**
- * The cluster something runs on, as a compact button with its state, a menu
- * to pick another one, and Start when the chosen cluster is not running.
+ * The cluster something runs on: a dropdown showing its state. The menu lists
+ * the clusters, starts and terminates them, and creates new ones.
  */
 export function ClusterSelect({ value, onSelect, label }: { value: string | null; onSelect(id: string): void | Promise<void>; label: string }) {
   const { overview, refresh } = useCompute();
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const [query, setQuery] = useState("");
+  const [creating, setCreating] = useState(false);
   const guard = useGuard();
-  const all = overview?.clusters ?? [];
-  const current: ClusterView | undefined = all.find((c) => c.id === value);
 
-  const start = (id: string) =>
-    guard(async () => {
-      unwrap(await startCluster(id));
-      await refresh();
-    });
+  const clusters = pickable(overview?.clusters ?? []);
+  const current = clusters.find((c) => c.id === value);
+  const cloud = overview?.cloud ?? false;
+  const searchable = showSearch(clusters);
+  const emptyText = !overview ? "Loading…" : query ? "No cluster matches" : "No clusters yet";
+
+  const openMenu = (el: HTMLElement) => {
+    setQuery("");
+    setAnchor(el);
+  };
+  const closeMenu = () => setAnchor(null);
   const choose = (id: string) =>
-    guard(async () => {
-      setAnchor(null);
+    void guard(async () => {
+      closeMenu();
       await onSelect(id);
       await refresh();
     });
-  const stopped = current && (current.state === "terminated" || current.state === "error");
 
   return (
     <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, minWidth: 0 }}>
-      <Button
-        size="small"
-        aria-label={label}
-        onClick={(e) => setAnchor(e.currentTarget)}
-        startIcon={<Memory sx={{ fontSize: 16 }} />}
-        endIcon={current ? <StateDot state={current.state} /> : undefined}
-        sx={{ color: "text.secondary", textTransform: "none", minWidth: 0, maxWidth: 220 }}
-        title={current ? `${current.name}: ${stateLabel(current)}${current.error ? ` (${current.error})` : ""}` : "no cluster"}
+      <ClusterTrigger label={label} current={current} loaded={overview !== null} open={anchor !== null} onOpen={openMenu} />
+      {current && isStopped(current) && <StartClusterButton cluster={current} />}
+      <Menu
+        anchorEl={anchor}
+        open={anchor !== null}
+        onClose={closeMenu}
+        // with the search field, it takes the focus instead of the selected item
+        autoFocus={!searchable}
+        slotProps={{ paper: { sx: { width: 360, maxWidth: "calc(100vw - 32px)" } }, list: { dense: true, "aria-label": label } }}
       >
-        <Box component="span" sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {current?.name ?? "No cluster"}
-        </Box>
-      </Button>
-      {stopped && (
-        <Button size="small" variant="outlined" startIcon={<PlayArrow />} onClick={() => void start(current.id)}>
-          Start
-        </Button>
-      )}
-      <Menu anchorEl={anchor} open={anchor !== null} onClose={() => setAnchor(null)} slotProps={{ list: { dense: true, "aria-label": label } }}>
-        {all.map((c) => (
-          <MenuItem key={c.id} selected={c.id === value} onClick={() => void choose(c.id)}>
-            <ListItemIcon>{c.id === value ? <Check fontSize="small" /> : <StateDot state={c.state} />}</ListItemIcon>
-            <ListItemText primary={c.name} secondary={`${stateLabel(c)} · ${machineSummary(c)}`} />
-          </MenuItem>
-        ))}
-        {all.length === 0 && (
-          <MenuItem disabled>
-            <Typography variant="body2">No clusters yet</Typography>
-          </MenuItem>
-        )}
-        <Divider />
-        <MenuItem component={Link} href="/compute" onClick={() => setAnchor(null)}>
-          <ListItemIcon>
-            <SettingsOutlined fontSize="small" />
-          </ListItemIcon>
-          Manage clusters…
-        </MenuItem>
+        {current && <CurrentClusterCard cluster={current} cloud={cloud} />}
+        {searchable && <ClusterSearch value={query} onChange={setQuery} />}
+        <ClusterMenuItems clusters={clusters} query={query} value={value} emptyText={emptyText} onChoose={choose} />
+        <ClusterMenuFooter
+          cloud={cloud}
+          onCreate={() => {
+            closeMenu();
+            setCreating(true);
+          }}
+          onManage={closeMenu}
+        />
       </Menu>
+      {/* outside the menu: it closes when the dialog opens */}
+      <ClusterDialog
+        open={creating}
+        edit={null}
+        types={overview?.instanceTypes ?? []}
+        onClose={() => setCreating(false)}
+        onSaved={() => void refresh()}
+      />
     </Box>
   );
 }

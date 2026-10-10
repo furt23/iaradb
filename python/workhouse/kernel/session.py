@@ -13,11 +13,13 @@ from pathlib import Path
 from typing import Any
 
 from workhouse.kernel import PROTOCOL_VERSION, catalog
+from workhouse.kernel.analyze import analyze_query
 from workhouse.kernel.assist.service import AssistService
 from workhouse.kernel.cell_runner import CellRunner, Emit
 from workhouse.kernel.history import History
 from workhouse.kernel.notebook_service import NotebookService, resolve_in
 from workhouse.kernel.runtime.interrupt import Interruptor
+from workhouse.kernel.runtime.charts import chart_data
 from workhouse.kernel.runtime.results import ResultStore
 from workhouse.workspaces import Workspace, add_table, load, parse_config, set_active
 
@@ -26,11 +28,14 @@ Handler = Callable[[dict[str, Any], Emit], Any]
 #: methods that run user code or mutate the notebook: executed one at a time
 #: on the worker thread (everything else answers immediately)
 QUEUED = frozenset(
-    {"workspace.configure", "notebook.open", "notebook.create", "notebook.run", "sql.run", "catalog.preview", "catalog.add"}
+    {"workspace.configure", "notebook.open", "notebook.create", "notebook.run", "sql.run", "sql.analyze", "catalog.preview", "catalog.add"}
 )
 #: code assistance: answered on their own thread, newest request per
 #: (method, cell) first (an older pending one is answered with null)
 ASSIST = frozenset({"assist.complete", "assist.signature", "assist.lint"})
+#: reads that may take a while (aggregating a large result): answered on a
+#: small pool of threads, so the reader stays free for ``interrupt``
+BACKGROUND = frozenset({"result.chart"})
 
 
 #: largest chunk returned by ``file.read``
@@ -48,6 +53,9 @@ class KernelSession:
         self.runner = CellRunner(self.ws, self.results, self.history, self.interruptor)
         self.notebook = NotebookService(self.ws, self.runner)
         self.assist = AssistService(self.ws, self.notebook)
+        #: catalog changes made by statements, sent to the Studio after each run
+        self.catalog_changes: list[dict[str, Any]] = []
+        self.ws.on_catalog_change = self.catalog_changes.append
 
     # -- workspace -----------------------------------------------------------
     def info(self) -> dict[str, Any]:
@@ -62,12 +70,19 @@ class KernelSession:
             "root": str(self.ws.root),
             "name": self.ws.name,
             "tables": catalog.list_tables(self.ws),
+            "schemas": self.ws.schemas,
         }
 
     def _adopt(self, fresh: Workspace) -> dict[str, Any]:
         """Take a new catalog (the same object stays shared by every service)."""
         self.ws.name, self.ws.tables, self.ws.storage, self.ws._session = fresh.name, fresh.tables, fresh.storage, None
+        self.ws.warehouse, self.ws.declared_schemas = fresh.warehouse, fresh.declared_schemas
         return self.info()
+
+    def report_catalog(self, emit: Emit) -> None:
+        """Tell the Studio (it owns ``workhouse.toml``) what statements changed."""
+        while self.catalog_changes:
+            emit("catalog.changed", self.catalog_changes.pop(0))
 
     def reload(self) -> dict[str, Any]:
         return self._adopt(load(self.ws.root))
@@ -103,13 +118,22 @@ class KernelSession:
             data = f.read(length)
         return {"data": base64.b64encode(data).decode("ascii"), "size": size, "eof": offset + len(data) >= size}
 
+    def run_notebook(self, p: dict[str, Any], emit: Emit) -> dict[str, Any]:
+        try:
+            return self.notebook.run(p.get("cells"), p.get("cell_ids"), emit)
+        finally:
+            self.report_catalog(emit)
+
     # -- SQL editor ----------------------------------------------------------
     def sql_run(self, p: dict[str, Any], emit: Emit) -> dict[str, Any]:
         from workhouse.kernel.runtime.progress import watch
 
         query = p["query"]
-        with watch(lambda q: emit("progress", {"queries": q})), self.interruptor.interruptible():
-            output, _ = self.runner.query(self.ws, query, {}, "query", p.get("source", "sql editor"))
+        try:
+            with watch(lambda q: emit("progress", {"queries": q})), self.interruptor.interruptible():
+                output, _ = self.runner.query(self.ws, query, {}, "query", p.get("source", "sql editor"))
+        finally:
+            self.report_catalog(emit)
         return output
 
     def sql_explain(self, query: str) -> dict[str, Any]:
@@ -132,13 +156,15 @@ class KernelSession:
             "notebook.view": lambda p, e: nb.view(),
             "notebook.rename": lambda p, e: nb.rename(p["path"]),
             "notebook.save": lambda p, e: nb.save(p.get("cells"), bool(p.get("persist", True))),
-            "notebook.run": lambda p, e: nb.run(p.get("cells"), p.get("cell_ids"), e),
+            "notebook.run": self.run_notebook,
             "notebook.variables": lambda p, e: nb.variables(),
+            "notebook.clear": lambda p, e: nb.clear(p["path"], p.get("cells")),
             "assist.complete": lambda p, e: self.assist.complete(p),
             "assist.signature": lambda p, e: self.assist.signature(p),
             "assist.lint": lambda p, e: self.assist.lint(p),
             "interrupt": lambda p, e: {"interrupted": self.interruptor.interrupt()},
             "result.page": lambda p, e: self.results.page(p["result_id"], p.get("offset", 0), p.get("limit", 100), p.get("sort")),
+            "result.chart": lambda p, e: chart_data(self.results.get(p["result_id"]), p["spec"]),
             "result.export": lambda p, e: self.export(p),
             "file.read": lambda p, e: self.read_file(p),
             "catalog.list": lambda p, e: catalog.list_tables(self.ws),
@@ -148,5 +174,6 @@ class KernelSession:
             "catalog.add": lambda p, e: self.add_table(p),
             "sql.run": self.sql_run,
             "sql.explain": lambda p, e: self.sql_explain(p["query"]),
+            "sql.analyze": lambda p, e: analyze_query(self.ws, p["query"], self.history, self.interruptor),
             "history.list": lambda p, e: self.history.recent(int(p.get("limit", 200))),
         }

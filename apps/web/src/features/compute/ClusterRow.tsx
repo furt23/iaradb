@@ -1,5 +1,6 @@
 "use client";
 
+import ContentCopyOutlined from "@mui/icons-material/ContentCopyOutlined";
 import DeleteOutline from "@mui/icons-material/DeleteOutlineOutlined";
 import EditOutlined from "@mui/icons-material/EditOutlined";
 import PlayArrow from "@mui/icons-material/PlayArrow";
@@ -11,22 +12,19 @@ import IconButton from "@mui/material/IconButton";
 import Paper from "@mui/material/Paper";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
+import Link from "next/link";
 
+import { formatMinutes, minutesSince } from "@/lib/clusterTime";
 import type { ClusterView } from "@/server/compute/types";
 
 import { machineSummary, StateChip } from "./ClusterState";
-
-function minutesSince(t: number | undefined, now: number): string {
-  if (!t) return "";
-  const m = Math.max(0, Math.round((now - t) / 60_000));
-  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`;
-}
 
 export interface ClusterActions {
   start(c: ClusterView): void;
   terminate(c: ClusterView): void;
   edit(c: ClusterView): void;
   remove(c: ClusterView): void;
+  clone(c: ClusterView): void;
 }
 
 /** One cluster: state, machine, limits, attached notebooks and its actions. */
@@ -34,13 +32,22 @@ export function ClusterRow({ cluster: c, now, actions, cloud }: { cluster: Clust
   const stopped = c.state === "terminated" || c.state === "error";
   const details = [machineSummary(c)];
   if (c.kind === "ec2") details.push(`terminates after ${c.autoTerminateMinutes} min idle`);
-  if (c.kind === "ec2" && c.state === "running") details.push(`up ${minutesSince(c.startedAt, now)}`, `idle ${minutesSince(c.lastActivity, now)}`);
+  if (c.kind === "ec2" && c.state === "running") {
+    details.push(`up ${formatMinutes(minutesSince(c.startedAt, now) ?? 0)}`, `idle ${formatMinutes(minutesSince(c.lastActivity, now) ?? 0)}`);
+  }
   return (
     <Paper variant="outlined" sx={{ p: 2, display: "flex", alignItems: "center", gap: 2 }} aria-label={`cluster ${c.name}`}>
       <Box sx={{ flex: 1, minWidth: 0 }}>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
-          <Typography sx={{ fontWeight: 650 }}>{c.name}</Typography>
+          <Typography
+            component={Link}
+            href={`/compute/${encodeURIComponent(c.id)}`}
+            sx={{ fontWeight: 650, color: "text.primary", textDecoration: "none", "&:hover": { textDecoration: "underline" } }}
+          >
+            {c.name}
+          </Typography>
           {c.isDefault && <Chip size="small" label="default" />}
+          {c.job && <Chip size="small" variant="outlined" label="job run" title="Made for a job run: terminated when the run ends" />}
           <StateChip cluster={c} />
         </Box>
         <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.5 }}>
@@ -68,6 +75,11 @@ export function ClusterRow({ cluster: c, now, actions, cloud }: { cluster: Clust
               Terminate
             </Button>
           )}
+          <Tooltip title="Clone">
+            <IconButton onClick={() => actions.clone(c)} aria-label={`clone ${c.name}`}>
+              <ContentCopyOutlined fontSize="small" />
+            </IconButton>
+          </Tooltip>
           <Tooltip title="Edit">
             <IconButton onClick={() => actions.edit(c)} aria-label={`edit ${c.name}`}>
               <EditOutlined fontSize="small" />

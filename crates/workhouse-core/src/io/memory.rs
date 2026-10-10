@@ -38,6 +38,9 @@ impl TableProvider for MemTable {
     fn kind(&self) -> &'static str {
         "memory"
     }
+    fn memory_batches(&self) -> Option<&[RecordBatch]> {
+        Some(&self.batches)
+    }
     fn column_ndv(&self, column: usize) -> Option<f64> {
         if let Some(v) = self.ndv_cache.lock().get(&column) {
             return *v;

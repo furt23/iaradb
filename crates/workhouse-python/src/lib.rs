@@ -17,11 +17,12 @@ use pyo3::types::{PyBool, PyCapsule, PyDict, PyFloat, PyInt, PyString};
 
 use workhouse_core::expr::{AggFunc, Expr, Operator, ScalarFunc, SortExpr, binary, col, count_star};
 use workhouse_core::io::csv::{CsvOptions, write_csv_with};
-use workhouse_core::io::parquet::write_parquet_with;
+use workhouse_core::io::parquet::{ParquetOptions, write_parquet_with};
 use workhouse_core::session::TableEntry;
 use workhouse_core::types::parse_data_type;
 use workhouse_core::{JoinType, LazyFrame, Scalar, SessionContext, WhError};
 
+mod analyze;
 mod memory;
 mod runtime;
 mod storage;
@@ -578,8 +579,9 @@ impl PyLazyFrame {
         stream::PyResultStream::open(py, self.inner.clone())
     }
 
-    /// Write the result to Parquet as it is produced; returns the rows written.
-    #[pyo3(signature = (path, compression="zstd", row_group_size=None, storage_options=None))]
+    /// Write the result to Parquet as it is produced (Hive-partitioned with
+    /// `partition_by`); returns the rows written.
+    #[pyo3(signature = (path, compression="zstd", row_group_size=None, storage_options=None, partition_by=None))]
     fn sink_parquet(
         &self,
         py: Python<'_>,
@@ -587,10 +589,12 @@ impl PyLazyFrame {
         compression: &str,
         row_group_size: Option<usize>,
         storage_options: Option<&Bound<'_, PyDict>>,
+        partition_by: Option<Vec<String>>,
     ) -> PyResult<usize> {
-        let opts = storage::options(storage_options)?;
-        let (lf, path, compression) = (self.inner.clone(), path.to_string(), compression.to_string());
-        py.detach(move || lf.sink_parquet(&path, &compression, row_group_size, &opts)).py()
+        let storage = storage::options(storage_options)?;
+        let opts = ParquetOptions { compression: compression.to_string(), row_group_size, partition_by: partition_by.unwrap_or_default() };
+        let (lf, path) = (self.inner.clone(), path.to_string());
+        py.detach(move || lf.sink_parquet(&path, &opts, &storage)).py()
     }
 
     /// Write the result to CSV as it is produced; returns the rows written.
@@ -613,6 +617,15 @@ impl PyLazyFrame {
         let inner = self.inner.clone();
         let (schema, batches, stats) = py.detach(move || inner.collect_profiled()).py()?;
         Ok((PyDataFrame { schema, batches }, runtime::stats_dict(py, &stats)?))
+    }
+
+    /// Run the query measuring every operator (its result is read batch by
+    /// batch and discarded): `{plan, profile, rows, requests}`, where `plan`
+    /// is the physical plan with a `metrics` dict on each node.
+    fn analyze<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let plan = self.inner.plan.clone();
+        let run = py.detach(move || workhouse_core::physical::analyze::analyze(&plan)).py()?;
+        analyze::analysis_dict(py, &run)
     }
 
     /// The physical plan as nested dicts `{name, detail, role, children}`.
@@ -725,8 +738,29 @@ impl PySessionContext {
         Self { inner: self.inner.fork() }
     }
 
+    /// Where `CREATE TABLE ... AS` writes tables (None: in memory).
+    #[pyo3(signature = (path, storage_options=None))]
+    fn set_warehouse(&self, path: Option<&str>, storage_options: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
+        self.inner.set_warehouse(path, &storage::options(storage_options)?);
+        Ok(())
+    }
+
+    fn warehouse(&self) -> Option<String> {
+        self.inner.warehouse().map(|(p, _)| p)
+    }
+
+    /// The tables' display names: bare in `main`, `schema.table` elsewhere.
     fn tables(&self) -> Vec<String> {
         self.inner.table_names()
+    }
+
+    /// The schemas: `main` first, then the others sorted.
+    fn schemas(&self) -> Vec<String> {
+        self.inner.schemas()
+    }
+
+    fn current_schema(&self) -> String {
+        self.inner.current_schema()
     }
 
     fn table(&self, py: Python<'_>, name: &str) -> PyResult<PyLazyFrame> {

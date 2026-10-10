@@ -10,9 +10,14 @@ EC2, from the instance profile. Other settings are *storage options*,
     >>> wh.scan_parquet("s3://bucket/lineitem/", storage_options={"region": "us-east-1"})
     >>> wh.set_storage_options("s3://bucket", {"region": "us-east-1"})   # default for a prefix
 
-Common keys: ``region``, ``endpoint`` (S3-compatible services, e.g. MinIO),
-``allow_http``, ``skip_signature`` (public buckets), ``access_key_id`` /
-``secret_access_key`` / ``session_token``.
+Common keys: ``region``, ``endpoint`` (S3-compatible services, e.g. MinIO or
+Cloudflare R2, with ``region`` set to ``auto``), ``allow_http``,
+``skip_signature`` (public buckets), ``access_key_id`` / ``secret_access_key``
+/ ``session_token``.
+
+Object stores bill per request (LIST dearest), so reads keep them few: listings
+and Parquet footers are remembered for the process, row groups are fetched in
+big batches, and ``storage_requests()`` / ``profile()["requests"]`` count them.
 """
 
 from __future__ import annotations
@@ -23,8 +28,17 @@ from workhouse._workhouse import StorageError
 from workhouse._workhouse import clear_object_stores as _clear
 from workhouse._workhouse import list_files as _list_files
 from workhouse._workhouse import set_storage_options as _set_options
+from workhouse._workhouse import storage_requests as _requests
 
-__all__ = ["StorageError", "set_storage_options", "list_files", "clear_object_stores", "is_remote", "secret_keys"]
+__all__ = [
+    "StorageError",
+    "set_storage_options",
+    "list_files",
+    "clear_object_stores",
+    "storage_requests",
+    "is_remote",
+    "secret_keys",
+]
 
 StorageOptions = Mapping[str, Any]
 
@@ -69,5 +83,16 @@ def list_files(pattern: str, extension: str = "parquet", storage_options: Storag
 
 
 def clear_object_stores() -> None:
-    """Drop connections to object stores (new credentials take effect)."""
+    """Drop connections to object stores and what was cached from them (new credentials take effect)."""
     _clear()
+
+
+def storage_requests() -> dict[str, int]:
+    """Requests this process has made to object stores so far.
+
+    ``{"list": ..., "head": ..., "get": ..., "bytes": ...}``: LIST pages, HEAD
+    and GET requests, and the bytes the GETs asked for. Take the difference of
+    two calls to cost an operation (a query's own share is in
+    ``profile()["requests"]``). Object stores bill per request, LIST dearest.
+    """
+    return _requests()

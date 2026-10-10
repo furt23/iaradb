@@ -251,7 +251,7 @@ pub fn binary_signature(op: Operator, lt: &DataType, rt: &DataType) -> Result<Bi
     }
 }
 
-/// Parse a type name (SQL or Polars style) into an Arrow type.
+/// Parse a type name (SQL or common shorthand) into an Arrow type.
 pub fn parse_data_type(s: &str) -> Result<DataType> {
     use DataType::*;
     let t = s.trim().to_ascii_lowercase();

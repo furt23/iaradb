@@ -1,5 +1,7 @@
 import "server-only";
 
+import path from "node:path";
+
 import { ENGINE_VERSION } from "@workhouse/protocol";
 
 import { readConfigText } from "../workspace/sources";
@@ -9,6 +11,7 @@ import { bucketsOf } from "./buckets";
 import { AwsCloud } from "./cloud/aws";
 import type { CloudApi } from "./cloud/api";
 import { ClusterService } from "./clusters";
+import { ClusterEventLog, diskEventFiles } from "./events";
 import { dataDir, Store } from "./store";
 
 /**
@@ -41,6 +44,7 @@ function create(): ClusterService {
     engineVersion: ENGINE_VERSION,
     dataBuckets: async () => bucketsOf(await readConfigText()),
     localCompute: localCompute(),
+    events: new ClusterEventLog({ dir: path.join(dataDir(), "cluster-events"), files: diskEventFiles }),
   });
   svc.resume();
   // auto-termination and machines that went away on their own

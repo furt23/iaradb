@@ -2,19 +2,21 @@
 
 import Box from "@mui/material/Box";
 import type { CellKind, NotebookView, Variable } from "@workhouse/protocol";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { NotebookClusterSelect } from "@/features/compute/NotebookClusterSelect";
-import { DeleteEntryDialog } from "@/features/files/DeleteEntryDialog";
+import { useNotify } from "@/features/shell/notify";
+import { FileActionsMenu } from "@/features/workbench/FileActionsMenu";
 import { notebookVariables } from "@/server/actions/notebooks";
 
 import { AddCellBar } from "./AddCellBar";
 import { CellList } from "./CellList";
 import { IDLE, isStale, totalElapsed } from "./notebookState";
+import { NotebookSidePanel } from "./NotebookSidePanel";
 import { NotebookToolbar } from "./NotebookToolbar";
 import { SortableCell } from "./SortableCell";
+import { cellLink, useCellAnchor } from "./useCellAnchor";
 import { useNotebook } from "./useNotebook";
-import { VariablesPanel } from "./VariablesPanel";
 
 type Schema = Record<string, { name: string }[]>;
 
@@ -43,15 +45,16 @@ function useHiddenOutputs() {
 }
 
 export function NotebookEditor({ initial, schema }: { initial: NotebookView; schema: Schema }) {
-  const [showVars, setShowVars] = useState(false);
-  const [deleting, setDeleting] = useState(false);
+  const [showSide, setShowSide] = useState(false);
+  const [scrollEl, setScrollEl] = useState<HTMLElement | null>(null);
   const [variables, setVariables] = useState<Variable[]>([]);
   const refreshVariables = useCallback(async () => {
     const r = await notebookVariables(initial.path);
     if (r.ok) setVariables(r.data);
   }, [initial.path]);
   const nb = useNotebook(initial, refreshVariables);
-  const { state, run, addCell } = nb;
+  const { state, run, addCell, clearOutputs, save } = nb;
+  const notify = useNotify();
   const outputs = useHiddenOutputs();
   const completionSchema = useMemo(() => sqlSchema(schema, variables), [schema, variables]);
 
@@ -60,13 +63,25 @@ export function NotebookEditor({ initial, schema }: { initial: NotebookView; sch
   }, [refreshVariables]);
 
   const runOne = useCallback((id: string) => run([id]), [run]);
+  const clearOne = useCallback((id: string) => clearOutputs([id]), [clearOutputs]);
+  // a cell link lasts once the file holds the cell ids: save first
+  const copyLink = useCallback(
+    async (id: string) => {
+      await save();
+      await navigator.clipboard.writeText(cellLink(state.path, id));
+      notify("Link to the cell copied", "success");
+    },
+    [save, state.path, notify],
+  );
+  const rootRef = useRef<HTMLDivElement>(null);
+  useCellAnchor(rootRef);
   // the cell just added takes the focus
   const [fresh, setFresh] = useState<string | null>(null);
   const addAt = useCallback((index: number, kind: CellKind) => setFresh(addCell(index, kind).id), [addCell]);
   const last = state.cells.length - 1;
 
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, flex: 1 }}>
+    <Box ref={rootRef} sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, flex: 1 }}>
       <NotebookToolbar
         path={state.path}
         dirty={state.dirty}
@@ -75,13 +90,17 @@ export function NotebookEditor({ initial, schema }: { initial: NotebookView; sch
         onRunAll={() => run(null)}
         onInterrupt={nb.interrupt}
         onRestart={nb.restart}
-        onToggleVariables={() => setShowVars((v) => !v)}
+        onRestartAndClear={nb.restartAndClear}
+        onRestartAndRunAll={nb.restartAndRunAll}
+        onClearOutputs={() => clearOutputs(null)}
+        onToggleSide={() => setShowSide((v) => !v)}
+        sideOpen={showSide}
         onOutputs={(hide) => outputs.setHidden(hide ? new Set(state.cells.map((c) => c.id)) : new Set())}
-        onDelete={() => setDeleting(true)}
+        fileMenu={<FileActionsMenu path={state.path} kind="notebook" cells={state.cells} />}
         cluster={<NotebookClusterSelect path={state.path} onAttached={nb.reset} />}
       />
       <Box sx={{ display: "flex", flex: 1, minHeight: 0 }}>
-        <Box sx={{ flex: 1, overflow: "auto", px: { xs: 1, md: 4 }, py: 2 }}>
+        <Box ref={setScrollEl} sx={{ flex: 1, overflow: "auto", px: { xs: 1, md: 4 }, py: 2 }}>
           <Box sx={{ maxWidth: 1180, mx: "auto" }}>
             <AddCellBar onAdd={(k) => addAt(0, k)} persistent={state.cells.length === 0} />
             <CellList cells={state.cells} onReorder={nb.reorder}>
@@ -107,14 +126,15 @@ export function NotebookEditor({ initial, schema }: { initial: NotebookView; sch
                   onMove={nb.move}
                   onDelete={nb.remove}
                   onToggleOutput={outputs.toggle}
+                  onClearOutput={clearOne}
+                  onCopyLink={copyLink}
                 />
               ))}
             </CellList>
           </Box>
         </Box>
-        {showVars && <VariablesPanel variables={variables} />}
+        {showSide && <NotebookSidePanel cells={state.cells} variables={variables} scrollRoot={scrollEl} />}
       </Box>
-      <DeleteEntryDialog path={deleting ? state.path : null} onClose={() => setDeleting(false)} />
     </Box>
   );
 }

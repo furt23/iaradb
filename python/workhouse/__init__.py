@@ -1,6 +1,6 @@
 """Workhouse Engine - a parallel, vectorized query engine written in Rust.
 
-Lazy DataFrame API (Polars-like) and SQL (Spark/DuckDB-like) on top of the
+Lazy DataFrame API and SQL on top of the
 same optimizer and morsel-driven parallel executor. Data is exchanged with
 pyarrow / pandas / polars zero-copy through the Arrow C stream interface.
 
@@ -15,6 +15,7 @@ pyarrow / pandas / polars zero-copy through the Arrow C stream interface.
 
 from __future__ import annotations
 
+import os
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 from workhouse._workhouse import (
@@ -35,7 +36,7 @@ from workhouse._workhouse import (
 )
 from workhouse import _window
 from workhouse._window import WindowMethods
-from workhouse.storage import StorageError, StorageOptions, list_files, set_storage_options
+from workhouse.storage import StorageError, StorageOptions, list_files, set_storage_options, storage_requests
 from workhouse.storage import normalize as _storage
 
 __all__ = [
@@ -49,6 +50,7 @@ __all__ = [
     "StorageError",
     "set_storage_options",
     "list_files",
+    "storage_requests",
     "interrupt",
     "cancel_query",
     "running_queries",
@@ -140,7 +142,7 @@ def _flatten(items: Iterable[Any]) -> list[Any]:
 
 
 def _named(e: Expr) -> PyExpr:
-    """Polars-style naming: unaliased expressions take their root column name."""
+    """Unaliased expressions take their root column name by default."""
     pe = e._e
     if pe.is_alias() or pe.is_column():
         return pe
@@ -747,6 +749,16 @@ class LazyFrame:
     def collect(self) -> DataFrame:
         return DataFrame(self._lf.collect())
 
+    def analyze(self) -> dict[str, Any]:
+        """Run the query measuring every operator (the result is streamed and
+        only counted): ``{plan, profile, rows, requests}``. ``plan`` is
+        ``explain_tree()`` with a ``metrics`` dict on each node (``rows_out``,
+        ``elapsed_ms``, ``batches``, and ``memory_peak`` / ``spilled_bytes`` when
+        the operator held memory or spilled; times are summed over threads),
+        ``profile`` is what ``profile()`` returns, ``requests`` the object store
+        requests made."""
+        return self._lf.analyze()
+
     def profile(self) -> tuple[DataFrame, dict[str, Any]]:
         """Collect, also returning the run profile: `{id, elapsed_ms, cancelled,
         memory_peak, spilled_bytes, pipelines: [{source, operators, sink,
@@ -763,10 +775,14 @@ class LazyFrame:
         compression: str = "zstd",
         row_group_size: int | None = None,
         storage_options: StorageOptions | None = None,
+        partition_by: str | Sequence[str] | None = None,
     ) -> int:
         """Write the result to Parquet (a path or ``s3://`` URL) while it is
-        produced, without collecting it; returns the number of rows."""
-        return self._lf.sink_parquet(str(path), compression, row_group_size, _storage(storage_options))
+        produced, without collecting it; returns the number of rows. With
+        ``partition_by``, ``path`` is a folder of Hive-style partitions
+        (``year=2024/region=north/part-....parquet``)."""
+        cols = [partition_by] if isinstance(partition_by, str) else list(partition_by or [])
+        return self._lf.sink_parquet(str(path), compression, row_group_size, _storage(storage_options), cols or None)
 
     def sink_csv(
         self, path: str, separator: str = ",", include_header: bool = True, storage_options: StorageOptions | None = None
@@ -1078,7 +1094,7 @@ def _register(ctx: PySessionContext, name: str, obj: Any) -> None:
 
 
 class SessionContext:
-    """Spark-style session: a catalog of named tables queried with SQL or the DataFrame API."""
+    """Session state: a catalog of named tables queried with SQL or the DataFrame API."""
 
     def __init__(self) -> None:
         self._ctx = PySessionContext()
@@ -1127,8 +1143,33 @@ class SessionContext:
         child._ctx = self._ctx.fork()
         return child
 
+    def set_warehouse(self, path: str | os.PathLike[str] | None, storage_options: StorageOptions | None = None) -> SessionContext:
+        """Where ``CREATE TABLE name AS ...`` writes the table: Parquet in
+        ``<path>/name/`` (a folder or ``s3://`` prefix), or ``<path>/schema/name/``
+        for a table in a schema other than ``main``. Without a warehouse,
+        created tables stay in memory."""
+        self._ctx.set_warehouse(None if path is None else str(path), _storage(storage_options))
+        return self
+
+    @property
+    def warehouse(self) -> str | None:
+        return self._ctx.warehouse()
+
     def tables(self) -> list[str]:
+        """Table names: bare for ``main``, ``schema.table`` for the others."""
         return self._ctx.tables()
+
+    @property
+    def schemas(self) -> list[str]:
+        """Schema names, ``main`` first and the others sorted. ``CREATE SCHEMA``
+        adds one, and so does registering ``schema.table``."""
+        return self._ctx.schemas()
+
+    @property
+    def current_schema(self) -> str:
+        """The schema a bare table name is looked up in first (then ``main``);
+        ``USE schema`` sets it."""
+        return self._ctx.current_schema()
 
     def table(self, name: str) -> LazyFrame:
         return LazyFrame(self._ctx.table(name))

@@ -8,14 +8,11 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 
 use crate::error::{Result, WhError};
-use crate::exec::aggregate::{AggregateExpr, AggregateSink};
-use crate::exec::join::{BuildSide, HashJoinProbe, JoinBuildSink, NestedLoopJoin, concat_parallel, joined_schema};
-use crate::exec::join_spill::{GraceJoin, GraceJoinSource, PartitionSink};
-use crate::exec::ops::{FilterOp, ProjectOp, nullable_schema};
-use crate::exec::pipeline::{CollectSink, MemorySource, NullSink, Pipeline, Source, UnionSource, run_pipeline};
-use crate::exec::sort::SortSink;
-use crate::exec::stream::{Emitter, StreamSink};
-use crate::exec::window::{WindowFunctionExpr, WindowSink, WindowSpec, Windowed};
+use crate::exec::aggregate::AggregateExpr;
+use crate::exec::join::joined_schema;
+use crate::exec::ops::nullable_schema;
+use crate::exec::pipeline::Source;
+use crate::exec::window::{WindowFunctionExpr, WindowSpec};
 use crate::io::work_table::WorkTable;
 use crate::expr::{AggFunc, Expr, Operator, SortExpr, WindowFunc, split_conjunction};
 use crate::logical::{JoinType, LogicalPlan};
@@ -23,6 +20,8 @@ use crate::physical::expr::{PhysExpr, PhysSortExpr, cast_expr, create_physical_e
 use crate::scalar::Scalar;
 use crate::schema::PlanSchema;
 use crate::types::comparison_common;
+
+pub use crate::physical::execute::{execute, execute_stream};
 
 /// A physical plan node for display: operator kind, its full description,
 /// the role it plays for its parent (`probe` / `build` of a join) and inputs.
@@ -94,7 +93,7 @@ impl PhysicalPlan {
         }
     }
 
-    fn children(&self) -> Vec<&PhysicalPlan> {
+    pub(crate) fn children(&self) -> Vec<&PhysicalPlan> {
         match self {
             PhysicalPlan::Source { .. } | PhysicalPlan::Values { .. } => vec![],
             PhysicalPlan::Filter { input, .. }
@@ -109,6 +108,25 @@ impl PhysicalPlan {
             }
             PhysicalPlan::Union { inputs, .. } => inputs.iter().collect(),
         }
+    }
+
+    /// Nodes of the plan, as `tree` lists them.
+    pub fn node_count(&self) -> usize {
+        1 + self.children().iter().map(|c| c.node_count()).sum::<usize>()
+    }
+
+    /// The ids of the children of node `id`, numbering nodes in pre-order
+    /// as `tree` lists them.
+    pub(crate) fn child_ids(&self, id: usize) -> Vec<usize> {
+        let mut next = id + 1;
+        self.children()
+            .iter()
+            .map(|c| {
+                let at = next;
+                next += c.node_count();
+                at
+            })
+            .collect()
     }
 
     fn line(&self) -> String {
@@ -819,146 +837,5 @@ fn plan_join(j: &crate::logical::Join, _plan: &LogicalPlan) -> Result<PhysicalPl
         schema: out_schema,
         order,
         mark_build,
-    })
-}
-
-// ---------------------------------------------------------------------------
-// execution
-// ---------------------------------------------------------------------------
-
-pub fn execute(plan: &PhysicalPlan) -> Result<Vec<RecordBatch>> {
-    match plan {
-        PhysicalPlan::Aggregate { input, group_exprs, aggs, schema } => {
-            let pipe = build_pipeline(input)?;
-            let sink = AggregateSink::new(group_exprs.clone(), aggs.clone(), schema.clone());
-            run_pipeline(&pipe, &sink)
-        }
-        PhysicalPlan::Sort { input, keys, fetch, schema } => {
-            let pipe = build_pipeline(input)?;
-            run_pipeline(&pipe, &SortSink { keys: keys.clone(), fetch: *fetch, schema: schema.clone() })?.into_batches()
-        }
-        PhysicalPlan::Limit { input, skip, fetch } => {
-            let pipe = build_pipeline(input)?;
-            run_pipeline(&pipe, &CollectSink::with_limit(*skip, *fetch))
-        }
-        PhysicalPlan::Values { batches, .. } => Ok(batches.clone()),
-        PhysicalPlan::Window { input, specs, schema } => {
-            let pipe = build_pipeline(input)?;
-            run_pipeline(&pipe, &WindowSink::new(specs.clone(), schema.clone()))?.into_batches()
-        }
-        PhysicalPlan::RecursiveQuery { static_term, recursive_term, work_table, distinct, fetch, .. } => {
-            let base = execute(static_term)?;
-            crate::exec::recursive::iterate(base, work_table, *distinct, *fetch, || execute(recursive_term))
-        }
-        _ => run_pipeline(&build_pipeline(plan)?, &CollectSink::new()),
-    }
-}
-
-/// Run a plan, handing its batches to `emit` in order as they are produced:
-/// pipelines stream through an order-preserving sink, a sort's runs are
-/// merged straight into `emit`. Only aggregations and window results are
-/// produced whole before being handed out.
-pub fn execute_stream(plan: &PhysicalPlan, emit: Emitter<'_>) -> Result<()> {
-    match plan {
-        PhysicalPlan::Sort { input, keys, fetch, schema } => {
-            let pipe = build_pipeline(input)?;
-            run_pipeline(&pipe, &SortSink { keys: keys.clone(), fetch: *fetch, schema: schema.clone() })?.emit(emit)
-        }
-        PhysicalPlan::Limit { input, skip, fetch } => run_pipeline(&build_pipeline(input)?, &StreamSink::new(emit, *skip, *fetch)),
-        PhysicalPlan::Window { input, specs, schema } => match run_pipeline(&build_pipeline(input)?, &WindowSink::new(specs.clone(), schema.clone()))? {
-            Windowed::Batches(b) => b.into_iter().try_for_each(emit),
-            Windowed::Partitions(p) => run_pipeline(&Pipeline::new(Arc::new(p)), &StreamSink::new(emit, 0, None)),
-        },
-        PhysicalPlan::Aggregate { .. } | PhysicalPlan::Values { .. } | PhysicalPlan::RecursiveQuery { .. } => {
-            execute(plan)?.into_iter().try_for_each(emit)
-        }
-        _ => run_pipeline(&build_pipeline(plan)?, &StreamSink::new(emit, 0, None)),
-    }
-}
-
-fn build_pipeline(plan: &PhysicalPlan) -> Result<Pipeline> {
-    Ok(match plan {
-        PhysicalPlan::Source { source, .. } => Pipeline::new(source.clone()),
-        PhysicalPlan::Filter { input, predicate, projection, .. } => build_pipeline(input)?
-            .with_op(Arc::new(FilterOp { predicate: predicate.clone(), projection: projection.clone() })),
-        PhysicalPlan::Project { input, exprs, schema } => {
-            build_pipeline(input)?.with_op(Arc::new(ProjectOp { exprs: exprs.clone(), schema: schema.clone() }))
-        }
-        PhysicalPlan::HashJoin { probe, build, probe_keys, build_keys, join_type, filter, joined_schema, schema, order, mark_build } => {
-            let build_pipe = build_pipeline(build)?;
-            let track_matches = matches!(join_type, JoinType::Full | JoinType::Right) || *mark_build;
-            let sink = JoinBuildSink::new(build_keys.clone(), build.schema(), track_matches);
-            let table = match run_pipeline(&build_pipe, &sink)? {
-                BuildSide::Table(t) => Arc::new(t),
-                BuildSide::Spilled(build_parts) => {
-                    // grace hash join: the probe side is partitioned like the build side
-                    let probe_sink = PartitionSink::new(probe_keys.clone(), probe.schema(), build_parts.len());
-                    let probe_parts = run_pipeline(&build_pipeline(probe)?, &probe_sink)?;
-                    let join = GraceJoin {
-                        build_keys: build_keys.clone(),
-                        build_schema: build.schema(),
-                        probe_keys: probe_keys.clone(),
-                        join_type: *join_type,
-                        filter: filter.clone(),
-                        joined_schema: joined_schema.clone(),
-                        output_schema: schema.clone(),
-                        order: order.clone(),
-                        mark_build: *mark_build,
-                    };
-                    return Ok(Pipeline::new(Arc::new(GraceJoinSource::new(join, build_parts, probe_parts))));
-                }
-            };
-            let op = Arc::new(HashJoinProbe {
-                table: table.clone(),
-                probe_keys: probe_keys.clone(),
-                join_type: *join_type,
-                filter: filter.clone(),
-                joined_schema: joined_schema.clone(),
-                output_schema: schema.clone(),
-                order: order.clone(),
-                mark_only: *mark_build,
-            });
-            if *mark_build {
-                // run the probe side only to mark matches, then stream the kept build rows
-                run_pipeline(&build_pipeline(probe)?.with_op(op), &NullSink)?;
-                let rows = table.rows_by_match(*join_type == JoinType::Semi)?;
-                return Ok(Pipeline::new(Arc::new(MemorySource::new(rows, schema.clone(), "SemiJoinMarked"))));
-            }
-            build_pipeline(probe)?.with_op(op)
-        }
-        PhysicalPlan::NestedLoopJoin { probe, build, join_type, filter, joined_schema, schema, order } => {
-            let batches = execute(build)?;
-            let bschema = build.schema();
-            let build_batch = if batches.is_empty() {
-                RecordBatch::new_empty(bschema.clone())
-            } else {
-                concat_parallel(&bschema, &batches)?
-            };
-            build_pipeline(probe)?.with_op(Arc::new(NestedLoopJoin {
-                build: build_batch,
-                join_type: *join_type,
-                filter: filter.clone(),
-                joined_schema: joined_schema.clone(),
-                output_schema: schema.clone(),
-                order: order.clone(),
-            }))
-        }
-        PhysicalPlan::Union { inputs, schema } => {
-            let pipes = inputs.iter().map(build_pipeline).collect::<Result<Vec<_>>>()?;
-            Pipeline::new(Arc::new(UnionSource::new(pipes, schema.clone())))
-        }
-        // spilled window partitions are evaluated one per morsel, in the next pipeline
-        PhysicalPlan::Window { input, specs, schema } => match run_pipeline(&build_pipeline(input)?, &WindowSink::new(specs.clone(), schema.clone()))? {
-            Windowed::Batches(b) => Pipeline::new(Arc::new(MemorySource::new(b, schema.clone(), "Materialized"))),
-            Windowed::Partitions(p) => Pipeline::new(Arc::new(p)),
-        },
-        PhysicalPlan::Aggregate { .. }
-        | PhysicalPlan::Sort { .. }
-        | PhysicalPlan::Limit { .. }
-        | PhysicalPlan::Values { .. }
-        | PhysicalPlan::RecursiveQuery { .. } => {
-            let batches = execute(plan)?;
-            Pipeline::new(Arc::new(MemorySource::new(batches, plan.schema(), "Materialized")))
-        }
     })
 }

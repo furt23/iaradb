@@ -21,7 +21,8 @@ fn pipeline_dict<'py>(py: Python<'py>, p: &PipelineStats) -> PyResult<Bound<'py,
     Ok(d)
 }
 
-/// `{id, elapsed_ms, cancelled, memory_peak, spilled_bytes, pipelines: [...]}`
+/// `{id, elapsed_ms, cancelled, memory_peak, spilled_bytes,
+/// requests: {list, head, get, bytes}, pipelines: [...]}`
 pub fn stats_dict<'py>(py: Python<'py>, q: &QueryStats) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
     d.set_item("id", q.id)?;
@@ -29,6 +30,7 @@ pub fn stats_dict<'py>(py: Python<'py>, q: &QueryStats) -> PyResult<Bound<'py, P
     d.set_item("cancelled", q.cancelled)?;
     d.set_item("memory_peak", q.memory_peak)?;
     d.set_item("spilled_bytes", q.spilled_bytes)?;
+    d.set_item("requests", crate::storage::requests_dict(py, &q.requests)?)?;
     let pipelines = PyList::empty(py);
     for p in &q.pipelines {
         pipelines.append(pipeline_dict(py, p)?)?;

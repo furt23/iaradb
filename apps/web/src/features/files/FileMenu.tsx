@@ -4,11 +4,14 @@ import CreateNewFolderOutlined from "@mui/icons-material/CreateNewFolderOutlined
 import DeleteOutline from "@mui/icons-material/DeleteOutlineOutlined";
 import DownloadOutlined from "@mui/icons-material/DownloadOutlined";
 import DriveFileRenameOutline from "@mui/icons-material/DriveFileRenameOutline";
+import EventRepeatOutlined from "@mui/icons-material/EventRepeatOutlined";
 import FileCopyOutlined from "@mui/icons-material/FileCopyOutlined";
 import LinkOutlined from "@mui/icons-material/LinkOutlined";
 import MenuBookOutlined from "@mui/icons-material/MenuBookOutlined";
 import NoteAddOutlined from "@mui/icons-material/NoteAddOutlined";
 import OpenInNewOutlined from "@mui/icons-material/OpenInNewOutlined";
+import PostAddOutlined from "@mui/icons-material/PostAddOutlined";
+import TableChartOutlined from "@mui/icons-material/TableChartOutlined";
 import VerticalSplitOutlined from "@mui/icons-material/VerticalSplitOutlined";
 import Divider from "@mui/material/Divider";
 import ListItemIcon from "@mui/material/ListItemIcon";
@@ -17,6 +20,8 @@ import MenuItem from "@mui/material/MenuItem";
 import { useRouter } from "next/navigation";
 import { useState, type ReactNode } from "react";
 
+import { AddTableDialog } from "@/features/data/AddTableDialog";
+import { NewQueryDialog } from "@/features/queries/NewQueryDialog";
 import { useGuard, useNotify } from "@/features/shell/notify";
 import { useWorkbench } from "@/features/workbench/WorkbenchProvider";
 import { unwrap } from "@/lib/action";
@@ -36,7 +41,7 @@ export interface FileMenuTarget {
   href: string | null;
 }
 
-type Dialog = { kind: "rename" | "delete" | "folder" | "notebook"; path: string } | null;
+type Dialog = { kind: "rename" | "delete" | "folder" | "notebook" | "query" | "table"; path: string } | null;
 
 function Item({ icon, label, onClick, danger }: { icon: ReactNode; label: string; onClick(): void; danger?: boolean }) {
   return (
@@ -81,16 +86,19 @@ export function FileMenu({ target, onClose }: { target: FileMenuTarget | null; o
   });
 
   const items: ReactNode[] = [];
-  if (node?.kind === "notebook") {
+  if (node?.kind === "notebook" || node?.kind === "sql") {
     items.push(
       <Item key="open" icon={<MenuBookOutlined fontSize="small" />} label="Open" onClick={run((n) => act({ type: "open", path: n.path }, true))} />,
       <Item key="side" icon={<VerticalSplitOutlined fontSize="small" />} label="Open in a new pane" onClick={run((n) => act({ type: "openToSide", path: n.path }, true))} />,
+      <Item key="job" icon={<EventRepeatOutlined fontSize="small" />} label="Schedule as a job…" onClick={run((n) => router.push(`/jobs?new=${encodeURIComponent(n.path)}`))} />,
       <Divider key="d1" />,
     );
   } else if (node?.kind === "dir") {
     items.push(
       <Item key="nb" icon={<NoteAddOutlined fontSize="small" />} label="New notebook here…" onClick={open("notebook")} />,
+      <Item key="query" icon={<PostAddOutlined fontSize="small" />} label="New SQL query here…" onClick={open("query")} />,
       <Item key="folder" icon={<CreateNewFolderOutlined fontSize="small" />} label="New folder…" onClick={open("folder")} />,
+      <Item key="table" icon={<TableChartOutlined fontSize="small" />} label="Add to the catalog…" onClick={open("table")} />,
       <Divider key="d1" />,
     );
   } else if (target?.href) {
@@ -99,6 +107,8 @@ export function FileMenu({ target, onClose }: { target: FileMenuTarget | null; o
       <Item key="open" icon={<OpenInNewOutlined fontSize="small" />} label="Open" onClick={run(() => router.push(href))} />,
       <Divider key="d1" />,
     );
+  } else if (node?.kind === "data") {
+    items.push(<Item key="table" icon={<TableChartOutlined fontSize="small" />} label="Add to the catalog…" onClick={open("table")} />, <Divider key="d1" />);
   }
   items.push(
     <Item key="rename" icon={<DriveFileRenameOutline fontSize="small" />} label="Rename / move…" onClick={open("rename")} />,
@@ -130,6 +140,8 @@ export function FileMenu({ target, onClose }: { target: FileMenuTarget | null; o
       <DeleteEntryDialog path={dialog?.kind === "delete" ? dialog.path : null} onClose={close} />
       <NewFolderDialog parent={dialog?.kind === "folder" ? dialog.path : null} onClose={close} />
       <NewNotebookDialog open={dialog?.kind === "notebook"} folder={dialog?.path ?? "notebooks"} onClose={close} />
+      <NewQueryDialog open={dialog?.kind === "query"} folder={dialog?.path ?? "queries"} onClose={close} />
+      <AddTableDialog open={dialog?.kind === "table"} initialPath={dialog?.path} onClose={close} />
     </>
   );
 }

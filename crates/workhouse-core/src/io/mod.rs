@@ -2,6 +2,7 @@
 
 pub mod blob;
 pub mod csv;
+pub mod dataset;
 pub mod listing;
 pub mod location;
 pub mod memory;
@@ -9,6 +10,7 @@ pub mod object;
 pub mod options;
 pub mod output;
 pub mod parquet;
+pub mod partition;
 pub mod work_table;
 
 use std::fmt::Debug;
@@ -52,6 +54,15 @@ pub trait TableProvider: Send + Sync + Debug {
     /// Per-column min / max / null counts from file metadata (None = not
     /// available for this kind of table).
     fn column_stats(&self) -> Option<Vec<ColumnStats>> {
+        None
+    }
+    /// Where the table's files live, when it is a folder of Parquet files
+    /// that rows can be added to.
+    fn location(&self) -> Option<dataset::TableLocation> {
+        None
+    }
+    /// The rows of an in-memory table.
+    fn memory_batches(&self) -> Option<&[arrow::record_batch::RecordBatch]> {
         None
     }
     /// Create a parallel source. `filters` are pruning hints expressed over

@@ -123,6 +123,8 @@ export function CellHeader(p: CellHeaderProps) {
         onMove={p.onMove}
         onToggleHidden={p.onToggleHidden}
         onToggleOutput={p.onToggleOutput}
+        onClearOutput={p.onClearOutput}
+        onCopyLink={p.onCopyLink}
         onDelete={p.onDelete}
       />
     </Box>

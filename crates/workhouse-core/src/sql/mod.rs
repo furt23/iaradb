@@ -10,9 +10,11 @@
 //! subqueries (decorrelated into aggregate + left join), window functions
 //! (`OVER`, named windows, `QUALIFY`) and recursive CTEs.
 
+pub mod command;
 mod files;
 mod recursive;
 mod window;
+pub mod write;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -24,6 +26,7 @@ use chrono::{NaiveDate, NaiveDateTime};
 use sqlparser::ast as sql;
 use sqlparser::parser::Parser;
 
+use crate::catalog_names::TableRef;
 use crate::error::{Result, WhError};
 use crate::expr::*;
 use crate::logical::{JoinType, LogicalPlan};
@@ -53,8 +56,27 @@ pub fn plan_sql(ctx: &SessionContext, query: &str) -> Result<LogicalPlan> {
     let mut planner = SqlPlanner { ctx, ctes: vec![], windows: vec![], next_id: 0, word_counts };
     match &stmts[0] {
         sql::Statement::Query(q) => planner.plan_query(q, None),
+        sql::Statement::Explain { describe_alias: sql::DescribeAlias::Explain, analyze, statement, options: None, .. } => {
+            let sql::Statement::Query(q) = statement.as_ref() else {
+                return Err(WhError::NotSupported(format!("EXPLAIN of: {statement}")));
+            };
+            explain(ctx, planner.plan_query(q, None)?, *analyze)
+        }
         other => Err(WhError::NotSupported(format!("statement type: {other}"))),
     }
+}
+
+/// `EXPLAIN [ANALYZE] query` as a one-row `plan` text column. `ANALYZE` runs
+/// the query now (its result is discarded), like the statements that write.
+fn explain(ctx: &SessionContext, plan: LogicalPlan, analyze: bool) -> Result<LogicalPlan> {
+    let text = if analyze {
+        crate::physical::analyze::explain_analyze(&plan)?
+    } else {
+        crate::session::LazyFrame::new(Arc::new(plan), ctx.clone()).explain(true)?
+    };
+    let schema = Arc::new(Schema::new(vec![Field::new("plan", DataType::Utf8, false)]));
+    let column: ArrayRef = Arc::new(arrow::array::StringArray::from(vec![text]));
+    Ok(LogicalPlan::values(schema.clone(), vec![RecordBatch::try_new(schema, vec![column])?]))
 }
 
 /// DuckDB writes `first_value(x IGNORE NULLS)`; the parser expects the null
@@ -490,46 +512,53 @@ impl<'a> SqlPlanner<'a> {
     // FROM
     // -----------------------------------------------------------------------
 
+    /// A table, view or CTE named in FROM (or, failing that, a file path).
+    /// A name with a schema resolves only as that; a CTE matches only a
+    /// bare name. Scans are named by the bare table name.
+    fn plan_named_table(&mut self, parts: &[String], alias_name: Option<String>) -> Result<LogicalPlan> {
+        let full = parts.join(".");
+        let tname = full.rsplit('.').next().unwrap_or_default().to_string();
+        let q = alias_name.clone().unwrap_or(tname.clone());
+        if let [only] = parts {
+            if let Some(cte) = self.ctes.iter().rev().find_map(|m| m.get(&only.to_ascii_lowercase())).cloned() {
+                return Ok(LogicalPlan::subquery_alias(cte, &alias_name.unwrap_or(only.clone())));
+            }
+        }
+        let table_ref = TableRef::lenient(&full);
+        match self.ctx.lookup_ref(&table_ref)? {
+            Some(TableEntry::Table(t)) => LogicalPlan::scan(&tname, Some(q), t, None, vec![], None),
+            Some(TableEntry::View(p)) => Ok(LogicalPlan::subquery_alias(p, &q)),
+            None if [".parquet", ".csv", "*", "/", "\\"].iter().any(|s| full.contains(s)) => {
+                let provider = files::path_provider(&full)?;
+                let q = alias_name.unwrap_or_else(|| crate::io::location::stem(&full));
+                LogicalPlan::scan(&full, Some(q), provider, None, vec![], None)
+            }
+            None => Err(self.table_not_found(&full, &table_ref)),
+        }
+    }
+
+    fn table_not_found(&self, full: &str, r: &TableRef) -> WhError {
+        let registered = self.ctx.table_names();
+        match &r.schema {
+            Some(s) if !self.ctx.has_schema(s) => {
+                WhError::Plan(format!("table '{full}' not found: schema '{s}' does not exist (registered: {registered:?})"))
+            }
+            _ => WhError::Plan(format!("table '{full}' not found (registered: {registered:?})")),
+        }
+    }
+
     fn plan_table_factor(&mut self, tf: &sql::TableFactor, outer: Option<&PlanSchema>) -> Result<LogicalPlan> {
         match tf {
             sql::TableFactor::Table { name, alias, args, .. } => {
                 let parts = object_name_parts(name);
-                let tname = parts.last().cloned().unwrap_or_default();
                 let alias_name = alias.as_ref().map(|a| ident(&a.name));
                 let mut plan = if let Some(args) = args {
-                    let fname = tname.to_ascii_lowercase();
+                    let fname = parts.last().cloned().unwrap_or_default().to_ascii_lowercase();
                     let provider = files::table_function(&fname, &args.args)?;
                     let q = alias_name.clone().unwrap_or(fname);
                     LogicalPlan::scan(&q, Some(q.clone()), provider, None, vec![], None)?
                 } else {
-                    let key = tname.to_ascii_lowercase();
-                    let q = alias_name.clone().unwrap_or(tname.clone());
-                    if let Some(cte) = self.ctes.iter().rev().find_map(|m| m.get(&key)).cloned() {
-                        LogicalPlan::subquery_alias(cte, &q)
-                    } else {
-                        let full = parts.join(".");
-                        let found = match self.ctx.lookup(&tname)? {
-                            Some(e) => Some(e),
-                            None => self.ctx.lookup(&full)?,
-                        };
-                        match found {
-                            Some(TableEntry::Table(t)) => LogicalPlan::scan(&tname, Some(q.clone()), t, None, vec![], None)?,
-                            Some(TableEntry::View(p)) => LogicalPlan::subquery_alias(p, &q),
-                            None => {
-                                let looks_like_file = [".parquet", ".csv", "*", "/", "\\"].iter().any(|s| full.contains(s));
-                                if looks_like_file {
-                                    let provider = files::path_provider(&full)?;
-                                    let q = alias_name.clone().unwrap_or_else(|| crate::io::location::stem(&full));
-                                    LogicalPlan::scan(&full, Some(q), provider, None, vec![], None)?
-                                } else {
-                                    return Err(WhError::Plan(format!(
-                                        "table '{full}' not found (registered: {:?})",
-                                        self.ctx.table_names()
-                                    )));
-                                }
-                            }
-                        }
-                    }
+                    self.plan_named_table(&parts, alias_name)?
                 };
                 if let Some(a) = alias {
                     if !a.columns.is_empty() {

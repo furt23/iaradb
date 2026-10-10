@@ -4,7 +4,7 @@ __generated_with = "workhouse"
 app = marimo.App(width="medium")
 
 
-@app.cell
+@app.cell(id="yrrzqqhu", hide_code=False)
 def _():
     import marimo as mo
     import workhouse as wh
@@ -14,7 +14,7 @@ def _():
     return col, mo, wh, ws
 
 
-@app.cell
+@app.cell(id="8mg7lx2b")
 def _(mo):
     mo.md(
         r"""
@@ -27,7 +27,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(id="3t7ucmfl")
 def _(ws):
     pricing = ws.sql(
         r"""
@@ -46,7 +46,7 @@ def _(ws):
     return (pricing,)
 
 
-@app.cell
+@app.cell(id="ux6f7jeq")
 def _(ws):
     revenue_by_year = ws.sql(
         r"""
@@ -64,7 +64,7 @@ def _(ws):
     return (revenue_by_year,)
 
 
-@app.cell
+@app.cell(id="trzlzq22")
 def _(revenue_by_year, ws):
     growth = ws.sql(
         r"""
@@ -80,7 +80,7 @@ def _(revenue_by_year, ws):
     return (growth,)
 
 
-@app.cell
+@app.cell(id="fsxw3ewt")
 def _(ws):
     top_customers = ws.sql(
         r"""
@@ -97,7 +97,7 @@ def _(ws):
     return (top_customers,)
 
 
-@app.cell
+@app.cell(id="2iknh540")
 def _(col, ws):
     # DataFrame API: monthly shipped volume with a 3-month rolling mean, per ship mode
     monthly = (
@@ -113,7 +113,7 @@ def _(col, ws):
     return (monthly,)
 
 
-@app.cell
+@app.cell(id="bw26jyg5")
 def _(ws):
     lines_per_order = ws.sql(
         r"""

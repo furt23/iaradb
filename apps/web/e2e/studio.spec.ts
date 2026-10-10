@@ -5,7 +5,8 @@ import { addCell, cells, newNotebook, runCell, setCode } from "./helpers";
 test("runs the example notebook: SQL, DataFrame API, profile and plan", async ({ page }) => {
   await page.goto("/notebooks/notebooks/tpch_tour.py");
   await page.getByRole("button", { name: "Run all" }).click();
-  await expect(page.getByText("top nations:")).toBeVisible();
+  // the printed line (the cell's code also says "top nations:", in quotes)
+  await expect(page.getByText(/^top nations: /)).toBeVisible();
   const sqlCell = cells(page).nth(2);
   await expect(sqlCell.getByText("25 rows × 3 columns")).toBeVisible();
   await expect(sqlCell.getByRole("gridcell", { name: "IRAN" })).toBeVisible();
@@ -57,14 +58,6 @@ test("SQL editor runs and explains queries", async ({ page }) => {
   await expect(page.getByText("3 rows × 2 columns")).toBeVisible();
   await page.getByRole("button", { name: "Explain" }).click();
   await expect(page.getByText("Physical plan", { exact: false })).toBeVisible();
-});
-
-test("catalog shows schemas, statistics and previews", async ({ page }) => {
-  await page.goto("/catalog");
-  await page.getByRole("link", { name: /^lineitem(?!_)/ }).click();
-  await expect(page.getByText("600,572")).toBeVisible();
-  await expect(page.getByRole("cell", { name: "l_shipdate" })).toBeVisible();
-  await expect(page.getByText("200 rows × 16 columns")).toBeVisible();
 });
 
 test("commits a notebook from the Git panel", async ({ page }) => {

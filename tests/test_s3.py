@@ -165,3 +165,46 @@ secret_access_key = "nope"
 """
     with pytest.raises(ValueError, match="credentials"):
         parse_config(text, tmp_path)
+
+
+def delta(before: dict[str, int], after: dict[str, int]) -> dict[str, int]:
+    return {k: after[k] - before[k] for k in after}
+
+
+NO_REQUESTS = {"list": 0, "head": 0, "get": 0, "bytes": 0}
+
+
+def test_requests_are_counted_and_remembered(tpch: Path) -> None:
+    """Object stores bill per request, a LIST dearest: a table object over files
+    already seen asks for neither their listing nor their footers again."""
+    wh.storage.clear_object_stores()  # a cold start
+    url = f"s3://{BUCKET}/tpch/orders/"
+    start = wh.storage.storage_requests()
+    assert set(start) == {"list", "head", "get", "bytes"}
+    wh.SessionContext().register_parquet("orders", url)
+    first = delta(start, wh.storage.storage_requests())
+    assert first["list"] == 1 and first["get"] >= 1 and first["bytes"] > 0  # one LIST, a footer per file
+
+    mark = wh.storage.storage_requests()
+    ctx = wh.SessionContext()
+    ctx.register_parquet("orders", url)
+    assert delta(mark, wh.storage.storage_requests()) == NO_REQUESTS
+
+    # count(*) is answered from the footers
+    df, prof = ctx.sql("select count(*) from orders").profile()
+    assert df.to_arrow().column(0)[0].as_py() == 15_000
+    assert prof["requests"] == NO_REQUESTS
+
+    # a scan reads data, and its profile says how many requests that took
+    _, prof = ctx.sql("select sum(o_totalprice) from orders").profile()
+    assert prof["requests"]["list"] == 0 and prof["requests"]["get"] >= 1 and prof["requests"]["bytes"] > 0
+    assert delta(mark, wh.storage.storage_requests()) == prof["requests"]
+
+
+def test_writes_drop_cached_listings(endpoint: str) -> None:
+    one = wh.from_dict({"a": [1, 2, 3]})
+    one.write_parquet(f"s3://{BUCKET}/cache/a.parquet")
+    q = f"select count(*) from read_parquet('s3://{BUCKET}/cache/*.parquet')"
+    assert wh.sql(q).collect().item() == 3
+    one.write_parquet(f"s3://{BUCKET}/cache/b.parquet")  # listed again at once: our own writes clear the cache
+    assert wh.sql(q).collect().item() == 6

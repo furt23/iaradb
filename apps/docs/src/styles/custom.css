@@ -1,0 +1,133 @@
+/**
+ * Custom Starlight styling for Workhouse Python Documentation
+ * Inspired by the Observatory design system (packages/ui/src/tokens.ts)
+ */
+
+/* Dark Mode (Native Scheme) */
+:root {
+  --sl-color-accent-low: #221a0d;
+  --sl-color-accent: #d4a24c;
+  --sl-color-accent-high: #f5d28a;
+
+  --sl-color-white: #e6eaf2;
+  --sl-color-gray-1: #c8d0e0;
+  --sl-color-gray-2: #9aa4bc;
+  --sl-color-gray-3: #5e6a86;
+  --sl-color-gray-4: #26314f;
+  --sl-color-gray-5: #1a2440;
+  --sl-color-gray-6: #121a2e;
+  --sl-color-black: #0b1020;
+
+  --sl-font-system: 'Inter Variable', Inter, system-ui, -apple-system, sans-serif;
+  --sl-font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, Consolas, monospace;
+
+  /* Custom Workhouse palette tokens */
+  --wh-accent-nebula: #6ea8fe;
+  --wh-accent-brass: #d4a24c;
+  --wh-accent-aurora: #5fd3a6;
+  --wh-accent-nova: #f5c46b;
+  --wh-accent-mars: #f2777a;
+}
+
+/* Light Mode (Paper Scheme) */
+:root[data-theme='light'] {
+  --sl-color-accent-low: #f8edd7;
+  --sl-color-accent: #a87a22;
+  --sl-color-accent-high: #5f430d;
+
+  --sl-color-white: #1b2233;
+  --sl-color-gray-1: #2c3447;
+  --sl-color-gray-2: #5a6275;
+  --sl-color-gray-3: #8c93a3;
+  --sl-color-gray-4: #dedbd2;
+  --sl-color-gray-5: #efede6;
+  --sl-color-gray-6: #ffffff;
+  --sl-color-black: #f7f6f2;
+
+  --wh-accent-nebula: #2f6fd6;
+  --wh-accent-brass: #a87a22;
+  --wh-accent-aurora: #1f9e73;
+  --wh-accent-nova: #b7801a;
+  --wh-accent-mars: #c93b40;
+}
+
+/* Header & Navigation Polish */
+header.header {
+  border-bottom: 1px solid var(--sl-color-gray-4);
+  background-color: var(--sl-color-black);
+}
+
+.site-title {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--sl-color-white);
+}
+
+.site-title::after {
+  content: "Python API";
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin-left: 0.5rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  background-color: var(--sl-color-gray-5);
+  color: var(--sl-color-accent);
+  border: 1px solid var(--sl-color-gray-4);
+  vertical-align: middle;
+}
+
+/* Signature & Method Badges */
+.api-badge {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-family: var(--sl-font-mono);
+  font-weight: 600;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  margin-right: 0.4rem;
+}
+
+.api-badge-lazy {
+  background-color: rgba(110, 168, 254, 0.15);
+  color: var(--wh-accent-nebula);
+  border: 1px solid rgba(110, 168, 254, 0.3);
+}
+
+.api-badge-eager {
+  background-color: rgba(212, 162, 76, 0.15);
+  color: var(--wh-accent-brass);
+  border: 1px solid rgba(212, 162, 76, 0.3);
+}
+
+.api-badge-expr {
+  background-color: rgba(95, 211, 166, 0.15);
+  color: var(--wh-accent-aurora);
+  border: 1px solid rgba(95, 211, 166, 0.3);
+}
+
+/* PySpark-style code and doc tables */
+.sl-markdown-content table {
+  width: 100%;
+  margin-top: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.sl-markdown-content code {
+  font-family: var(--sl-font-mono);
+  font-size: 0.875em;
+}
+
+/* Parameter blocks */
+.param-name {
+  font-weight: 600;
+  font-family: var(--sl-font-mono);
+  color: var(--sl-color-accent);
+}
+
+.param-type {
+  font-size: 0.85em;
+  color: var(--sl-color-gray-2);
+  margin-left: 0.25rem;
+}

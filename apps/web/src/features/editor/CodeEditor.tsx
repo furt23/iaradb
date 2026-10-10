@@ -38,11 +38,30 @@ export interface CodeEditorProps {
   assist?: EditorAssist;
 }
 
+/**
+ * The completion namespace of the catalog: main's tables at the top level, and
+ * `schema.table` names nested as `{ schema: { table: columns } }` (lang-sql
+ * completes `schema.` to the tables of the schema). A schema wins a name clash
+ * with a table of main.
+ */
+function sqlNamespace(tables: NonNullable<CodeEditorProps["schema"]>): SQLNamespace {
+  const top: Record<string, SQLNamespace> = {};
+  const schemas: Record<string, Record<string, string[]>> = {};
+  for (const [name, columns] of Object.entries(tables)) {
+    const names = columns.map((c) => c.name);
+    const dot = name.indexOf(".");
+    if (dot <= 0) top[name] = names;
+    else if (name.slice(0, dot) === "main") top[name.slice(dot + 1)] = names;
+    else (schemas[name.slice(0, dot)] ??= {})[name.slice(dot + 1)] = names;
+  }
+  for (const [schema, inner] of Object.entries(schemas)) top[schema] = inner;
+  return top;
+}
+
 function languageExtension(language: EditorLanguage, schema?: CodeEditorProps["schema"]): Extension {
   if (language === "python") return python();
   if (language === "markdown") return markdown();
-  const namespace: SQLNamespace = Object.fromEntries(Object.entries(schema ?? {}).map(([t, cols]) => [t, cols.map((c) => c.name)]));
-  return sql({ dialect: StandardSQL, schema: namespace, upperCaseKeywords: false });
+  return sql({ dialect: StandardSQL, schema: sqlNamespace(schema ?? {}), upperCaseKeywords: false });
 }
 
 function assistExtensions(language: EditorLanguage, assist?: EditorAssist): Extension[] {

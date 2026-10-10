@@ -6,7 +6,7 @@ import Button from "@mui/material/Button";
 import Tab from "@mui/material/Tab";
 import Tabs from "@mui/material/Tabs";
 import Typography from "@mui/material/Typography";
-import type { TableOutput } from "@workhouse/protocol";
+import type { ChartSpec, TableOutput } from "@workhouse/protocol";
 import { useState } from "react";
 
 import { useGuard, useNotify } from "@/features/shell/notify";
@@ -14,6 +14,7 @@ import { unwrap } from "@/lib/action";
 import { formatCount, formatDuration } from "@/lib/format";
 import { exportResult } from "@/server/actions/kernels";
 
+import { ChartView } from "./chart/ChartView";
 import { PlanTree } from "./PlanTree";
 import { ProfileView } from "./ProfileView";
 import { ResultTable } from "./ResultTable";
@@ -34,20 +35,28 @@ function ExportButton({ kernelKey, output, format }: { kernelKey: string; output
   );
 }
 
-/** A table result with its run profile and plan, when it has them. */
-export function TableOutputView({ kernelKey, output, height }: { kernelKey: string; output: TableOutput; height?: number }) {
-  const [tab, setTab] = useState<"result" | "profile" | "plan">("result");
+export interface ChartProps {
+  /** the chart saved with the output's cell or query (shown first when there is one) */
+  chart?: ChartSpec | null;
+  /** save a changed chart (without it, changes last as long as the output) */
+  onChart?(spec: ChartSpec): void;
+}
+
+/** A table result with a chart of it, and its run profile and plan when it has them. */
+export function TableOutputView({ kernelKey, output, height, chart, onChart }: { kernelKey: string; output: TableOutput; height?: number } & ChartProps) {
+  const [tab, setTab] = useState<"result" | "chart" | "profile" | "plan">(chart ? "chart" : "result");
+  const [local, setLocal] = useState<ChartSpec | null>(null);
   const { result, profile, plan } = output;
+  const spec = onChart ? (chart ?? null) : local;
   return (
     <Box>
       <Box sx={{ display: "flex", alignItems: "center", gap: 1, px: 1, borderBottom: 1, borderColor: "divider" }}>
-        {(profile || plan) && (
-          <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ minHeight: 34, "& .MuiTab-root": { minHeight: 34, py: 0, px: 1.5, fontSize: 12.5 } }}>
-            <Tab value="result" label="Result" />
-            {profile && <Tab value="profile" label="Profile" />}
-            {plan && <Tab value="plan" label="Plan" />}
-          </Tabs>
-        )}
+        <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ minHeight: 34, "& .MuiTab-root": { minHeight: 34, py: 0, px: 1.5, fontSize: 12.5 } }}>
+          <Tab value="result" label="Result" />
+          <Tab value="chart" label="Chart" />
+          {profile && <Tab value="profile" label="Profile" />}
+          {plan && <Tab value="plan" label="Plan" />}
+        </Tabs>
         <Typography variant="body2" sx={{ color: "text.secondary", px: 1 }}>
           {formatCount(result.num_rows)} rows × {result.columns.length} columns
           {profile && ` · ${formatDuration(profile.elapsed_ms)}`}
@@ -62,6 +71,7 @@ export function TableOutputView({ kernelKey, output, height }: { kernelKey: stri
         <ExportButton kernelKey={kernelKey} output={output} format="parquet" />
       </Box>
       {tab === "result" && <ResultTable kernelKey={kernelKey} meta={result} height={height} />}
+      {tab === "chart" && <ChartView kernelKey={kernelKey} meta={result} spec={spec} onSpec={onChart ?? setLocal} />}
       {tab === "profile" && profile && <ProfileView profile={profile} />}
       {tab === "plan" && plan && <PlanTree plan={plan} />}
     </Box>

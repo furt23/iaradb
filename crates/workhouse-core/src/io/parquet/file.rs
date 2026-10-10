@@ -1,11 +1,13 @@
 //! Opening Parquet files: local ones are memory mapped (zero copy), remote
-//! ones keep only their footer and are read by ranges later.
+//! ones keep only their footer (and the bytes of small files) and are read by
+//! ranges later.
 
 use std::path::Path;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema};
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
+use parquet::file::metadata::ParquetMetaData;
 use rayon::prelude::*;
 
 use super::footer;
@@ -26,6 +28,10 @@ impl std::fmt::Debug for ParquetFile {
     }
 }
 
+/// Bytes of small remote files (read whole with their footer) kept in
+/// memory per call of [`open_files`]; the rest are fetched when scanned.
+const SMALL_FILES_KEPT: usize = 128 << 20;
+
 /// Open files in order: local ones in parallel, remote footers concurrently.
 pub fn open_files(files: Vec<DataFile>) -> Result<Vec<Arc<ParquetFile>>> {
     let (mut local, mut remote) = (vec![], vec![]);
@@ -37,13 +43,35 @@ pub fn open_files(files: Vec<DataFile>) -> Result<Vec<Arc<ParquetFile>>> {
     }
     let mut opened: Vec<(usize, ParquetFile)> =
         local.par_iter().map(|(i, p)| open_local(p).map(|f| (*i, f))).collect::<Result<_>>()?;
-    let objects: Vec<ObjectFile> = remote.iter().map(|(_, o)| o.clone()).collect();
-    for ((i, o), meta) in remote.into_iter().zip(footer::fetch_all(&objects)?) {
-        let meta = ArrowReaderMetadata::try_new(Arc::new(meta), ArrowReaderOptions::new()).map_err(|e| named(&o.url, e))?;
-        opened.push((i, ParquetFile { name: o.url.to_string(), blob: Blob::Object(o), meta: with_string_views(meta) }));
-    }
+    opened.extend(open_remote(remote)?);
     opened.sort_by_key(|(i, _)| *i);
     Ok(opened.into_iter().map(|(_, f)| Arc::new(f)).collect())
+}
+
+fn open_remote(remote: Vec<(usize, ObjectFile)>) -> Result<Vec<(usize, ParquetFile)>> {
+    let objects: Vec<ObjectFile> = remote.iter().map(|(_, o)| o.clone()).collect();
+    let mut kept = 0usize;
+    let opened: Vec<(usize, ObjectFile, Arc<ParquetMetaData>)> = remote
+        .into_iter()
+        .zip(footer::load_all(&objects)?)
+        .map(|((i, o), f)| {
+            let o = match f.content {
+                Some(data) if kept + data.len() <= SMALL_FILES_KEPT => {
+                    kept += data.len();
+                    o.with_content(data)
+                }
+                _ => o,
+            };
+            (i, o, f.meta)
+        })
+        .collect();
+    opened
+        .into_par_iter()
+        .map(|(i, o, meta)| {
+            let meta = ArrowReaderMetadata::try_new(meta, ArrowReaderOptions::new()).map_err(|e| named(&o.url, e))?;
+            Ok((i, ParquetFile { name: o.url.to_string(), blob: Blob::Object(o), meta: with_string_views(meta) }))
+        })
+        .collect()
 }
 
 fn open_local(path: &Path) -> Result<ParquetFile> {

@@ -676,9 +676,9 @@ impl Expr {
     }
 
     /// Evaluate the aggregates of this expression per window instead of per
-    /// group (`sum(x).over([g])`, Polars style): every aggregate becomes a
-    /// window aggregate over the whole partition (or `frame`), and window
-    /// functions without a partition / ordering of their own get these.
+    /// group (`sum(x).over([g])`): every aggregate becomes a window aggregate
+    /// over the whole partition (or `frame`), and window functions without a
+    /// partition / ordering of their own get these.
     pub fn over(self, partition_by: Vec<Expr>, order_by: Vec<SortExpr>, frame: Option<WindowFrame>) -> Result<Expr> {
         let mut found = false;
         let out = self.transform_down(&mut |e| match e {
@@ -739,7 +739,7 @@ impl Expr {
         found
     }
 
-    /// Polars-style output name: the left-most input of the expression
+    /// Default output name: the left-most input of the expression
     /// (`col("a") + col("b")` -> "a", `when(..).then(col("x"))` -> "x").
     pub fn root_name(&self) -> Option<String> {
         use Expr::*;

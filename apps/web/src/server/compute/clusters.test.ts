@@ -1,9 +1,20 @@
 import { describe, expect, it } from "vitest";
 
 import type { CloudApi, InstanceStatus, LaunchSpec } from "./cloud/api";
-import { ClusterService, type StoreApi } from "./clusters";
+import { ClusterService, copyName, type StoreApi } from "./clusters";
+import { ClusterEventLog, type EventFiles } from "./events";
 import type { StudioState } from "./store";
 import type { ClusterRecord } from "./types";
+
+function memoryFiles(): EventFiles {
+  const files = new Map<string, string>();
+  return {
+    append: (file, text) => void files.set(file, (files.get(file) ?? "") + text),
+    read: (file) => files.get(file) ?? null,
+    write: (file, text) => void files.set(file, text),
+    remove: (file) => void files.delete(file),
+  };
+}
 
 class MemoryStore implements StoreApi {
   state: StudioState = { installationId: "test", clusters: [], attachments: {} };
@@ -83,6 +94,7 @@ function setup(opts: { local?: boolean } = {}) {
     engineVersion: "0.1.0",
     dataBuckets: async () => ["sales-data"],
     localCompute: opts.local ?? true,
+    events: new ClusterEventLog({ dir: "events", files: memoryFiles() }),
     now: () => now,
     // each wait moves the clock and lets the machine progress
     sleep: async (ms) => {
@@ -155,6 +167,26 @@ describe("clusters", () => {
     expect(stopped).toEqual([c.id]);
   });
 
+  it("clusters made for job runs are never the default and go away with their machines", async () => {
+    const { svc, store, cloud } = setup({ local: false });
+    const run = svc.create({ name: "job-r-1", job: "r-1" });
+    expect(svc.defaultCluster()).toBeNull();
+    const shared = svc.create({ name: "shared" });
+    expect(svc.defaultCluster()).toBe(shared.id);
+    expect(svc.views().find((v) => v.id === run.id)?.job).toBe("r-1");
+    svc.start(run.id);
+    await svc.settled(run.id);
+    await svc.terminate(run.id, "job run finished");
+    cloud.instances["i-1"] = { state: "terminated" };
+    await svc.reconcile();
+    expect(store.cluster(run.id)).toBeUndefined();
+    // one that never got a machine goes at once
+    const early = svc.create({ name: "job-r-2", job: "r-2" });
+    await svc.terminate(early.id);
+    expect(store.cluster(early.id)).toBeUndefined();
+    expect(store.cluster(shared.id)).toBeDefined();
+  });
+
   it("attaches notebooks, falls back to the default and forgets deleted clusters", () => {
     const { svc } = setup();
     const a = svc.create({ name: "a" });
@@ -183,5 +215,83 @@ describe("clusters", () => {
     expect(() => svc.create({ name: "x", autoTerminateMinutes: 1 })).toThrow(/between 5/);
     svc.create({ name: "x" });
     expect(() => svc.create({ name: "X" })).toThrow(/already exists/);
+  });
+
+  it("keeps an event log per cluster, newest first", async () => {
+    const { svc, cloud } = setup();
+    const c = svc.create({ name: "dev" });
+    svc.update(c.id, { autoTerminateMinutes: 30 });
+    svc.start(c.id);
+    await svc.settled(c.id);
+    await svc.terminate(c.id);
+    cloud.instances["i-1"] = { state: "terminated" };
+    await svc.reconcile();
+    const log = svc.eventsOf(c.id);
+    expect(log.map((e) => e.kind)).toEqual(["terminated", "terminate", "running", "start", "edited", "created"]);
+    expect(log.map((e) => e.message)).toEqual([
+      "machine stopped: stopped by the user",
+      "terminate requested",
+      "machine i-1 running at 198.51.100.9",
+      "start requested",
+      "idle timeout 15 → 30 min",
+      "m7i-flex.large, 40 GB, 15 min idle limit",
+    ]);
+  });
+
+  it("logs the idle minutes when a cluster is auto-terminated", async () => {
+    const { svc, tick, now, activity } = setup();
+    const c = svc.create({ name: "dev", autoTerminateMinutes: 15 });
+    svc.start(c.id);
+    await svc.settled(c.id);
+    activity.lastUsed = now();
+    tick(16 * 60_000);
+    expect(await svc.reap()).toEqual([c.id]);
+    expect(svc.eventsOf(c.id)[0]).toMatchObject({ kind: "auto-terminate", message: "idle for 15 min" });
+  });
+
+  it("logs the error that stopped a start", async () => {
+    const { svc, cloud } = setup();
+    cloud.published = false;
+    const c = svc.create({ name: "dev" });
+    svc.start(c.id);
+    await svc.settled(c.id);
+    expect(svc.eventsOf(c.id).slice(0, 2).map((e) => e.kind)).toEqual(["error", "start"]);
+    expect(svc.eventsOf(c.id)[0].message).toMatch(/workhouse.cloud publish/);
+  });
+
+  it("clones a cluster's machine and limits, without starting it", () => {
+    const { svc, store } = setup({ local: false });
+    const a = svc.create({ name: "dev", instanceType: "r7i.xlarge", autoTerminateMinutes: 30, volumeGb: 100 });
+    const copy = svc.clone(a.id);
+    expect(copy).toMatchObject({ name: "dev copy", instanceType: "r7i.xlarge", autoTerminateMinutes: 30, volumeGb: 100 });
+    expect(copy.runtime.state).toBe("terminated");
+    expect(svc.eventsOf(copy.id).map((e) => e.kind)).toEqual(["cloned"]);
+    expect(store.read().clusters).toHaveLength(2);
+    expect(() => svc.clone("nope")).toThrow(/unknown cluster/);
+  });
+
+  it("logs notebooks moving between clusters, and detaching them", () => {
+    const { svc } = setup();
+    const a = svc.create({ name: "a" });
+    const b = svc.create({ name: "b" });
+    svc.attach("nb/x.py", a.id);
+    svc.attach("nb/x.py", b.id);
+    expect(svc.eventsOf(a.id).map((e) => e.kind)).toEqual(["detached", "attached", "created"]);
+    expect(svc.eventsOf(b.id)[0]).toMatchObject({ kind: "attached", message: "nb/x.py attached" });
+    svc.detach("nb/x.py");
+    expect(svc.clusterOf("nb/x.py")).toBe("local");
+    expect(svc.eventsOf(b.id).map((e) => e.kind)).toEqual(["detached", "attached", "created"]);
+    svc.detach("nb/x.py"); // nothing attached any more: no event
+    expect(svc.eventsOf(b.id)).toHaveLength(3);
+  });
+});
+
+describe("copyName", () => {
+  it("numbers copies when the name is taken, and fits the name limit", () => {
+    expect(copyName("dev", ["dev"])).toBe("dev copy");
+    expect(copyName("dev", ["dev copy"])).toBe("dev copy 2");
+    expect(copyName("dev", ["dev copy", "dev copy 2"])).toBe("dev copy 3");
+    expect(copyName("x".repeat(40), [])).toBe(`${"x".repeat(35)} copy`);
+    expect(copyName("x".repeat(40), [`${"x".repeat(35)} copy`])).toBe(`${"x".repeat(33)} copy 2`);
   });
 });

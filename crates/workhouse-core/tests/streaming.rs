@@ -10,6 +10,7 @@ use arrow::record_batch::RecordBatch;
 use workhouse_core::exec::memory;
 use workhouse_core::exec::spill::spilled_bytes;
 use workhouse_core::io::StorageOptions;
+use workhouse_core::io::parquet::ParquetOptions;
 use workhouse_core::{LazyFrame, SessionContext};
 
 fn table(rows: i64) -> (SchemaRef, Vec<RecordBatch>) {
@@ -88,7 +89,7 @@ fn streams_match_collect_and_sinks_write_files() {
     let expected = collected(&lf);
     let none = StorageOptions::new();
     for path in [dir.join("out.parquet").to_string_lossy().to_string(), "memory://streaming/out.parquet".to_string()] {
-        assert_eq!(lf.sink_parquet(&path, "zstd", Some(10_000), &none).unwrap(), expected.num_rows());
+        assert_eq!(lf.sink_parquet(&path, &ParquetOptions { row_group_size: Some(10_000), ..Default::default() }, &none).unwrap(), expected.num_rows());
         let back = collected(&ctx.read_parquet(&path).unwrap());
         // strings come back as views: compare values, not physical types
         let cols: Vec<ArrayRef> =

@@ -15,6 +15,7 @@ use parking_lot::Mutex;
 
 use crate::error::{Result, WhError};
 use crate::exec::{memory, spill};
+use crate::io::object::{StorageRequests, storage_requests};
 
 /// Live counters of one pipeline run.
 pub struct PipelineProgress {
@@ -119,12 +120,15 @@ pub struct QueryStats {
     pub memory_peak: usize,
     /// bytes written to spill files
     pub spilled_bytes: u64,
+    /// requests made to object stores (process-wide when queries overlap)
+    pub requests: StorageRequests,
 }
 
 pub struct QueryHandle {
     id: u64,
     started: Instant,
     spilled_before: u64,
+    requests_before: StorageRequests,
     cancelled: AtomicBool,
     pipelines: Mutex<Vec<Arc<PipelineProgress>>>,
 }
@@ -136,6 +140,7 @@ impl QueryHandle {
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             started: Instant::now(),
             spilled_before: spill::spilled_bytes(),
+            requests_before: storage_requests(),
             cancelled: AtomicBool::new(false),
             pipelines: Mutex::new(vec![]),
         }
@@ -193,6 +198,7 @@ impl QueryHandle {
             pipelines: self.pipelines.lock().iter().map(|p| p.stats()).collect(),
             memory_peak: memory::pool().peak(),
             spilled_bytes: spill::spilled_bytes() - self.spilled_before,
+            requests: storage_requests().since(self.requests_before),
         }
     }
 }

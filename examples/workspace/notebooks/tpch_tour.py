@@ -4,7 +4,7 @@ __generated_with = "workhouse"
 app = marimo.App(width="medium")
 
 
-@app.cell
+@app.cell(id="xowwlks9")
 def _():
     import marimo as mo
     import workhouse as wh
@@ -13,7 +13,7 @@ def _():
     return mo, wh, ws
 
 
-@app.cell
+@app.cell(id="j5f636sc")
 def _(mo):
     mo.md(
         r"""
@@ -27,7 +27,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(id="a88k7q9r")
 def _(ws):
     revenue_by_nation = ws.sql(
         r"""
@@ -47,7 +47,7 @@ def _(ws):
     return (revenue_by_nation,)
 
 
-@app.cell
+@app.cell(id="g2esyroi")
 def _(ws):
     from workhouse import col
 
@@ -63,7 +63,7 @@ def _(ws):
     return big_orders, col
 
 
-@app.cell
+@app.cell(id="04pwngd3")
 def _(big_orders, ws):
     priorities = ws.sql(
         r"""
@@ -77,7 +77,7 @@ def _(big_orders, ws):
     return (priorities,)
 
 
-@app.cell
+@app.cell(id="7lwec3wf")
 def _(revenue_by_nation):
     top = revenue_by_nation.head(3)
     print("top nations:", ", ".join(top.to_pydict()["nation"]))

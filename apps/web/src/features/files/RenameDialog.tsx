@@ -10,7 +10,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import { useGuard, useNotify } from "@/features/shell/notify";
-import { notebookHref } from "@/features/workbench/WorkbenchProvider";
+import { fileHref } from "@/features/workbench/WorkbenchProvider";
 import { useWorkbench } from "@/features/workbench/WorkbenchProvider";
 import { unwrap } from "@/lib/action";
 import { baseName, movedPath, nameError } from "@/lib/paths";
@@ -49,10 +49,10 @@ export function RenameDialog({ path, onClose }: { path: string | null; onClose()
     if (!moved) return;
     onClose();
     act({ type: "rename", from: moved.from, to: moved.to });
-    const here = decodeURIComponent(pathname.replace(/^\/(notebooks|files)\//, ""));
+    const here = decodeURIComponent(pathname.replace(/^\/(notebooks|queries|files)\//, ""));
     const now = movedPath(here, moved.from, moved.to);
     if (now && pathname.startsWith("/files/")) router.replace(`/files/${now.split("/").map(encodeURIComponent).join("/")}`);
-    else if (now && pathname.startsWith("/notebooks/")) router.replace(notebookHref(now));
+    else if (now && /^\/(notebooks|queries)\//.test(pathname)) router.replace(fileHref(now));
     notify(`Renamed to ${moved.to}`, "success");
     router.refresh();
   };

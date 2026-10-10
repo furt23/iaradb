@@ -3,7 +3,7 @@
 import Box from "@mui/material/Box";
 import ButtonBase from "@mui/material/ButtonBase";
 import Paper from "@mui/material/Paper";
-import type { Cell, CellKind, CellState, QueryProfile } from "@workhouse/protocol";
+import type { Cell, CellKind, CellState, ChartSpec, QueryProfile } from "@workhouse/protocol";
 import { memo, useMemo, useState } from "react";
 
 import { CodeEditor } from "@/features/editor/CodeEditor";
@@ -35,6 +35,8 @@ export interface CellViewProps {
   onMove(id: string, delta: -1 | 1): void;
   onDelete(id: string): void;
   onToggleOutput(id: string): void;
+  onClearOutput(id: string): void;
+  onCopyLink(id: string): void;
 }
 
 const PLACEHOLDER: Record<CellKind, string> = {
@@ -97,6 +99,8 @@ function CellViewImpl(p: CellViewProps) {
         onMove={(d) => p.onMove(cell.id, d)}
         onToggleHidden={() => p.onEdit(cell.id, { config: { ...cell.config, hide_code: !hidden } })}
         onToggleOutput={() => p.onToggleOutput(cell.id)}
+        onClearOutput={() => p.onClearOutput(cell.id)}
+        onCopyLink={() => p.onCopyLink(cell.id)}
         onDelete={() => p.onDelete(cell.id)}
       />
       {!hidden && cell.kind === "markdown" && <MarkdownBody cell={cell} editing={editingMd} setEditing={setEditingMd} onChange={onChange} onRun={run} />}
@@ -124,7 +128,15 @@ function CellViewImpl(p: CellViewProps) {
           ) : (
             <>
               <Streams streams={state.streams} />
-              {state.output && state.output.type !== "markdown" && <OutputView output={state.output} kernelKey={p.kernelKey} />}
+              {state.output && state.output.type !== "markdown" && (
+                <OutputView
+                  output={state.output}
+                  kernelKey={p.kernelKey}
+                  // the chart is saved with the cell (a marimo decorator option)
+                  chart={(cell.config.chart as ChartSpec | undefined) ?? null}
+                  onChart={(chart) => p.onEdit(cell.id, { config: { ...cell.config, chart } })}
+                />
+              )}
             </>
           )}
         </Box>

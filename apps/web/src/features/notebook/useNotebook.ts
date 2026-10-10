@@ -3,10 +3,11 @@
 import type { Cell, CellKind, NotebookView, RunStreamEvent } from "@workhouse/protocol";
 import { useCallback, useEffect, useReducer, useRef } from "react";
 
+import { useCatalogRefresh } from "@/features/data/useCatalogRefresh";
 import { useNotify } from "@/features/shell/notify";
 import { streamEvents } from "@/lib/sse";
 import { interruptKernel, restartKernel } from "@/server/actions/kernels";
-import { saveNotebook } from "@/server/actions/notebooks";
+import { clearNotebookOutputs, saveNotebook } from "@/server/actions/notebooks";
 
 import { initialState, makeCell, notebookReducer } from "./notebookState";
 
@@ -20,6 +21,7 @@ export function kernelKeyOf(path: string): string {
 export function useNotebook(view: NotebookView, onRunFinished?: () => void) {
   const [state, dispatch] = useReducer(notebookReducer, view, initialState);
   const notify = useNotify();
+  const refreshCatalog = useCatalogRefresh();
   const cellsRef = useRef(state.cells);
   cellsRef.current = state.cells;
   const kernelKey = kernelKeyOf(state.path);
@@ -50,10 +52,12 @@ export function useNotebook(view: NotebookView, onRunFinished?: () => void) {
     async (cellIds: string[] | null) => {
       const cells = cellsRef.current;
       dispatch({ type: "run", cells, at: Date.now() });
+      let catalogChanged = false;
       try {
         await streamEvents("/api/run", { kind: "notebook", path: state.path, cells, cellIds }, (e) => {
           const ev = e as RunStreamEvent;
-          if (ev.event === "cell.state" || ev.event === "cell.stream" || ev.event === "progress") {
+          if (ev.event === "catalog.changed") catalogChanged = true;
+          else if (ev.event === "cell.state" || ev.event === "cell.stream" || ev.event === "progress") {
             dispatch({ type: ev.event, data: ev.data } as Parameters<typeof dispatch>[0]);
           } else if (ev.event === "failed") {
             notify(ev.data.message, "error");
@@ -64,10 +68,11 @@ export function useNotebook(view: NotebookView, onRunFinished?: () => void) {
       } finally {
         dispatch({ type: "finished", at: Date.now() });
         onRunFinished?.();
+        if (catalogChanged) refreshCatalog();
       }
       void save();
     },
-    [state.path, notify, onRunFinished, save],
+    [state.path, notify, onRunFinished, save, refreshCatalog],
   );
 
   const interrupt = useCallback(async () => {
@@ -75,13 +80,35 @@ export function useNotebook(view: NotebookView, onRunFinished?: () => void) {
     if (!r.ok) notify(r.error.message, "error");
   }, [kernelKey, notify]);
 
+  /** Resolves to whether the kernel restarted. */
   const restart = useCallback(async () => {
     const r = await restartKernel(kernelKey);
     if (r.ok) {
-      dispatch({ type: "reset" });
-      notify("Kernel restarted: every value was cleared", "info");
-    } else notify(r.error.message, "error");
+      dispatch({ type: "restarted" });
+      notify("Kernel restarted: every value was cleared (outputs are kept until you clear them)", "info");
+      return true;
+    }
+    notify(r.error.message, "error");
+    return false;
   }, [kernelKey, notify]);
+
+  const restartAndRunAll = useCallback(async () => {
+    if (await restart()) await run(null);
+  }, [restart, run]);
+
+  /** Outputs of `cellIds` (null: every cell) are cleared in the editor and in the kernel. */
+  const clearOutputs = useCallback(
+    async (cellIds: string[] | null) => {
+      dispatch({ type: "clearOutputs", cells: cellIds });
+      const r = await clearNotebookOutputs(state.path, cellIds);
+      if (!r.ok) notify(r.error.message, "error");
+    },
+    [state.path, notify],
+  );
+
+  const restartAndClear = useCallback(async () => {
+    if (await restart()) await clearOutputs(null);
+  }, [restart, clearOutputs]);
 
   const addCell = useCallback((index: number, kind: CellKind) => {
     const cell = makeCell(kind, cellsRef.current);
@@ -97,5 +124,21 @@ export function useNotebook(view: NotebookView, onRunFinished?: () => void) {
   /** The kernel was replaced elsewhere (attached to another cluster): forget outputs and states. */
   const reset = useCallback(() => dispatch({ type: "reset" }), []);
 
-  return { state, kernelKey, save, run, interrupt, restart, reset, addCell, edit, remove, move, reorder };
+  return {
+    state,
+    kernelKey,
+    save,
+    run,
+    interrupt,
+    restart,
+    restartAndClear,
+    restartAndRunAll,
+    clearOutputs,
+    reset,
+    addCell,
+    edit,
+    remove,
+    move,
+    reorder,
+  };
 }
