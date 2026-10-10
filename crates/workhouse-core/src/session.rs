@@ -21,6 +21,8 @@ use crate::optimizer::optimize;
 use crate::physical::planner::{PhysicalPlan, PlanNode, create_physical_plan, execute, execute_stream};
 use crate::schema::{Column, PlanSchema, PlanSchemaRef};
 
+mod unnest;
+
 #[derive(Clone, Debug)]
 pub enum TableEntry {
     Table(Arc<dyn TableProvider>),
@@ -635,6 +637,26 @@ impl LazyFrame {
             })
             .collect();
         self.select(exprs)
+    }
+
+    /// Polars' `explode`: one row per element of the list columns (several
+    /// are zipped), in place of the columns. A NULL or empty list gives one
+    /// row holding NULL.
+    pub fn explode(&self, columns: &[String]) -> Result<LazyFrame> {
+        let helper = |c: &String| format!("__explode_{c}");
+        let lists = columns.iter().map(|c| Expr::Column(Column::from_name(c.clone()))).collect();
+        let outputs = columns.iter().map(|c| (None, helper(c))).collect();
+        let unnest = LogicalPlan::unnest(self.plan.clone(), lists, outputs, true)?;
+        let out = self
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| match columns.iter().find(|c| c.as_str() == f.name()) {
+                Some(c) => Expr::Column(Column::from_name(helper(c))).alias(f.name()),
+                None => Expr::Column(f.column()),
+            })
+            .collect();
+        Ok(self.wrap(LogicalPlan::project(Arc::new(unnest), out)?))
     }
 
     pub fn alias(&self, name: &str) -> LazyFrame {

@@ -3,6 +3,7 @@
 pub mod blob;
 pub mod csv;
 pub mod dataset;
+pub mod json;
 pub mod listing;
 pub mod location;
 pub mod memory;

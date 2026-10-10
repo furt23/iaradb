@@ -18,6 +18,7 @@ pub mod expr;
 pub mod hash;
 pub mod io;
 pub mod logical;
+pub mod nested;
 pub mod optimizer;
 pub mod physical;
 pub mod scalar;

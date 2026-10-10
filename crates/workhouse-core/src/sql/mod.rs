@@ -12,7 +12,11 @@
 
 pub mod command;
 mod files;
+mod grouping_sets;
+mod json;
+mod lists;
 mod recursive;
+mod structs;
 mod window;
 pub mod write;
 
@@ -254,6 +258,11 @@ fn map_binop(op: &sql::BinaryOperator) -> Result<Operator> {
     })
 }
 
+/// `a IS NOT DISTINCT FROM b`, `a <=> b`: equality where NULL equals NULL.
+fn null_safe_eq(l: Expr, r: Expr) -> Expr {
+    Expr::Function { func: ScalarFunc::EqNullSafe, args: vec![l, r] }
+}
+
 /// Walk down Filter nodes and remove conjuncts that reference the outer query.
 fn pull_up_correlated(plan: &LogicalPlan) -> Result<(LogicalPlan, Vec<Expr>)> {
     match plan {
@@ -287,6 +296,7 @@ fn plan_has_outer_ref(plan: &LogicalPlan) -> bool {
         }
         LogicalPlan::Sort(s) => exprs.extend(s.exprs.iter().map(|e| &e.expr)),
         LogicalPlan::Window(w) => exprs.extend(w.exprs.iter()),
+        LogicalPlan::Unnest(u) => exprs.extend(u.exprs.iter()),
         _ => {}
     }
     exprs.iter().any(|e| e.contains_outer_ref()) || plan.inputs().iter().any(|i| plan_has_outer_ref(i))
@@ -548,6 +558,9 @@ impl<'a> SqlPlanner<'a> {
     }
 
     fn plan_table_factor(&mut self, tf: &sql::TableFactor, outer: Option<&PlanSchema>) -> Result<LogicalPlan> {
+        if let Some(call) = lists::unnest_call(tf) {
+            return self.lateral_unnest(None, &call, outer);
+        }
         match tf {
             sql::TableFactor::Table { name, alias, args, .. } => {
                 let parts = object_name_parts(name);
@@ -601,6 +614,10 @@ impl<'a> SqlPlanner<'a> {
     fn plan_table_with_joins(&mut self, twj: &sql::TableWithJoins, outer: Option<&PlanSchema>) -> Result<LogicalPlan> {
         let mut plan = self.plan_table_factor(&twj.relation, outer)?;
         for j in &twj.joins {
+            if let Some(call) = lists::unnest_call(&j.relation) {
+                plan = self.lateral_unnest(Some(plan), &call, outer)?;
+                continue;
+            }
             let right = self.plan_table_factor(&j.relation, outer)?;
             use sql::JoinOperator as J;
             let (jt, constraint) = match &j.join_operator {
@@ -775,7 +792,17 @@ impl<'a> SqlPlanner<'a> {
 
     fn plan_select_inner(&mut self, s: &sql::Select, order_by: &[sql::OrderByExpr], outer: Option<&PlanSchema>) -> Result<LogicalPlan> {
         // FROM
-        let rels = s.from.iter().map(|t| self.plan_table_with_joins(t, outer)).collect::<Result<Vec<_>>>()?;
+        let mut rels: Vec<LogicalPlan> = vec![];
+        for t in &s.from {
+            match lists::unnest_call(&t.relation) {
+                // `FROM t, unnest(t.l)`: reads the item before it
+                Some(call) if t.joins.is_empty() => {
+                    let prior = rels.pop();
+                    rels.push(self.lateral_unnest(prior, &call, outer)?);
+                }
+                _ => rels.push(self.plan_table_with_joins(t, outer)?),
+            }
+        }
         let combined = rels
             .iter()
             .fold(PlanSchema::empty(), |acc, r| PlanSchema::join(&acc, r.schema()));
@@ -824,9 +851,13 @@ impl<'a> SqlPlanner<'a> {
         let mut select_exprs: Vec<Expr> = vec![];
         for item in &s.projection {
             match item {
-                sql::SelectItem::UnnamedExpr(e) => select_exprs.push(self.sql_expr(e, scope)?),
+                sql::SelectItem::UnnamedExpr(e) => {
+                    let x = self.sql_expr(e, scope)?;
+                    select_exprs.extend(Self::expand_struct_unnest(x, false, scope)?);
+                }
                 sql::SelectItem::ExprWithAlias { expr, alias } => {
-                    select_exprs.push(self.sql_expr(expr, scope)?.alias(ident(alias)))
+                    let x = self.sql_expr(expr, scope)?;
+                    select_exprs.extend(Self::expand_struct_unnest(x, true, scope)?.into_iter().map(|e| e.alias(ident(alias))));
                 }
                 sql::SelectItem::Wildcard(opts) => {
                     let excluded = excluded_columns(opts);
@@ -856,12 +887,38 @@ impl<'a> SqlPlanner<'a> {
                         }
                     }
                     if !any {
-                        return Err(WhError::Plan(format!("no columns for '{q}.*'")));
+                        let target = match kind {
+                            sql::SelectItemQualifiedWildcardKind::ObjectName(n) => self.resolve_parts(&object_name_parts(n), scope)?,
+                            sql::SelectItemQualifiedWildcardKind::Expr(e) => Some(self.sql_expr(e, scope)?),
+                        };
+                        match target.map(|t| self.expand_struct_star(t, &excluded, scope)).transpose()?.flatten() {
+                            Some(fields) => select_exprs.extend(fields),
+                            None => return Err(WhError::Plan(format!("no columns for '{q}.*'"))),
+                        }
                     }
                 }
                 other => return Err(WhError::NotSupported(format!("select item {other}"))),
             }
         }
+        let has_unnest = |e: &Expr| {
+            let mut found = false;
+            e.visit(&mut |x| {
+                found |= matches!(x, Expr::Function { func: ScalarFunc::Unnest, .. });
+                !found
+            });
+            found
+        };
+        let from_schema = if select_exprs.iter().any(has_unnest) {
+            if s.group_by != sql::GroupByExpr::Expressions(vec![], vec![]) || select_exprs.iter().any(|e| e.contains_agg()) {
+                return Err(WhError::NotSupported("unnest(..) together with GROUP BY or aggregates; unnest in a subquery".into()));
+            }
+            let (p, sel) = self.unnest_select(plan, select_exprs)?;
+            plan = p;
+            select_exprs = sel;
+            plan.schema().clone()
+        } else {
+            from_schema
+        };
         let aliases: Vec<(String, Expr)> = select_exprs
             .iter()
             .filter_map(|e| match e {
@@ -872,11 +929,18 @@ impl<'a> SqlPlanner<'a> {
         let alias_scope = Scope { schema: &from_schema, outer, aliases: Some(&aliases) };
 
         // GROUP BY
+        let mut gsets: Option<grouping_sets::Sets> = None;
         let group_exprs: Vec<Expr> = match &s.group_by {
             sql::GroupByExpr::Expressions(exprs, mods) => {
                 if !mods.is_empty() {
-                    return Err(WhError::NotSupported("GROUP BY modifiers (ROLLUP/CUBE)".into()));
+                    return Err(WhError::NotSupported("GROUP BY ... WITH ROLLUP (use ROLLUP(..))".into()));
                 }
+                if grouping_sets::has_grouping_sets(exprs) {
+                    let sets = self.grouping_sets(exprs, |this, g| this.group_key(g, &select_exprs, alias_scope))?;
+                    let keys = sets.keys.clone();
+                    gsets = Some(sets);
+                    keys
+                } else {
                 exprs
                     .iter()
                     .map(|g| match as_ordinal(g) {
@@ -885,6 +949,7 @@ impl<'a> SqlPlanner<'a> {
                     })
                     .map(|g| no_windows(g?, "GROUP BY"))
                     .collect::<Result<_>>()?
+                }
             }
             sql::GroupByExpr::All(_) => select_exprs
                 .iter()
@@ -941,7 +1006,15 @@ impl<'a> SqlPlanner<'a> {
             || having.as_ref().is_some_and(|h| h.contains_agg())
             || qualify.as_ref().is_some_and(|q| q.contains_agg());
         let n_sel = select_exprs.len();
-        if is_agg {
+        if let (true, Some(sets)) = (is_agg, &gsets) {
+            if qualify.is_some() {
+                return Err(WhError::NotSupported("QUALIFY with ROLLUP/CUBE/GROUPING SETS".into()));
+            }
+            let (p, sel, hid) = self.plan_grouping_sets(plan, sets, select_exprs, having, hidden, Scope::new(&from_schema, outer))?;
+            plan = p;
+            select_exprs = sel;
+            hidden = hid;
+        } else if is_agg {
             let mut all = select_exprs.clone();
             if let Some(h) = &having {
                 all.push(h.clone().alias("__having"));
@@ -1204,24 +1277,32 @@ impl<'a> SqlPlanner<'a> {
     // -----------------------------------------------------------------------
 
     fn resolve(&mut self, relation: Option<String>, name: String, scope: Scope<'_>) -> Result<Expr> {
+        match self.try_resolve(relation.clone(), name.clone(), scope)? {
+            Some(e) => Ok(e),
+            // produce the regular error message
+            None => scope.schema.index_of(&Column::new(relation, name)).map(|_| unreachable!()),
+        }
+    }
+
+    /// The column, select alias or outer column a name refers to, if any.
+    fn try_resolve(&mut self, relation: Option<String>, name: String, scope: Scope<'_>) -> Result<Option<Expr>> {
         let c = Column::new(relation.clone(), name.clone());
         if let Some(i) = scope.schema.maybe_index_of(&c)? {
-            return Ok(Expr::Column(scope.schema.column(i)));
+            return Ok(Some(Expr::Column(scope.schema.column(i))));
         }
         if relation.is_none() {
             if let Some(aliases) = scope.aliases {
                 if let Some((_, e)) = aliases.iter().find(|(n, _)| n.eq_ignore_ascii_case(&name)) {
-                    return Ok(e.clone());
+                    return Ok(Some(e.clone()));
                 }
             }
         }
         if let Some(outer) = scope.outer {
             if let Some(i) = outer.maybe_index_of(&c)? {
-                return Ok(Expr::OuterRef(outer.column(i), outer.field(i).data_type().clone()));
+                return Ok(Some(Expr::OuterRef(outer.column(i), outer.field(i).data_type().clone())));
             }
         }
-        // produce the regular error message
-        scope.schema.index_of(&c).map(|_| unreachable!())
+        Ok(None)
     }
 
     fn subquery(&mut self, q: &sql::Query, scope: Scope<'_>) -> Result<Subquery> {
@@ -1234,11 +1315,10 @@ impl<'a> SqlPlanner<'a> {
         Ok(match e {
             E::Identifier(id) => self.resolve(None, ident(id), scope)?,
             E::CompoundIdentifier(ids) => {
-                let n = ids.len();
-                if n < 2 {
+                if ids.len() < 2 {
                     return Err(WhError::Sql(format!("invalid identifier {e}")));
                 }
-                self.resolve(Some(ident(&ids[n - 2])), ident(&ids[n - 1]), scope)?
+                self.resolve_compound(ids, scope)?
             }
             E::Value(v) => Expr::Literal(self.literal(&v.value)?),
             E::TypedString(ts) => {
@@ -1277,6 +1357,24 @@ impl<'a> SqlPlanner<'a> {
                     }
                 }
             }
+            E::BinaryOp { left, op: sql::BinaryOperator::Spaceship, right } => {
+                null_safe_eq(self.sql_expr(left, scope)?, self.sql_expr(right, scope)?)
+            }
+            E::IsNotDistinctFrom(l, r) => null_safe_eq(self.sql_expr(l, scope)?, self.sql_expr(r, scope)?),
+            E::IsDistinctFrom(l, r) => null_safe_eq(self.sql_expr(l, scope)?, self.sql_expr(r, scope)?).not(),
+            E::RLike { negated, expr, pattern, .. } => {
+                let m = Expr::Function {
+                    func: ScalarFunc::RegexpLike,
+                    args: vec![self.sql_expr(expr, scope)?, self.sql_expr(pattern, scope)?],
+                };
+                if *negated { m.not() } else { m }
+            }
+            E::BinaryOp { left, op: op @ (sql::BinaryOperator::Arrow | sql::BinaryOperator::LongArrow), right } => {
+                let (l, r) = (self.sql_expr(left, scope)?, self.sql_expr(right, scope)?);
+                json::arrow(op, l, r)
+            }
+            // `col -> 'path'`: with a column on the left the parser reads a lambda
+            E::Lambda(l) if json::is_arrow_lambda(l) => self.json_arrows(l, scope)?,
             E::BinaryOp { left, op, right } => {
                 let op = map_binop(op)?;
                 let l = self.sql_expr(left, scope)?;
@@ -1404,6 +1502,9 @@ impl<'a> SqlPlanner<'a> {
                 Expr::Case { when_then, otherwise }
             }
             E::Function(f) => self.sql_function(f, scope)?,
+            E::Array(arr) => self.sql_array(arr, scope)?,
+            E::Dictionary(fields) => self.sql_dictionary(fields, scope)?,
+            E::CompoundFieldAccess { root, access_chain } => self.sql_subscripts(root, access_chain, scope)?,
             other => return Err(WhError::NotSupported(format!("SQL expression: {other}"))),
         })
     }
@@ -1420,6 +1521,36 @@ impl<'a> SqlPlanner<'a> {
         })
     }
 
+    /// `percentile_cont(p) WITHIN GROUP (ORDER BY x [DESC])` becomes the
+    /// two-argument aggregate `quantile_cont(x, p)`.
+    fn ordered_set_agg(
+        &mut self,
+        f: &sql::Function,
+        func: AggFunc,
+        name: &str,
+        args: Vec<Expr>,
+        filter: Option<Box<Expr>>,
+        scope: Scope<'_>,
+    ) -> Result<Expr> {
+        if !matches!(func, AggFunc::QuantileCont | AggFunc::QuantileDisc) || f.within_group.len() != 1 || args.len() != 1 {
+            return Err(WhError::NotSupported(format!("{name}(..) WITHIN GROUP")));
+        }
+        let order = &f.within_group[0];
+        let x = self.sql_expr(&order.expr, scope)?;
+        let desc = matches!(order.options.sort, Some(sql::OrderBySort::Desc));
+        let p = match (desc, func, &args[0]) {
+            (false, _, p) => p.clone(),
+            // the descending quantile of a continuous distribution is 1 - p
+            (true, AggFunc::QuantileCont, p) => Expr::Binary {
+                left: Box::new(Expr::Literal(Scalar::float64(1.0))),
+                op: Operator::Minus,
+                right: Box::new(p.clone()),
+            },
+            (true, _, _) => return Err(WhError::NotSupported(format!("{name}(..) WITHIN GROUP (ORDER BY .. DESC)"))),
+        };
+        Ok(Expr::Agg { func, args: vec![x, p], distinct: false, filter, order_by: vec![] })
+    }
+
     fn sql_function(&mut self, f: &sql::Function, scope: Scope<'_>) -> Result<Expr> {
         let name = object_name_parts(&f.name).last().cloned().unwrap_or_default().to_ascii_lowercase();
         let (raw_args, distinct) = match &f.args {
@@ -1433,13 +1564,18 @@ impl<'a> SqlPlanner<'a> {
         let star = raw_args.len() == 1
             && matches!(&raw_args[0], sql::FunctionArg::Unnamed(sql::FunctionArgExpr::Wildcard));
         let mut args = vec![];
+        let mut arg_names = vec![];
         if !star {
             for a in &raw_args {
-                match a {
-                    sql::FunctionArg::Unnamed(sql::FunctionArgExpr::Expr(x)) => args.push(self.sql_expr(x, scope)?),
-                    sql::FunctionArg::Named { arg: sql::FunctionArgExpr::Expr(x), .. } => args.push(self.sql_expr(x, scope)?),
-                    other => return Err(WhError::NotSupported(format!("function argument {other}"))),
-                }
+                let (arg_name, x) = structs::split_argument(a)
+                    .ok_or_else(|| WhError::NotSupported(format!("function argument {a}")))?;
+                args.push(self.sql_expr(&x, scope)?);
+                arg_names.push(arg_name);
+            }
+        }
+        if f.over.is_none() {
+            if let Some(e) = Self::struct_call(&name, args.clone(), arg_names)? {
+                return Ok(e);
             }
         }
         let filter = match &f.filter {
@@ -1450,16 +1586,26 @@ impl<'a> SqlPlanner<'a> {
             return self.window_function(f, over, &name, args, distinct, filter.map(|f| *f), scope);
         }
         if name == "count" && (star || args.is_empty()) {
-            return Ok(Expr::Agg { func: AggFunc::Count, args: vec![], distinct: false, filter });
+            return Ok(Expr::Agg { func: AggFunc::Count, args: vec![], distinct: false, filter, order_by: vec![] });
         }
         if matches!(name.as_str(), "count_distinct" | "approx_count_distinct" | "n_unique") {
-            return Ok(Expr::Agg { func: AggFunc::Count, args, distinct: true, filter });
+            return Ok(Expr::Agg { func: AggFunc::Count, args, distinct: true, filter, order_by: vec![] });
         }
         if let Some(func) = AggFunc::from_name(&name) {
-            if args.len() != 1 {
-                return Err(WhError::Sql(format!("{name}() expects exactly one argument")));
+            if !f.within_group.is_empty() {
+                return self.ordered_set_agg(f, func, &name, args, filter, scope);
             }
-            return Ok(Expr::Agg { func, args, distinct, filter });
+            if args.len() != func.arity() {
+                return Err(WhError::Sql(format!("{name}() expects {} argument(s)", func.arity())));
+            }
+            let order_by = self.agg_order_by(f, scope)?;
+            if !order_by.is_empty() && !matches!(func, AggFunc::ArrayAgg | AggFunc::CollectList | AggFunc::CollectSet) {
+                return Err(WhError::NotSupported(format!("ORDER BY inside {name}(..); only array_agg / list / collect_list")));
+            }
+            return Ok(Expr::Agg { func, args, distinct, filter, order_by });
+        }
+        if let Some(e) = Self::list_aggr(&name, &args)? {
+            return Ok(e);
         }
         match name.as_str() {
             "date_part" | "datepart" | "extract" => {
@@ -1480,7 +1626,7 @@ impl<'a> SqlPlanner<'a> {
                 let (c, t, o) = (it.next().unwrap(), it.next().unwrap(), it.next().unwrap());
                 return Ok(Expr::Case { when_then: vec![(c, t)], otherwise: Some(Box::new(o)) });
             }
-            "date" | "to_date" => return Ok(args.into_iter().next().unwrap_or(Expr::Literal(Scalar::null())).cast(DataType::Date32)),
+            "date" | "to_date" if args.len() <= 1 => return Ok(args.into_iter().next().unwrap_or(Expr::Literal(Scalar::null())).cast(DataType::Date32)),
             _ => {}
         }
         match ScalarFunc::from_name(&name) {

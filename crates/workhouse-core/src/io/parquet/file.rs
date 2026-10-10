@@ -84,20 +84,24 @@ fn named(name: &dyn std::fmt::Display, e: impl std::fmt::Display) -> WhError {
     WhError::Execution(format!("{name}: {e}"))
 }
 
-/// Decode strings as Utf8View ("German strings"): dictionary pages decode
+/// Decode strings as Utf8View and lists as canonical lists ("German strings"): dictionary pages decode
 /// to 16-byte views without copying string bytes, short strings live
 /// inline, and filters / joins / group-bys move 16 bytes per value.
 fn with_string_views(meta: ArrowReaderMetadata) -> ArrowReaderMetadata {
     let schema = meta.schema();
     let views = std::env::var("WORKHOUSE_STRING_VIEW").map(|v| v != "0").unwrap_or(true);
-    if !views || !schema.fields().iter().any(|f| matches!(f.data_type(), DataType::Utf8 | DataType::LargeUtf8)) {
+    let strings = views && schema.fields().iter().any(|f| matches!(f.data_type(), DataType::Utf8 | DataType::LargeUtf8));
+    let nested = schema.fields().iter().any(|f| crate::nested::is_nested(f.data_type()));
+    if !strings && !nested {
         return meta;
     }
     let fields: Vec<Field> = schema
         .fields()
         .iter()
         .map(|f| match f.data_type() {
-            DataType::Utf8 | DataType::LargeUtf8 => f.as_ref().clone().with_data_type(DataType::Utf8View),
+            DataType::Utf8 | DataType::LargeUtf8 if views => f.as_ref().clone().with_data_type(DataType::Utf8View),
+            // lists are read in the engine's canonical form (List<item>)
+            t if crate::nested::is_nested(t) => f.as_ref().clone().with_data_type(crate::nested::canonical_type(t)),
             _ => f.as_ref().clone(),
         })
         .collect();

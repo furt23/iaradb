@@ -8,25 +8,26 @@
 //! Probe: a streaming operator inside the probe-side pipeline; each morsel
 //! batch is hashed and matched against the shared, read-only table.
 
+use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use arrow::array::*;
-use arrow::buffer::NullBuffer;
+use arrow::buffer::{NullBuffer, ScalarBuffer};
 use arrow::compute::{cast, concat_batches, filter_record_batch, take};
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use arrow::row::{RowConverter, Rows, SortField};
 use rayon::prelude::*;
 
-use crate::error::Result;
+use crate::error::{Result, WhError};
 use crate::exec::join_spill::{PartitionedSpill, grace_partitions};
 use crate::exec::memory::{self, Reservation};
 use crate::exec::pipeline::{Emit, Operator, Sink};
 use crate::exec::spill::SpillFile;
 use crate::hash::{hash_bytes, hash_u64};
 use crate::logical::JoinType;
-use crate::physical::expr::PhysExpr;
+use crate::physical::expr::{PhysExpr, null_as_false};
 
 const OUT_CHUNK: usize = 1 << 13;
 
@@ -75,7 +76,7 @@ struct Packing {
 }
 
 enum BuildKeys {
-    Int { values: Vec<i64>, packing: Option<Packing> },
+    Int { values: ScalarBuffer<i64>, packing: Option<Packing> },
     Rows { conv: RowConverter, rows: Rows, hashes: Vec<u64> },
 }
 
@@ -96,7 +97,7 @@ unsafe impl Sync for SendPtr {}
 
 /// Normalised probe/build keys: either packed i64s or row-format bytes.
 enum KeyBatch {
-    Int { values: Vec<i64>, valid: Vec<bool> },
+    Int { values: ScalarBuffer<i64>, valid: Vec<bool> },
     Rows { rows: Rows, hashes: Vec<u64>, valid: Option<NullBuffer> },
 }
 
@@ -108,7 +109,7 @@ impl JoinHashTable {
         let keys = if all_int {
             let ints = key_cols.iter().map(to_i64).collect::<Result<Vec<_>>>()?;
             if ints.len() == 1 {
-                let v = ints[0].as_primitive::<arrow::datatypes::Int64Type>().values().to_vec();
+                let v = ints[0].as_primitive::<arrow::datatypes::Int64Type>().values().clone();
                 BuildKeys::Int { values: v, packing: None }
             } else {
                 // try to pack all key columns into 64 bits
@@ -226,7 +227,7 @@ impl JoinHashTable {
                 let nulls = combined_nulls(cols);
                 match packing {
                     None => {
-                        let values = ints[0].as_primitive::<arrow::datatypes::Int64Type>().values().to_vec();
+                        let values = ints[0].as_primitive::<arrow::datatypes::Int64Type>().values().clone();
                         let valid = match nulls {
                             None => vec![true; n],
                             Some(nb) => (0..n).map(|i| nb.is_valid(i)).collect(),
@@ -316,7 +317,7 @@ fn pack(ints: &[ArrayRef], p: &Packing, n: usize) -> KeyBatch {
             }
         }
     }
-    KeyBatch::Int { values, valid }
+    KeyBatch::Int { values: values.into(), valid }
 }
 
 // ---------------------------------------------------------------------------
@@ -481,6 +482,23 @@ fn concat_views(arrays: &[&dyn Array]) -> std::result::Result<ArrayRef, arrow::e
 // probe operator
 // ---------------------------------------------------------------------------
 
+/// The (probe row, build row) pairs that passed a residual filter.
+#[derive(Default)]
+struct Kept {
+    p: Vec<u32>,
+    b: Vec<u32>,
+}
+
+impl Kept {
+    /// Add the pairs of `mask`, which covers the pairs from `start` on.
+    fn add(&mut self, p: &[u32], b: &[u32], start: usize, mask: &BooleanArray) {
+        for k in mask.values().set_indices() {
+            self.p.push(p[start + k]);
+            self.b.push(b[start + k]);
+        }
+    }
+}
+
 pub struct HashJoinProbe {
     pub table: Arc<JoinHashTable>,
     pub probe_keys: Vec<PhysExpr>,
@@ -546,25 +564,83 @@ impl HashJoinProbe {
         Ok(())
     }
 
-    /// Candidate pairs filtered through the residual predicate.
-    fn filter_pairs(&self, probe: &RecordBatch, p: Vec<u32>, b: Vec<u32>) -> Result<(Vec<u32>, Vec<u32>)> {
-        let Some(f) = &self.filter else { return Ok((p, b)) };
-        let mut keep_p = Vec::with_capacity(p.len());
-        let mut keep_b = Vec::with_capacity(b.len());
+    /// Evaluate the residual predicate over the candidate pairs, `OUT_CHUNK`
+    /// at a time. `each` gets the range of pairs, their joined batch (the
+    /// batch the predicate saw, so kept pairs need no second assemble) and
+    /// the mask of kept ones (nulls are false).
+    fn filter_each(
+        &self,
+        f: &PhysExpr,
+        probe: &RecordBatch,
+        p: &[u32],
+        b: &[u32],
+        mut each: impl FnMut(std::ops::Range<usize>, RecordBatch, &BooleanArray) -> Result<()>,
+    ) -> Result<()> {
         for start in (0..p.len()).step_by(OUT_CHUNK) {
             let end = (start + OUT_CHUNK).min(p.len());
             let bidx = UInt32Array::from(b[start..end].to_vec());
             let joined = self.assemble(probe, &p[start..end], &bidx)?;
             let mask = f.evaluate_array(&joined)?;
-            let mask = mask.as_boolean();
-            for (k, i) in (start..end).enumerate() {
-                if mask.is_valid(k) && mask.value(k) {
-                    keep_p.push(p[i]);
-                    keep_b.push(b[i]);
-                }
-            }
+            let mask = null_as_false(mask.as_boolean());
+            each(start..end, joined, &mask)?;
         }
-        Ok((keep_p, keep_b))
+        Ok(())
+    }
+
+    /// Candidate pairs filtered through the residual predicate.
+    fn filter_pairs(&self, probe: &RecordBatch, p: Vec<u32>, b: Vec<u32>) -> Result<(Vec<u32>, Vec<u32>)> {
+        let Some(f) = &self.filter else { return Ok((p, b)) };
+        let mut kept = Kept::default();
+        self.filter_each(f, probe, &p, &b, |r, _, mask| Ok(kept.add(&p, &b, r.start, mask)))?;
+        Ok((kept.p, kept.b))
+    }
+
+    /// A filtered join of a type that emits its matched pairs (all but
+    /// semi/anti): the kept rows of each joined batch go out as they are, and
+    /// the kept pairs come back (empty for inner joins, which need none).
+    fn emit_filtered(&self, probe: &RecordBatch, p: &[u32], b: &[u32], emit: Emit<'_>) -> Result<Kept> {
+        let f = self.filter.as_ref().expect("a residual filter");
+        let mut kept = Kept::default();
+        let track = self.join_type != JoinType::Inner;
+        self.filter_each(f, probe, p, b, |r, joined, mask| {
+            if track {
+                kept.add(p, b, r.start, mask);
+            }
+            if mask.true_count() > 0 {
+                emit(self.finish_batch(filter_record_batch(&joined, mask)?)?)?;
+            }
+            Ok(())
+        })?;
+        Ok(kept)
+    }
+
+    /// The probe rows missing from `matched` (probe rows that have a kept
+    /// pair, in any order, repeats allowed), once each, joined with NULLs.
+    fn emit_unmatched(&self, probe: &RecordBatch, matched: &[u32], emit: Emit<'_>) -> Result<()> {
+        let mut found = vec![false; probe.num_rows()];
+        for &i in matched {
+            found[i as usize] = true;
+        }
+        let p: Vec<u32> = (0..found.len() as u32).filter(|&i| !found[i as usize]).collect();
+        if p.is_empty() {
+            return Ok(());
+        }
+        let none: Vec<Option<u32>> = vec![None; p.len()];
+        self.emit_pairs(probe, &p, &none, emit)
+    }
+
+    /// Semi (rows with a kept pair) or anti (rows without) join output.
+    fn emit_semi_anti(&self, probe: &RecordBatch, matched: &[u32], emit: Emit<'_>) -> Result<()> {
+        let mut found = vec![false; probe.num_rows()];
+        for &i in matched {
+            found[i as usize] = true;
+        }
+        let keep: Vec<bool> = if self.join_type == JoinType::Semi { found } else { found.into_iter().map(|f| !f).collect() };
+        let mask = BooleanArray::from(keep);
+        if mask.true_count() == 0 {
+            return Ok(());
+        }
+        emit(self.finish_batch(filter_record_batch(probe, &mask)?)?)
     }
 
     fn mark(&self, b: &[u32]) {
@@ -677,48 +753,29 @@ impl Operator for HashJoinProbe {
                     b.push(bi as u32);
                     true
                 });
-                let (p, b) = self.filter_pairs(&batch, p, b)?;
-                match self.join_type {
-                    JoinType::Inner => {
-                        let b: Vec<Option<u32>> = b.into_iter().map(Some).collect();
-                        self.emit_pairs(&batch, &p, &b, emit)
-                    }
-                    JoinType::Right => {
+                if self.filter.is_none() {
+                    // inner and right joins (the other types are handled above)
+                    if self.join_type == JoinType::Right {
                         self.mark(&b);
-                        let b: Vec<Option<u32>> = b.into_iter().map(Some).collect();
-                        self.emit_pairs(&batch, &p, &b, emit)
                     }
-                    JoinType::Semi | JoinType::Anti => {
-                        let mut found = vec![false; n];
-                        for &i in &p {
-                            found[i as usize] = true;
-                        }
-                        let keep: Vec<bool> = if self.join_type == JoinType::Semi {
-                            found
-                        } else {
-                            found.into_iter().map(|f| !f).collect()
-                        };
-                        let mask = BooleanArray::from(keep);
-                        if mask.true_count() == 0 {
-                            return Ok(());
-                        }
-                        emit(self.finish_batch(filter_record_batch(&batch, &mask)?)?)
+                    let b: Vec<Option<u32>> = b.into_iter().map(Some).collect();
+                    return self.emit_pairs(&batch, &p, &b, emit);
+                }
+                match self.join_type {
+                    JoinType::Inner => self.emit_filtered(&batch, &p, &b, emit).map(|_| ()),
+                    JoinType::Right => {
+                        let kept = self.emit_filtered(&batch, &p, &b, emit)?;
+                        self.mark(&kept.b);
+                        Ok(())
                     }
                     JoinType::Left | JoinType::Full => {
-                        self.mark(&b);
-                        let mut found = vec![false; n];
-                        for &i in &p {
-                            found[i as usize] = true;
-                        }
-                        let mut pp = p;
-                        let mut bb: Vec<Option<u32>> = b.into_iter().map(Some).collect();
-                        for (i, f) in found.iter().enumerate() {
-                            if !f {
-                                pp.push(i as u32);
-                                bb.push(None);
-                            }
-                        }
-                        self.emit_pairs(&batch, &pp, &bb, emit)
+                        let kept = self.emit_filtered(&batch, &p, &b, emit)?;
+                        self.mark(&kept.b);
+                        self.emit_unmatched(&batch, &kept.p, emit)
+                    }
+                    JoinType::Semi | JoinType::Anti => {
+                        let (p, _) = self.filter_pairs(&batch, p, b)?;
+                        self.emit_semi_anti(&batch, &p, emit)
                     }
                 }
             }
@@ -782,6 +839,8 @@ pub struct NestedLoopJoin {
     pub joined_schema: SchemaRef,
     pub output_schema: SchemaRef,
     pub order: Option<Vec<usize>>,
+    /// the build side's bytes, held from the memory pool while the join lives
+    pub memory: Option<memory::Reservation>,
 }
 
 impl NestedLoopJoin {
@@ -798,48 +857,95 @@ impl NestedLoopJoin {
     }
 }
 
+impl NestedLoopJoin {
+    /// The pairs of probe rows `probe_rows` with build rows `build_rows`
+    /// (every probe row against every build row), as a joined batch.
+    fn block(&self, probe: &RecordBatch, probe_rows: Range<usize>, build_rows: Range<usize>) -> Result<RecordBatch> {
+        let (pr, bl) = (probe_rows.len(), build_rows.len());
+        let pidx: UInt32Array = probe_rows.flat_map(|i| std::iter::repeat_n(i as u32, bl)).collect();
+        let mut cols: Vec<ArrayRef> = probe.columns().iter().map(|c| take(c, &pidx, None)).collect::<Result<_, _>>()?;
+        if pr == 1 {
+            // one probe row: the build rows go out as they are
+            cols.extend(self.build.slice(build_rows.start, bl).columns().iter().cloned());
+        } else {
+            let bidx: UInt32Array = (0..pr).flat_map(|_| build_rows.clone().map(|j| j as u32)).collect();
+            for c in self.build.columns() {
+                cols.push(take(c, &bidx, None)?);
+            }
+        }
+        Ok(RecordBatch::try_new_with_options(
+            self.joined_schema.clone(),
+            cols,
+            &RecordBatchOptions::new().with_row_count(Some(pr * bl)),
+        )?)
+    }
+
+    /// Pair `probe_rows` with the build rows `build_rows`: keep what passes
+    /// the filter, emit it (inner and left joins) and flag the probe rows
+    /// that matched.
+    fn run_block(
+        &self,
+        probe: &RecordBatch,
+        probe_rows: Range<usize>,
+        build_rows: Range<usize>,
+        found: &mut [bool],
+        emit: Emit<'_>,
+    ) -> Result<()> {
+        let bl = build_rows.len();
+        let mut joined = self.block(probe, probe_rows.clone(), build_rows)?;
+        match &self.filter {
+            Some(f) => {
+                let mask = f.evaluate_array(&joined)?;
+                let mask = null_as_false(mask.as_boolean());
+                for k in mask.values().set_indices() {
+                    found[probe_rows.start + k / bl] = true;
+                }
+                joined = filter_record_batch(&joined, &mask)?;
+            }
+            None => found[probe_rows.clone()].fill(true),
+        }
+        if matches!(self.join_type, JoinType::Inner | JoinType::Left) && joined.num_rows() > 0 {
+            emit(self.reorder(joined)?)?;
+        }
+        Ok(())
+    }
+
+    /// Fail with a memory-limit error when the build side alone is bigger than
+    /// the limit: this join has no spill, so it would only run out of memory.
+    /// (Not an exact reservation: the operator is built outside this module.)
+    /// Hold the build side's memory: the join cannot spill, so a build side
+    /// the pool has no room for is an error (not an out-of-memory crash).
+    pub fn reserve_build(build: &RecordBatch) -> Result<memory::Reservation> {
+        let need = build.get_array_memory_size();
+        let mut held = memory::pool().reservation();
+        if !held.try_grow(need) {
+            return Err(WhError::Execution(format!(
+                "memory limit exceeded: the build side of a nested loop join (a join without an equality condition) holds {need} bytes and the join cannot spill; raise the memory limit or add an equality condition"
+            )));
+        }
+        Ok(held)
+    }
+}
+
 impl Operator for NestedLoopJoin {
     fn execute(&self, batch: RecordBatch, emit: Emit<'_>) -> Result<()> {
         let n = batch.num_rows();
         let m = self.build.num_rows();
-        let rows_per_chunk = (OUT_CHUNK / m.max(1)).max(1);
         let mut found = vec![false; n];
-        for start in (0..n).step_by(rows_per_chunk) {
-            let end = (start + rows_per_chunk).min(n);
-            let mut p = Vec::with_capacity((end - start) * m);
-            let mut b = Vec::with_capacity((end - start) * m);
-            for i in start..end {
-                for j in 0..m {
-                    p.push(i as u32);
-                    b.push(j as u32);
+        let no_filter_set = self.filter.is_none() && matches!(self.join_type, JoinType::Semi | JoinType::Anti);
+        if no_filter_set {
+            // every probe row meets every build row: matched when there is one
+            found.fill(m > 0);
+        } else if m > 0 {
+            // blocks of about OUT_CHUNK pairs: a slice of the build side, and as
+            // many probe rows as fit with it (a big build side: one probe row)
+            let slice = m.min(OUT_CHUNK);
+            let rows = (OUT_CHUNK / slice).max(1);
+            for start in (0..n).step_by(rows) {
+                let probe_rows = start..(start + rows).min(n);
+                for s in (0..m).step_by(slice) {
+                    self.run_block(&batch, probe_rows.clone(), s..(s + slice).min(m), &mut found, emit)?;
                 }
-            }
-            if p.is_empty() {
-                continue;
-            }
-            let pidx = UInt32Array::from(p.clone());
-            let bidx = UInt32Array::from(b);
-            let mut cols: Vec<ArrayRef> = batch.columns().iter().map(|c| take(c, &pidx, None)).collect::<Result<_, _>>()?;
-            for c in self.build.columns() {
-                cols.push(take(c, &bidx, None)?);
-            }
-            let mut joined = RecordBatch::try_new_with_options(
-                self.joined_schema.clone(),
-                cols,
-                &RecordBatchOptions::new().with_row_count(Some(p.len())),
-            )?;
-            let mut kept_p = p;
-            if let Some(f) = &self.filter {
-                let mask = f.evaluate_array(&joined)?;
-                let mask = crate::physical::expr::null_as_false(mask.as_boolean());
-                kept_p = kept_p.iter().zip(mask.values().iter()).filter_map(|(x, k)| k.then_some(*x)).collect();
-                joined = filter_record_batch(&joined, &mask)?;
-            }
-            for &i in &kept_p {
-                found[i as usize] = true;
-            }
-            if matches!(self.join_type, JoinType::Inner | JoinType::Left) && joined.num_rows() > 0 {
-                emit(self.reorder(joined)?)?;
             }
         }
         match self.join_type {

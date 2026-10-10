@@ -4,7 +4,7 @@ export interface TableRef {
   name: string;
   /** relative to the workspace root when inside it */
   path: string;
-  format: "parquet" | "csv";
+  format: "parquet" | "csv" | "json";
 }
 
 export interface ColumnStats {

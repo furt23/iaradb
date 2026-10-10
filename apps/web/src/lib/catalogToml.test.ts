@@ -78,6 +78,19 @@ describe("tablesOf", () => {
     expect(names('[tables.Sales]\npath = "a"\n[tables.TPCH.Lineitem]\npath = "b"\n')).toEqual(["sales", "tpch.lineitem"]);
   });
 
+  it("infers json from .json, .ndjson and .jsonl, and takes format = json", () => {
+    const cfg = parse(
+      [
+        '[tables.a]\npath = "x.json"',
+        '[tables.b]\npath = "y.NDJSON"',
+        '[tables.c]\npath = "z.jsonl"',
+        '[tables.d]\npath = "w"\nformat = "json"',
+        '[tables.e]\npath = "v.json"\nformat = "parquet"',
+      ].join("\n") + "\n",
+    );
+    expect(tablesOf(cfg).map((t) => t.format)).toEqual(["json", "json", "json", "json", "parquet"]);
+  });
+
   it("uses the format given, and infers it from the extension otherwise", () => {
     const cfg = parse('[tables.a]\npath = "x.csv"\nformat = "parquet"\n[tables.b]\npath = "y.PARQUET"\nformat = "tsv"\n');
     expect(tablesOf(cfg).map((t) => t.format)).toEqual(["parquet", "parquet"]);
@@ -282,6 +295,7 @@ describe("schemaEntry", () => {
 describe("suggestTableName", () => {
   it("names a dataset after its file or folder", () => {
     expect(suggestTableName("data/sales.parquet")).toBe("sales");
+    expect(suggestTableName("logs/events.ndjson")).toBe("events");
     expect(suggestTableName("data/tpch/lineitem/")).toBe("lineitem");
     expect(suggestTableName("data\\Daily Trips.csv")).toBe("daily_trips");
     expect(suggestTableName("s3://bucket/2024-events/")).toBe("t_2024_events");

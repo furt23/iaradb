@@ -13,7 +13,9 @@ export const MAIN_SCHEMA = "main";
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** A table of the catalog; `name` is its display name (`orders`, `tpch.lineitem`). */
-export interface CatalogTable extends TableRef {
+export interface CatalogTable extends Omit<TableRef, "format"> {
+  /** `json` covers NDJSON and JSON-array files. */
+  format: TableRef["format"] | "json";
   schema: string;
   table: string;
 }
@@ -55,8 +57,17 @@ export function displayName({ schema, table }: TableName): string {
   return schema === MAIN_SCHEMA ? table : `${schema}.${table}`;
 }
 
+const JSON_EXTENSIONS = [".json", ".ndjson", ".jsonl"];
+
+/** The format the kernel infers from a path's extension. */
+function formatOfPath(path: string): CatalogTable["format"] {
+  const p = path.toLowerCase();
+  if (p.endsWith(".csv")) return "csv";
+  return JSON_EXTENSIONS.some((e) => p.endsWith(e)) ? "json" : "parquet";
+}
+
 function catalogTable(name: TableName, path: string, format: unknown): CatalogTable {
-  const fmt = format === "csv" || format === "parquet" ? format : path.toLowerCase().endsWith(".csv") ? "csv" : "parquet";
+  const fmt = format === "csv" || format === "parquet" || format === "json" ? format : formatOfPath(path);
   return { name: displayName(name), schema: name.schema, table: name.table, path, format: fmt };
 }
 
@@ -177,7 +188,7 @@ export function schemaEntry(name: string, description?: string | null): string {
 export function suggestTableName(path: string): string {
   // a glob names its folder
   const parts = path.split(/[\\/]/).filter((p) => p && !p.includes("*"));
-  const base = (parts.pop() ?? "").replace(/\.(parquet|csv|tsv|txt)$/i, "");
+  const base = (parts.pop() ?? "").replace(/\.(parquet|csv|tsv|txt|json|ndjson|jsonl)$/i, "");
   const id = base.toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
   return /^[0-9]/.test(id) ? `t_${id}` : id;
 }

@@ -99,9 +99,41 @@ pub enum AggFunc {
     VarPop,
     First,
     Last,
+    /// `quantile_cont(x, p)`: linear interpolation (DuckDB / Polars "linear")
+    QuantileCont,
+    /// `quantile_disc(x, p)`: smallest value whose cumulative share reaches p
+    QuantileDisc,
+    /// exact under the hood: floats interpolate, other types pick a value
+    ApproxQuantile,
+    CountIf,
+    BoolAnd,
+    BoolOr,
+    MaxBy,
+    MinBy,
+    Product,
+    Corr,
+    CovarSamp,
+    CovarPop,
+    /// `regr_slope(y, x)`
+    RegrSlope,
+    /// `array_agg(x [ORDER BY ..])` / `list(x)`: every value, NULLs included
+    ArrayAgg,
+    /// `collect_list(x)`: like `array_agg`, NULLs skipped (Spark)
+    CollectList,
+    /// `collect_set(x)`: the distinct non-NULL values
+    CollectSet,
 }
 
 impl AggFunc {
+    /// Number of arguments the SQL / Python call takes.
+    pub fn arity(&self) -> usize {
+        use AggFunc::*;
+        match self {
+            QuantileCont | QuantileDisc | ApproxQuantile | MaxBy | MinBy | Corr | CovarSamp | CovarPop | RegrSlope => 2,
+            _ => 1,
+        }
+    }
+
     pub fn from_name(name: &str) -> Option<Self> {
         use AggFunc::*;
         Some(match name.to_ascii_lowercase().as_str() {
@@ -117,6 +149,22 @@ impl AggFunc {
             "var_pop" => VarPop,
             "first" | "first_value" | "any_value" | "arbitrary" => First,
             "last" | "last_value" => Last,
+            "quantile_cont" | "percentile_cont" => QuantileCont,
+            "quantile_disc" | "quantile" | "percentile_disc" => QuantileDisc,
+            "approx_quantile" | "approx_percentile" => ApproxQuantile,
+            "count_if" | "countif" => CountIf,
+            "bool_and" | "every" => BoolAnd,
+            "bool_or" => BoolOr,
+            "max_by" | "arg_max" => MaxBy,
+            "min_by" | "arg_min" => MinBy,
+            "product" => Product,
+            "corr" => Corr,
+            "covar_samp" => CovarSamp,
+            "covar_pop" => CovarPop,
+            "regr_slope" => RegrSlope,
+            "array_agg" | "list" | "implode" => ArrayAgg,
+            "collect_list" => CollectList,
+            "collect_set" => CollectSet,
             _ => return None,
         })
     }
@@ -135,6 +183,22 @@ impl AggFunc {
             VarPop => "var_pop",
             First => "first",
             Last => "last",
+            QuantileCont => "quantile_cont",
+            QuantileDisc => "quantile_disc",
+            ApproxQuantile => "approx_quantile",
+            CountIf => "count_if",
+            BoolAnd => "bool_and",
+            BoolOr => "bool_or",
+            MaxBy => "max_by",
+            MinBy => "min_by",
+            Product => "product",
+            Corr => "corr",
+            CovarSamp => "covar_samp",
+            CovarPop => "covar_pop",
+            RegrSlope => "regr_slope",
+            ArrayAgg => "array_agg",
+            CollectList => "collect_list",
+            CollectSet => "collect_set",
         }
     }
     pub fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
@@ -156,7 +220,22 @@ impl AggFunc {
                 }
                 Float64
             }
-            Min | Max | First | Last => input,
+            Min | Max | First | Last | MaxBy | MinBy | QuantileDisc => input,
+            QuantileCont | Product | Corr | CovarSamp | CovarPop | RegrSlope => {
+                if !(input.is_numeric() || matches!(input, Null | Boolean)) {
+                    return Err(WhError::Plan(format!("{} not supported for {input}", self.name())));
+                }
+                Float64
+            }
+            ApproxQuantile => match input {
+                Float16 | Float32 | Float64 => Float64,
+                t => t,
+            },
+            CountIf => Int64,
+            BoolAnd | BoolOr => Boolean,
+            ArrayAgg | CollectList | CollectSet => {
+                crate::nested::list_of(crate::nested::canonical_element(if input == Null { &Int64 } else { &input }))
+            }
         })
     }
 }
@@ -204,6 +283,87 @@ pub enum ScalarFunc {
     Minute,
     Second,
     DateTrunc,
+    // P1 scalar families (names, types and kernels live in physical/functions/)
+    Sign,
+    Mod,
+    IsNan,
+    Clip,
+    EqNullSafe,
+    DateAdd,
+    DateSub,
+    DateDiff,
+    AddMonths,
+    LastDay,
+    MonthStart,
+    MonthEnd,
+    MakeDate,
+    OffsetBy,
+    ToDate,
+    ToTimestamp,
+    StrictToDate,
+    StrictToTimestamp,
+    Strftime,
+    LPad,
+    RPad,
+    ZFill,
+    SplitPart,
+    ConcatWs,
+    InitCap,
+    Repeat,
+    RegexpLike,
+    RegexpReplace,
+    RegexpExtract,
+    RegexpCount,
+    Now,
+    CurrentDate,
+    Sin,
+    Cos,
+    Tan,
+    Asin,
+    Acos,
+    Atan,
+    Atan2,
+    Degrees,
+    Radians,
+    Pi,
+    Random,
+    /// `grouping(k..)`: only valid under ROLLUP / CUBE / GROUPING SETS
+    Grouping,
+    // list functions (names, types and kernels live in physical/functions/lists/)
+    ListValue,
+    ListExtract,
+    ListLength,
+    ListContains,
+    ListPosition,
+    ListSlice,
+    ListConcat,
+    /// `concat_list(a, b, ..)` (Polars): lists are joined, other values become elements; NULL if a list is
+    ConcatList,
+    ListSort,
+    ListReverse,
+    ListDistinct,
+    ListUnique,
+    ArrayToString,
+    /// `list_aggr(l, 'sum')`, `list_sum(l)`, ...: an aggregate over each list
+    ListAgg(AggFunc),
+    StringSplit,
+    RegexpSplit,
+    /// `unnest(l)` in a select list: the binder turns it into a plan node
+    Unnest,
+    // struct functions (names, types and kernels live in physical/functions/structs/); field names are
+    // constant arguments before their values: StructPack('a', 1, 'b', 2), StructExtract(s, 'a')
+    StructPack,
+    StructExtract,
+    StructInsert,
+    /// `struct_rename(s, 'new_a', 'new_b', ..)`: the fields under new names, in order
+    StructRename,
+    // JSON functions on text (physical/functions/json/)
+    JsonExtract,
+    JsonExtractString,
+    JsonArrayLength,
+    ToJson,
+    /// `from_json(text, 'type')`: the constant second argument names the result type
+    FromJson,
 }
 
 impl ScalarFunc {
@@ -251,7 +411,7 @@ impl ScalarFunc {
             "minute" => Minute,
             "second" => Second,
             "date_trunc" | "truncate" => DateTrunc,
-            _ => return None,
+            n => return crate::physical::functions::names::from_name(n),
         })
     }
 
@@ -299,6 +459,7 @@ impl ScalarFunc {
             Minute => "minute",
             Second => "second",
             DateTrunc => "date_trunc",
+            f => crate::physical::functions::names::name(*f),
         }
     }
 
@@ -315,6 +476,7 @@ impl ScalarFunc {
                 }
             }
             Round | Sqrt | Exp | Ln | Log10 | Log2 | Power => Float64,
+            Reverse if crate::nested::is_list(&first) => first,
             Upper | Lower | Trim | LTrim | RTrim | Substring | Replace | Concat | Left | Right
             | Reverse => Utf8,
             Length | StrPos => Int64,
@@ -325,7 +487,16 @@ impl ScalarFunc {
             NullIf => first,
             Year | Quarter | Month | Week | Day | DayOfWeek | DayOfYear | Hour | Minute | Second => Int32,
             DateTrunc => args.get(1).cloned().unwrap_or(Null),
+            f => crate::physical::functions::names::return_type(*f, args)?,
         })
+    }
+}
+
+/// The field a `StructExtract` call reads.
+fn struct_field_name(args: &[Expr]) -> Option<String> {
+    match args {
+        [_, Expr::Literal(s)] => s.as_str().map(str::to_string),
+        _ => None,
     }
 }
 
@@ -379,7 +550,8 @@ pub enum Expr {
     InList { expr: Box<Expr>, list: Vec<Expr>, negated: bool },
     Like { expr: Box<Expr>, pattern: Box<Expr>, negated: bool, case_insensitive: bool },
     Function { func: ScalarFunc, args: Vec<Expr> },
-    Agg { func: AggFunc, args: Vec<Expr>, distinct: bool, filter: Option<Box<Expr>> },
+    /// `order_by` is the `ORDER BY` inside the call (`array_agg(x ORDER BY y)`)
+    Agg { func: AggFunc, args: Vec<Expr>, distinct: bool, filter: Option<Box<Expr>>, order_by: Vec<SortExpr> },
     Wildcard { qualifier: Option<String> },
     ScalarSubquery(Subquery),
     InSubquery { expr: Box<Expr>, subquery: Subquery, negated: bool },
@@ -411,7 +583,7 @@ pub fn binary(l: Expr, op: Operator, r: Expr) -> Expr {
 }
 
 pub fn count_star() -> Expr {
-    Expr::Agg { func: AggFunc::Count, args: vec![], distinct: false, filter: None }
+    Expr::Agg { func: AggFunc::Count, args: vec![], distinct: false, filter: None, order_by: vec![] }
 }
 
 pub fn split_conjunction(e: &Expr) -> Vec<Expr> {
@@ -490,7 +662,7 @@ impl Expr {
         Expr::Cast { expr: Box::new(self), to, try_cast: false }
     }
     pub fn agg(self, func: AggFunc) -> Expr {
-        Expr::Agg { func, args: vec![self], distinct: false, filter: None }
+        Expr::Agg { func, args: vec![self], distinct: false, filter: None, order_by: vec![] }
     }
     pub fn between(self, low: Expr, high: Expr) -> Expr {
         self.clone().gt_eq(low).and(self.lt_eq(high))
@@ -536,11 +708,12 @@ impl Expr {
             }
             Like { expr, pattern, .. } => vec![expr, pattern],
             Function { args, .. } => args.iter().collect(),
-            Agg { args, filter, .. } => {
+            Agg { args, filter, order_by, .. } => {
                 let mut v: Vec<&Expr> = args.iter().collect();
                 if let Some(f) = filter {
                     v.push(f);
                 }
+                v.extend(order_by.iter().map(|o| &o.expr));
                 v
             }
             InSubquery { expr, .. } => vec![expr],
@@ -592,7 +765,7 @@ impl Expr {
                 func,
                 args: args.into_iter().map(&mut f).collect::<Result<_>>()?,
             },
-            Agg { func, args, distinct, filter } => Agg {
+            Agg { func, args, distinct, filter, order_by } => Agg {
                 func,
                 args: args.into_iter().map(&mut f).collect::<Result<_>>()?,
                 distinct,
@@ -600,6 +773,10 @@ impl Expr {
                     Some(x) => Some(b(x, &mut f)?),
                     None => None,
                 },
+                order_by: order_by
+                    .into_iter()
+                    .map(|o| Ok(SortExpr { expr: f(o.expr)?, ..o }))
+                    .collect::<Result<_>>()?,
             },
             InSubquery { expr, subquery, negated } => InSubquery { expr: b(expr, &mut f)?, subquery, negated },
             Window(w) => {
@@ -682,7 +859,10 @@ impl Expr {
     pub fn over(self, partition_by: Vec<Expr>, order_by: Vec<SortExpr>, frame: Option<WindowFrame>) -> Result<Expr> {
         let mut found = false;
         let out = self.transform_down(&mut |e| match e {
-            Expr::Agg { func, args, distinct, filter } => {
+            Expr::Agg { order_by, .. } if !order_by.is_empty() => {
+                return Err(WhError::NotSupported("ORDER BY inside an aggregate used as a window function".into()));
+            }
+            Expr::Agg { func, args, distinct, filter, .. } => {
                 found = true;
                 let w = WindowExpr {
                     func: WindowFunc::Agg(func),
@@ -748,6 +928,7 @@ impl Expr {
             Alias(_, n) => Some(n.clone()),
             Binary { left, .. } => left.root_name(),
             Case { when_then, .. } => when_then.first().and_then(|(_, t)| t.root_name()),
+            Function { func: ScalarFunc::StructExtract, args } => struct_field_name(args),
             Agg { args, .. } | Function { args, .. } => args.first().and_then(|a| a.root_name()),
             Not(e) | Negative(e) | IsNull(e) | IsNotNull(e) => e.root_name(),
             Cast { expr, .. } | InList { expr, .. } | Like { expr, .. } => expr.root_name(),
@@ -770,6 +951,8 @@ impl Expr {
             Expr::Alias(_, n) => n.clone(),
             Expr::Column(c) => c.name.clone(),
             Expr::OuterRef(c, _) => c.name.clone(),
+            // a struct field is named after itself (`s.a` is column `a`)
+            Expr::Function { func: ScalarFunc::StructExtract, args } => struct_field_name(args).unwrap_or_else(|| self.to_string()),
             e => e.to_string(),
         }
     }
@@ -822,6 +1005,12 @@ impl Expr {
                 let t = common_supertype(types.iter())
                     .ok_or_else(|| WhError::Plan(format!("CASE branches have incompatible types {types:?}")))?;
                 if t == DataType::Null { DataType::Int64 } else { t }
+            }
+            Function { func, args } if crate::physical::functions::structs::names::is_struct_func(*func) => {
+                crate::physical::functions::structs::names::logical_type(*func, args, schema)?
+            }
+            Function { func: ScalarFunc::FromJson, args } => {
+                crate::physical::functions::json::names::logical_type(ScalarFunc::FromJson, args)?
             }
             Function { func, args } => {
                 let types = args.iter().map(|a| a.data_type(schema)).collect::<Result<Vec<_>>>()?;
@@ -970,13 +1159,18 @@ impl fmt::Display for Expr {
                 func.name(),
                 args.iter().map(|e| e.to_string()).collect::<Vec<_>>().join(", ")
             ),
-            Agg { func, args, distinct, filter } => {
+            Agg { func, args, distinct, filter, order_by } => {
                 if args.is_empty() {
                     write!(f, "{}(*)", func.name())?;
                 } else {
+                    let order = if order_by.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ORDER BY {}", order_by.iter().map(|o| o.to_string()).collect::<Vec<_>>().join(", "))
+                    };
                     write!(
                         f,
-                        "{}({}{})",
+                        "{}({}{}{order})",
                         func.name(),
                         if *distinct { "DISTINCT " } else { "" },
                         args.iter().map(|e| e.to_string()).collect::<Vec<_>>().join(", ")

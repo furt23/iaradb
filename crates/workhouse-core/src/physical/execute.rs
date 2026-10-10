@@ -25,6 +25,7 @@ use crate::exec::metrics::{NodeRef, PlanMetrics, rows_of};
 use crate::exec::ops::{FilterOp, ProjectOp};
 use crate::exec::pipeline::{CollectSink, MemorySource, NullSink, Operator, Pipeline, Sink, Source, UnionSource, run_pipeline};
 use crate::exec::sort::SortSink;
+use crate::exec::unnest::UnnestOp;
 use crate::exec::stream::{Emitter, StreamSink};
 use crate::exec::window::{WindowSink, WindowSpec, Windowed};
 use crate::logical::JoinType;
@@ -216,6 +217,10 @@ impl Exec {
             PhysicalPlan::Project { input, exprs, schema } => self
                 .pipeline(input, ids[0])?
                 .with_op(self.op(id, Arc::new(ProjectOp { exprs: exprs.clone(), schema: schema.clone() }))),
+            PhysicalPlan::Unnest { input, exprs, keep_empty, schema } => self.pipeline(input, ids[0])?.with_op(self.op(
+                id,
+                Arc::new(UnnestOp { exprs: exprs.clone(), keep_empty: *keep_empty, schema: schema.clone() }),
+            )),
             PhysicalPlan::HashJoin { .. } => self.hash_join(plan, id, &ids)?,
             PhysicalPlan::NestedLoopJoin { probe, build, join_type, filter, joined_schema, schema, order } => {
                 let batches = self.execute(build, ids[1])?;
@@ -227,7 +232,9 @@ impl Exec {
                         concat_parallel(&bschema, &batches)
                     }
                 })?;
+                let memory = Some(NestedLoopJoin::reserve_build(&build_batch)?);
                 let join = NestedLoopJoin {
+                    memory,
                     build: build_batch,
                     join_type: *join_type,
                     filter: filter.clone(),

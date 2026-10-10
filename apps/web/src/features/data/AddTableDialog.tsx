@@ -37,7 +37,7 @@ export function AddTableDialog({
 }) {
   const [name, setName] = useState("");
   const [path, setPath] = useState("");
-  const [format, setFormat] = useState<"auto" | "parquet" | "csv">("auto");
+  const [format, setFormat] = useState<"auto" | "parquet" | "csv" | "json">("auto");
   const [named, setNamed] = useState(false);
   const [target, setTarget] = useState(MAIN_SCHEMA);
   const [schemas, setSchemas] = useState<string[]>([MAIN_SCHEMA]);
@@ -111,6 +111,7 @@ export function AddTableDialog({
             <MenuItem value="auto">From the extension</MenuItem>
             <MenuItem value="parquet">Parquet</MenuItem>
             <MenuItem value="csv">CSV</MenuItem>
+            <MenuItem value="json">JSON</MenuItem>
           </TextField>
         </Stack>
       </DialogContent>

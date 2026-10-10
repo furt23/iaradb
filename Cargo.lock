@@ -2664,6 +2664,7 @@ dependencies = [
  "parking_lot",
  "parquet",
  "rayon",
+ "regex",
  "reqwest",
  "rustls",
  "sqlparser",

@@ -15,7 +15,9 @@ use super::command::{Command, CopyValue};
 use crate::catalog_names::{MAIN, TableName, TableRef, parse_schema, unknown_schema};
 use crate::error::{Result, WhError};
 use crate::io::StorageOptions;
+use crate::io::csv::{CsvWriteOptions, sink_csv_with};
 use crate::io::dataset;
+use crate::io::json::sink_json;
 use crate::io::parquet::{DatasetSink, ParquetOptions, new_file_name};
 use crate::session::{LazyFrame, SessionContext, TableEntry};
 
@@ -69,11 +71,34 @@ fn flag(key: &str, v: &CopyValue) -> Result<bool> {
     }
 }
 
-/// `COPY (query) TO 'path' (FORMAT parquet | csv, PARTITION_BY (...), COMPRESSION ..., ROW_GROUP_SIZE n, HEADER, DELIMITER ',', OVERWRITE)`
+/// The format a path's extension says (Parquet when it says none).
+fn format_of_path(path: &str) -> String {
+    let p = path.to_ascii_lowercase();
+    let is = |exts: &[&str]| exts.iter().any(|e| p.ends_with(e));
+    if is(&[".csv"]) {
+        "csv"
+    } else if is(&[".json", ".ndjson", ".jsonl"]) {
+        "json"
+    } else {
+        "parquet"
+    }
+    .to_string()
+}
+
+/// A COPY option holding one character: `QUOTE '"'`.
+fn byte_option(key: &str, v: &CopyValue) -> Result<u8> {
+    match v {
+        CopyValue::Text(t) if t.len() == 1 => Ok(t.as_bytes()[0]),
+        _ => Err(WhError::Plan(format!("{} expects one character, quoted", key.to_ascii_uppercase()))),
+    }
+}
+
+/// `COPY (query) TO 'path' (FORMAT parquet | csv | json, PARTITION_BY (...), COMPRESSION ..., ROW_GROUP_SIZE n, HEADER, DELIMITER ',', OVERWRITE)`
 fn copy(ctx: &SessionContext, query: &str, path: &str, options: &[(String, CopyValue)]) -> Result<LazyFrame> {
-    let mut format = if path.to_ascii_lowercase().ends_with(".csv") { "csv".to_string() } else { "parquet".to_string() };
+    let mut format = format_of_path(path);
     let mut parquet = ParquetOptions::default();
-    let (mut header, mut delimiter, mut overwrite) = (true, b',', false);
+    let mut csv = CsvWriteOptions::default();
+    let mut overwrite = false;
     for (key, value) in options {
         match key.as_str() {
             "format" => format = word(value).ok_or_else(|| WhError::Plan("FORMAT expects parquet or csv".into()))?,
@@ -86,15 +111,18 @@ fn copy(ctx: &SessionContext, query: &str, path: &str, options: &[(String, CopyV
                 CopyValue::Number(n) if *n >= 1.0 => parquet.row_group_size = Some(*n as usize),
                 _ => return Err(WhError::Plan("ROW_GROUP_SIZE expects a positive number".into())),
             },
-            "header" => header = flag(key, value)?,
-            "delimiter" | "sep" => match value {
-                CopyValue::Text(t) if t.len() == 1 => delimiter = t.as_bytes()[0],
-                _ => return Err(WhError::Plan("DELIMITER expects one character, quoted".into())),
+            "header" => csv.header = flag(key, value)?,
+            "delimiter" | "sep" => csv.delimiter = byte_option(key, value)?,
+            "quote" => csv.quote = byte_option(key, value)?,
+            "escape" => csv.escape = byte_option(key, value)?,
+            "nullstr" | "null" => match value {
+                CopyValue::Text(t) | CopyValue::Word(t) => csv.null = Some(t.clone()),
+                _ => return Err(WhError::Plan("NULL expects a quoted text".into())),
             },
             "overwrite" | "overwrite_or_ignore" => overwrite = flag(key, value)?,
             other => {
                 return Err(WhError::Plan(format!(
-                    "unknown COPY option '{other}' (expected FORMAT, PARTITION_BY, COMPRESSION, ROW_GROUP_SIZE, HEADER, DELIMITER, OVERWRITE)"
+                    "unknown COPY option '{other}' (expected FORMAT, PARTITION_BY, COMPRESSION, ROW_GROUP_SIZE, HEADER, DELIMITER, QUOTE, ESCAPE, NULL, OVERWRITE)"
                 )));
             }
         }
@@ -115,9 +143,15 @@ fn copy(ctx: &SessionContext, query: &str, path: &str, options: &[(String, CopyV
             if !parquet.partition_by.is_empty() {
                 return Err(WhError::NotSupported("PARTITION_BY writes Parquet only".into()));
             }
-            lf.sink_csv(path, header, delimiter, &storage)?
+            sink_csv_with(&lf, path, &csv, &storage)?
         }
-        other => return Err(WhError::Plan(format!("unknown FORMAT '{other}' (expected parquet or csv)"))),
+        "json" | "ndjson" | "jsonl" => {
+            if !parquet.partition_by.is_empty() {
+                return Err(WhError::NotSupported("PARTITION_BY writes Parquet only".into()));
+            }
+            sink_json(&lf, path, &storage)?
+        }
+        other => return Err(WhError::Plan(format!("unknown FORMAT '{other}' (expected parquet, csv or json)"))),
     };
     summary(ctx, "copy", None, Some(path), rows)
 }

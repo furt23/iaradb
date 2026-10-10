@@ -7,7 +7,7 @@
 
     [tables.lineitem]
     path = "data/lineitem"     # relative to the workspace root: file, directory or glob
-    format = "parquet"         # parquet | csv (default: from the extension, else parquet)
+    format = "parquet"         # parquet | csv | json (NDJSON or a JSON array; default: from the extension, else parquet)
 
     [tables.trips]
     path = "raw/trips/*.csv"
@@ -96,7 +96,7 @@ def _key(name: str) -> str:
 
 @dataclass(frozen=True)
 class TableSpec:
-    """A catalog entry: a named Parquet or CSV dataset (local path or URL).
+    """A catalog entry: a named Parquet, CSV or JSON (NDJSON) dataset (local path or URL).
 
     ``name`` is the display name: ``orders``, or ``tpch.lineitem`` in a schema."""
 
@@ -112,8 +112,8 @@ class TableSpec:
         if "path" not in cfg:
             raise ValueError(f"table {name!r} in {CONFIG_NAME} has no 'path'")
         path = resolve_path(str(cfg["path"]), root)
-        fmt = cfg.get("format") or ("csv" if path.lower().endswith(".csv") else "parquet")
-        if fmt not in ("parquet", "csv"):
+        fmt = cfg.get("format") or _format_of(path)
+        if fmt not in ("parquet", "csv", "json"):
             raise ValueError(f"table {name!r}: unsupported format {fmt!r}")
         return TableSpec(name, path, fmt, bool(cfg.get("has_header", True)), str(cfg.get("separator", ",")))
 
@@ -125,8 +125,18 @@ class TableSpec:
         """Register (lazily) into a ``workhouse.SessionContext``."""
         if self.format == "csv":
             ctx.register_csv(self.name, self.path, self.has_header, self.separator, lazy=True)
+        elif self.format == "json":
+            ctx.register_json(self.name, self.path, lazy=True)
         else:
             ctx.register_parquet(self.name, self.path, lazy=True)
+
+
+def _format_of(path: str) -> str:
+    """The format a path's extension says: CSV, JSON / NDJSON or Parquet."""
+    p = path.lower()
+    if p.endswith(".csv"):
+        return "csv"
+    return "json" if p.endswith((".json", ".ndjson", ".jsonl")) else "parquet"
 
 
 def resolve_path(path: str, root: Path) -> str:

@@ -1,14 +1,34 @@
 //! Writing CSV to a local file or an object, all at once or batch by batch.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use arrow::csv::{Writer, WriterBuilder};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
+use parking_lot::Mutex;
 
 use crate::error::Result;
 use crate::io::options::StorageOptions;
 use crate::io::output::Output;
+use crate::session::LazyFrame;
+
+/// How CSV is written (COPY's HEADER, DELIMITER, QUOTE, ESCAPE, NULL).
+#[derive(Debug, Clone)]
+pub struct CsvWriteOptions {
+    pub header: bool,
+    pub delimiter: u8,
+    pub quote: u8,
+    pub escape: u8,
+    /// The text written for null (empty by default).
+    pub null: Option<String>,
+}
+
+impl Default for CsvWriteOptions {
+    fn default() -> Self {
+        Self { header: true, delimiter: b',', quote: b'"', escape: b'"', null: None }
+    }
+}
 
 /// A CSV file being written.
 pub struct CsvSink {
@@ -17,8 +37,15 @@ pub struct CsvSink {
 
 impl CsvSink {
     pub fn create(path: &str, has_header: bool, delimiter: u8, storage: &StorageOptions) -> Result<Self> {
-        let writer = WriterBuilder::new().with_header(has_header).with_delimiter(delimiter).build(Output::create(path, storage)?);
-        Ok(Self { writer })
+        Self::create_with(path, &CsvWriteOptions { header: has_header, delimiter, ..Default::default() }, storage)
+    }
+
+    pub fn create_with(path: &str, o: &CsvWriteOptions, storage: &StorageOptions) -> Result<Self> {
+        let mut b = WriterBuilder::new().with_header(o.header).with_delimiter(o.delimiter).with_quote(o.quote).with_escape(o.escape);
+        if let Some(n) = &o.null {
+            b = b.with_null(n.clone());
+        }
+        Ok(Self { writer: b.build(Output::create(path, storage)?) })
     }
 
     pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
@@ -51,4 +78,22 @@ fn without_views(b: &RecordBatch) -> Result<RecordBatch> {
     let fields: Vec<_> = b.schema().fields().iter().map(|f| f.as_ref().clone().with_data_type(unview(f.data_type()))).collect();
     let cols = b.columns().iter().map(|c| arrow::compute::cast(c, &unview(c.data_type()))).collect::<Result<Vec<_>, _>>()?;
     Ok(RecordBatch::try_new(Arc::new(Schema::new(fields)), cols)?)
+}
+
+/// Write the result as CSV while it is produced; returns the rows written.
+pub fn sink_csv_with(lf: &LazyFrame, path: &str, o: &CsvWriteOptions, storage: &StorageOptions) -> Result<usize> {
+    let sink = Mutex::new(None::<CsvSink>);
+    let rows = AtomicUsize::new(0);
+    lf.stream(
+        &mut |_| {
+            *sink.lock() = Some(CsvSink::create_with(path, o, storage)?);
+            Ok(())
+        },
+        &mut |b| {
+            rows.fetch_add(b.num_rows(), Ordering::Relaxed);
+            sink.lock().as_mut().expect("writer").write(&b)
+        },
+    )?;
+    sink.into_inner().expect("writer").finish()?;
+    Ok(rows.into_inner())
 }

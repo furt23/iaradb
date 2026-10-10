@@ -14,8 +14,23 @@ use crate::expr::ScalarFunc;
 use crate::physical::expr::ColumnarValue;
 use crate::scalar::Scalar;
 
+mod dates;
+mod eval;
+pub mod json;
+pub mod lists;
+mod math;
+pub mod names;
+mod parse;
+mod pattern;
+pub mod plan;
+mod random;
+mod strings;
+pub mod structs;
+mod time;
+
 pub fn evaluate(func: ScalarFunc, args: &[ColumnarValue], n: usize, dt: &DataType) -> Result<ColumnarValue> {
-    let all_scalar = args.iter().all(|a| a.is_scalar());
+    // random() yields one value per row even without column arguments
+    let all_scalar = func != ScalarFunc::Random && args.iter().all(|a| a.is_scalar());
     let m = if all_scalar { 1 } else { n };
     let res = eval_arrays(func, args, m, dt)?;
     Ok(if all_scalar && res.len() == 1 {
@@ -392,5 +407,8 @@ fn eval_arrays(func: ScalarFunc, args: &[ColumnarValue], m: usize, dt: &DataType
                 t => return Err(WhError::Execution(format!("date_trunc not supported for {t}"))),
             }
         }
+        f if structs::names::is_struct_func(f) => structs::eval(f, args, m, dt)?,
+        f if json::names::is_json_func(f) => json::eval(f, args, m, dt)?,
+        f => eval::eval(f, args, m)?,
     })
 }

@@ -138,6 +138,6 @@ impl TableFiles {
 /// The file must have the table's columns.
 fn check_schema(first: &ParquetFile, f: &ParquetFile) -> Result<()> {
     let (a, b) = (first.meta.schema(), f.meta.schema());
-    let same = a.fields().len() == b.fields().len() && a.fields().iter().zip(b.fields()).all(|(x, y)| x.name() == y.name() && x.data_type() == y.data_type());
+    let same = a.fields().len() == b.fields().len() && a.fields().iter().zip(b.fields()).all(|(x, y)| x.name() == y.name() && crate::nested::canonical_type(x.data_type()) == crate::nested::canonical_type(y.data_type()));
     if same { Ok(()) } else { Err(WhError::Plan(format!("schema of {} differs from {}", f.name, first.name))) }
 }

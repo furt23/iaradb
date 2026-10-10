@@ -23,6 +23,7 @@ use workhouse_core::types::parse_data_type;
 use workhouse_core::{JoinType, LazyFrame, Scalar, SessionContext, WhError};
 
 mod analyze;
+mod file_options;
 mod memory;
 mod runtime;
 mod storage;
@@ -154,6 +155,15 @@ fn wrap(e: Expr) -> PyExpr {
 
 #[pymethods]
 impl PyExpr {
+    /// An aggregate over this expression and extra arguments (quantile, max_by, corr ...).
+    #[pyo3(signature = (name, extra, distinct=false))]
+    fn agg_with(&self, name: &str, extra: Vec<PyRef<'_, PyExpr>>, distinct: bool) -> PyResult<Self> {
+        let func = AggFunc::from_name(name).ok_or_else(|| PyValueError::new_err(format!("unknown aggregate '{name}'")))?;
+        let mut args = vec![self.inner.clone()];
+        args.extend(exprs_of(&extra));
+        Ok(wrap(Expr::Agg { func, args, distinct, filter: None, order_by: vec![] }))
+    }
+
     #[staticmethod]
     fn col(name: &str) -> Self {
         wrap(col(name))
@@ -231,17 +241,18 @@ impl PyExpr {
                 distinct,
             ),
         };
-        Ok(wrap(Expr::Agg { func, args: vec![self.inner.clone()], distinct, filter: None }))
+        Ok(wrap(Expr::Agg { func, args: vec![self.inner.clone()], distinct, filter: None, order_by: vec![] }))
     }
 
     /// Restrict an aggregate to the rows where `predicate` holds.
     fn agg_filter(&self, predicate: PyRef<'_, PyExpr>) -> PyResult<Self> {
         match self.inner.clone().unalias() {
-            Expr::Agg { func, args, distinct, .. } => Ok(wrap(Expr::Agg {
+            Expr::Agg { func, args, distinct, order_by, .. } => Ok(wrap(Expr::Agg {
                 func,
                 args,
                 distinct,
                 filter: Some(Box::new(predicate.inner.clone())),
+                order_by,
             })),
             _ => Err(PyValueError::new_err("filter() on a non-aggregate expression")),
         }
@@ -372,7 +383,7 @@ fn import_stream(obj: &Bound<'_, PyAny>) -> PyResult<(SchemaRef, Vec<RecordBatch
 }
 
 fn schema_list(schema: &arrow::datatypes::Schema) -> Vec<(String, String)> {
-    schema.fields().iter().map(|f| (f.name().clone(), f.data_type().to_string())).collect()
+    schema.fields().iter().map(|f| (f.name().clone(), workhouse_core::nested::type_name(f.data_type()))).collect()
 }
 
 #[pymethods]
@@ -472,6 +483,14 @@ impl PyDataFrame {
         let d = delimiter.as_bytes().first().copied().unwrap_or(b',');
         py.detach(move || write_csv_with(&path, &batches, has_header, d, &opts)).py()
     }
+
+    /// Write one JSON object per row (NDJSON).
+    #[pyo3(signature = (path, storage_options=None))]
+    fn write_ndjson(&self, py: Python<'_>, path: &str, storage_options: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
+        let opts = storage::options(storage_options)?;
+        let (batches, path) = (self.batches.clone(), path.to_string());
+        py.detach(move || workhouse_core::io::json::write_json_with(&path, &batches, &opts)).py()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -560,6 +579,22 @@ impl PyLazyFrame {
         Self { inner: self.inner.alias(name) }
     }
 
+    /// One row per element of the list columns, in their place.
+    fn explode(&self, columns: Vec<String>) -> PyResult<Self> {
+        lf(self.inner.explode(&columns))
+    }
+
+    /// The struct columns replaced by one column per field.
+    #[pyo3(signature = (columns, separator=None))]
+    fn unnest(&self, columns: Vec<String>, separator: Option<String>) -> PyResult<Self> {
+        lf(self.inner.unnest(&columns, separator.as_deref()))
+    }
+
+    /// The field names of the struct `expr` evaluates to; None when it is not a struct.
+    fn struct_fields(&self, expr: PyRef<'_, PyExpr>) -> PyResult<Option<Vec<String>>> {
+        self.inner.struct_field_names(&expr.inner).py()
+    }
+
     #[pyo3(signature = (optimized=true))]
     fn explain(&self, py: Python<'_>, optimized: bool) -> PyResult<String> {
         let inner = self.inner.clone();
@@ -606,6 +641,14 @@ impl PyLazyFrame {
         py.detach(move || lf.sink_csv(&path, has_header, d, &opts)).py()
     }
 
+    /// Write the result as NDJSON while it is produced; returns the rows written.
+    #[pyo3(signature = (path, storage_options=None))]
+    fn sink_ndjson(&self, py: Python<'_>, path: &str, storage_options: Option<&Bound<'_, PyDict>>) -> PyResult<usize> {
+        let opts = storage::options(storage_options)?;
+        let (lf, path) = (self.inner.clone(), path.to_string());
+        py.detach(move || workhouse_core::io::json::sink_json(&lf, &path, &opts)).py()
+    }
+
     fn collect(&self, py: Python<'_>) -> PyResult<PyDataFrame> {
         let inner = self.inner.clone();
         let (schema, batches) = py.detach(move || inner.collect()).py()?;
@@ -645,14 +688,15 @@ pub struct PySessionContext {
     inner: SessionContext,
 }
 
-fn csv_options(has_header: bool, delimiter: &str, infer_rows: usize, parallel: bool) -> CsvOptions {
-    CsvOptions {
+fn csv_options(has_header: bool, delimiter: &str, infer_rows: usize, parallel: bool, extra: Option<&Bound<'_, PyDict>>) -> PyResult<CsvOptions> {
+    let base = CsvOptions {
         has_header,
         delimiter: delimiter.as_bytes().first().copied().unwrap_or(b','),
         infer_rows,
         parallel,
         ..Default::default()
-    }
+    };
+    file_options::csv_options(extra, base)
 }
 
 #[pymethods]
@@ -678,7 +722,7 @@ impl PySessionContext {
         py.detach(move || ctx.register_parquet_with(&name, &path, &storage, lazy)).py()
     }
 
-    #[pyo3(signature = (name, path, has_header=true, delimiter=",", infer_rows=10000, parallel=true, storage_options=None, lazy=false))]
+    #[pyo3(signature = (name, path, has_header=true, delimiter=",", infer_rows=10000, parallel=true, storage_options=None, lazy=false, options=None))]
     #[allow(clippy::too_many_arguments)]
     fn register_csv(
         &self,
@@ -691,11 +735,37 @@ impl PySessionContext {
         parallel: bool,
         storage_options: Option<&Bound<'_, PyDict>>,
         lazy: bool,
+        options: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<()> {
-        let opts = csv_options(has_header, delimiter, infer_rows, parallel);
+        let opts = csv_options(has_header, delimiter, infer_rows, parallel, options)?;
         let storage = storage::options(storage_options)?;
         let (ctx, name, path) = (self.inner.clone(), name.to_string(), path.to_string());
         py.detach(move || ctx.register_csv_with(&name, &path, opts, &storage, lazy)).py()
+    }
+
+    /// Register JSON / NDJSON files (a path, folder, glob or URL) as a table.
+    #[pyo3(signature = (name, path, options=None, storage_options=None, lazy=false))]
+    fn register_json(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        path: &str,
+        options: Option<&Bound<'_, PyDict>>,
+        storage_options: Option<&Bound<'_, PyDict>>,
+        lazy: bool,
+    ) -> PyResult<()> {
+        let opts = file_options::json_options(options)?;
+        let storage = storage::options(storage_options)?;
+        let (ctx, name, path) = (self.inner.clone(), name.to_string(), path.to_string());
+        py.detach(move || workhouse_core::io::json::register_json(&ctx, &name, &path, opts, &storage, lazy)).py()
+    }
+
+    #[pyo3(signature = (path, options=None, storage_options=None))]
+    fn read_json(&self, py: Python<'_>, path: &str, options: Option<&Bound<'_, PyDict>>, storage_options: Option<&Bound<'_, PyDict>>) -> PyResult<PyLazyFrame> {
+        let opts = file_options::json_options(options)?;
+        let storage = storage::options(storage_options)?;
+        let (ctx, path) = (self.inner.clone(), path.to_string());
+        lf(py.detach(move || workhouse_core::io::json::read_json(&ctx, &path, opts, &storage)))
     }
 
     /// Whether a registered table was loaded (False: lazy, not used yet).
@@ -781,7 +851,7 @@ impl PySessionContext {
         lf(py.detach(move || ctx.read_parquet_with(&path, &storage)))
     }
 
-    #[pyo3(signature = (path, has_header=true, delimiter=",", infer_rows=10000, parallel=true, storage_options=None))]
+    #[pyo3(signature = (path, has_header=true, delimiter=",", infer_rows=10000, parallel=true, storage_options=None, options=None))]
     #[allow(clippy::too_many_arguments)]
     fn read_csv(
         &self,
@@ -792,8 +862,9 @@ impl PySessionContext {
         infer_rows: usize,
         parallel: bool,
         storage_options: Option<&Bound<'_, PyDict>>,
+        options: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<PyLazyFrame> {
-        let opts = csv_options(has_header, delimiter, infer_rows, parallel);
+        let opts = csv_options(has_header, delimiter, infer_rows, parallel, options)?;
         let storage = storage::options(storage_options)?;
         let (ctx, path) = (self.inner.clone(), path.to_string());
         lf(py.detach(move || ctx.read_csv_with(&path, opts, &storage)))

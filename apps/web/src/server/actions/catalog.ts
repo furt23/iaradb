@@ -28,7 +28,7 @@ export async function listSchemas(): Promise<ActionResult<CatalogSchema[]>> {
 }
 
 /** `name` is `table` (in main) or `schema.table`; the schema must exist. */
-export async function addTable(name: string, path: string, format?: "parquet" | "csv"): Promise<ActionResult<TableRef>> {
+export async function addTable(name: string, path: string, format?: "parquet" | "csv" | "json"): Promise<ActionResult<TableRef>> {
   return attempt(async () => {
     const target = parseTableName(name);
     if (!target) throw new Error("table names are letters, digits and underscores, optionally schema.table");
@@ -37,10 +37,12 @@ export async function addTable(name: string, path: string, format?: "parquet" | 
     }
     const display = displayName(target);
     const ref = await kernels.workspace().request("catalog.add", { name: display, path, format, persist: false });
-    await appendConfigEntry(tableEntry(display, ref.path, format));
+    await kernels.exclusive(() => appendConfigEntry(tableEntry(display, ref.path, format)));
     return { name: display, path: ref.path, format: ref.format };
   });
 }
+
+// workhouse.toml edits go through kernels.exclusive, as catalog changes from runs and jobs do: no edit is lost
 
 /** A running workspace kernel re-reads workhouse.toml (none is started for it). */
 async function syncRunningKernel(): Promise<void> {
@@ -51,7 +53,7 @@ async function syncRunningKernel(): Promise<void> {
 /** Remove a table from workhouse.toml; a running workspace kernel forgets it too. */
 export async function removeTable(name: string): Promise<ActionResult<null>> {
   return attempt(async () => {
-    await removeCatalogTable(name);
+    await kernels.exclusive(() => removeCatalogTable(name));
     await syncRunningKernel();
     return null;
   });
@@ -60,7 +62,7 @@ export async function removeTable(name: string): Promise<ActionResult<null>> {
 /** Declare a schema in workhouse.toml; a running workspace kernel sees it too. */
 export async function createSchema(name: string, description?: string): Promise<ActionResult<null>> {
   return attempt(async () => {
-    await addCatalogSchema(name.trim(), description?.trim() || null);
+    await kernels.exclusive(() => addCatalogSchema(name.trim(), description?.trim() || null));
     await syncRunningKernel();
     return null;
   });
@@ -69,7 +71,7 @@ export async function createSchema(name: string, description?: string): Promise<
 /** Remove an empty schema from workhouse.toml. */
 export async function removeSchema(name: string): Promise<ActionResult<null>> {
   return attempt(async () => {
-    await removeCatalogSchema(name);
+    await kernels.exclusive(() => removeCatalogSchema(name));
     await syncRunningKernel();
     return null;
   });

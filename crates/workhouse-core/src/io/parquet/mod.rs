@@ -80,6 +80,7 @@ impl ParquetTable {
     pub fn try_new_with(pattern: &str, options: &StorageOptions) -> Result<Self> {
         let files = TableFiles::open(pattern, list_files(pattern, "parquet", options)?)?;
         let schema = files.first().meta.schema().clone();
+        let schema = crate::nested::canonical_schema(&schema).unwrap_or(schema);
         let partitions = partition::detect(pattern, &files.names(), &schema)?;
         let file_schema = schema;
         let schema = match &partitions {

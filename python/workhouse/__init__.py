@@ -35,8 +35,11 @@ from workhouse._workhouse import (
     set_num_threads,
 )
 from workhouse import _window
+from workhouse._lists import ListNamespace
+from workhouse._structs import List, Struct, StructNamespace, StructUnnest, struct, struct_literal
 from workhouse._window import WindowMethods
 from workhouse.storage import StorageError, StorageOptions, list_files, set_storage_options, storage_requests
+from workhouse import file_io as _fio
 from workhouse.storage import normalize as _storage
 
 __all__ = [
@@ -58,21 +61,33 @@ __all__ = [
     "lit",
     "when",
     "count",
+    "count_if",
+    "now",
+    "pi",
+    "rand",
     "len",
     "sum",
     "mean",
     "min",
     "max",
     "coalesce",
+    "concat_list",
     "concat_str",
+    "struct",
+    "Struct",
+    "List",
     "greatest",
     "least",
     "all",
     "row_number",
     "scan_parquet",
     "scan_csv",
+    "scan_ndjson",
+    "scan_json",
     "read_parquet",
     "read_csv",
+    "read_ndjson",
+    "read_json",
     "from_arrow",
     "from_pandas",
     "from_polars",
@@ -119,6 +134,8 @@ def _expr(x: Any) -> Expr:
     """Wrap a Python value as an expression (strings are literals)."""
     if isinstance(x, Expr):
         return x
+    if isinstance(x, dict):
+        return struct_literal(x)
     return Expr(PyExpr.lit(x))
 
 
@@ -218,10 +235,11 @@ class Expr(WindowMethods):
         return self._bin("/", o, True)
 
     def __mod__(self, o: Any) -> Expr:
-        return self._bin("%", o)
+        """Remainder with the sign of the divisor (Polars); SQL `%` truncates (DuckDB)."""
+        return (self._bin("%", o) + o)._bin("%", o)
 
     def __rmod__(self, o: Any) -> Expr:
-        return self._bin("%", o, True)
+        return _expr(o) % self
 
     def __eq__(self, o: Any) -> Expr:  # type: ignore[override]
         return self._bin("==", o)
@@ -327,6 +345,60 @@ class Expr(WindowMethods):
     def last(self) -> Expr:
         return Expr(self._e.agg("last"))
 
+    def _agg2(self, name: str, other: Any) -> Expr:
+        return Expr(self._e.agg_with(name, [_expr(other)._e]))
+
+    def quantile(self, quantile: float, interpolation: str = "linear") -> Expr:
+        """The `quantile` (0..1) of the non-null values.
+
+        "linear" interpolates between the two closest values (Polars default,
+        DuckDB `quantile_cont`); "disc" returns an existing value (DuckDB
+        `quantile_disc`: the first value whose cumulative share reaches
+        `quantile`). Other Polars modes are not supported.
+        """
+        names = {"linear": "quantile_cont", "disc": "quantile_disc"}
+        if interpolation not in names:
+            raise ValueError(f"interpolation must be 'linear' or 'disc', got {interpolation!r}")
+        if not 0 <= quantile <= 1:
+            raise ValueError("quantile must be between 0 and 1")
+        return self._agg2(names[interpolation], float(quantile))
+
+    def approx_quantile(self, quantile: float) -> Expr:
+        """Like `quantile`, but allowed to approximate. Currently exact."""
+        return self._agg2("approx_quantile", float(quantile))
+
+    def product(self) -> Expr:
+        """Product of the non-null values (a float); null for no values."""
+        return Expr(self._e.agg("product"))
+
+    def all(self) -> Expr:
+        """True when every non-null value is true (DuckDB `bool_and`); null for no values."""
+        return Expr(self._e.agg("bool_and"))
+
+    def any(self) -> Expr:
+        """True when some value is true (DuckDB `bool_or`); null for no values."""
+        return Expr(self._e.agg("bool_or"))
+
+    def max_by(self, by: Any) -> Expr:
+        """The value on the row where `by` is largest (rows with a null in either are skipped)."""
+        return self._agg2("max_by", by)
+
+    def min_by(self, by: Any) -> Expr:
+        """The value on the row where `by` is smallest."""
+        return self._agg2("min_by", by)
+
+    def corr(self, other: Any) -> Expr:
+        """Pearson correlation with `other` over the rows where both are non-null."""
+        return self._agg2("corr", other)
+
+    def cov(self, other: Any, ddof: int = 1) -> Expr:
+        """Covariance with `other`; `ddof=1` is the sample covariance, 0 the population one."""
+        return self._agg2("covar_samp" if ddof == 1 else "covar_pop", other)
+
+    def slope(self, x: Any) -> Expr:
+        """Slope of the least-squares fit of this column (y) on `x` (`regr_slope`)."""
+        return self._agg2("regr_slope", x)
+
     def filter(self, predicate: Expr) -> Expr:
         """Restrict an aggregation to rows matching `predicate`.
 
@@ -369,6 +441,63 @@ class Expr(WindowMethods):
 
     __pow__ = pow
 
+    def sin(self) -> Expr:
+        return self._f("sin")
+
+    def cos(self) -> Expr:
+        return self._f("cos")
+
+    def tan(self) -> Expr:
+        return self._f("tan")
+
+    def arcsin(self) -> Expr:
+        """NaN outside [-1, 1] (Polars); DuckDB raises an error."""
+        return self._f("asin")
+
+    def arccos(self) -> Expr:
+        return self._f("acos")
+
+    def arctan(self) -> Expr:
+        return self._f("atan")
+
+    def arctan2(self, x: Any) -> Expr:
+        """Angle of the point (x, self), `atan2(self, x)`."""
+        return self._f("atan2", x)
+
+    def degrees(self) -> Expr:
+        return self._f("degrees")
+
+    def radians(self) -> Expr:
+        return self._f("radians")
+
+    def clip(self, lower_bound: Any = None, upper_bound: Any = None) -> Expr:
+        """Limit values to [lower_bound, upper_bound]; None leaves a side open.
+
+        Nulls stay null (Polars).
+        """
+        return self._f("clip", lower_bound, upper_bound)
+
+    def sign(self) -> Expr:
+        """-1, 0 or 1 by the sign of each value (NaN stays NaN)."""
+        return self._f("sign")
+
+    def is_nan(self) -> Expr:
+        """True for NaN; null stays null."""
+        return self._f("isnan")
+
+    def is_not_nan(self) -> Expr:
+        return ~self.is_nan()
+
+    def mod(self, other: Any) -> Expr:
+        return self % other
+
+    def eq_missing(self, other: Any) -> Expr:
+        """Equality where null == null is True and null == value is False."""
+        return self._f("eq_null_safe", other)
+
+    def ne_missing(self, other: Any) -> Expr:
+        return ~self.eq_missing(other)
+
     @property
     def str(self) -> _StrNamespace:
         return _StrNamespace(self)
@@ -376,6 +505,24 @@ class Expr(WindowMethods):
     @property
     def dt(self) -> _DtNamespace:
         return _DtNamespace(self)
+
+    @property
+    def list(self) -> ListNamespace:
+        """List functions (`col("tags").list.len()`)."""
+        return ListNamespace(self)
+
+    @property
+    def struct(self) -> StructNamespace:
+        """Struct functions (`col("s").struct.field("a")`)."""
+        return StructNamespace(self)
+
+    def implode(self) -> Expr:
+        """Collect the values of each group (or of the whole column) into one list.
+
+        Nulls are kept and values are listed in table order; no rows give an
+        empty list (SQL's `array_agg` gives NULL).
+        """
+        return _implode(self._e.agg("array_agg"))
 
 
 class _Filtered(Expr):
@@ -390,6 +537,9 @@ class _Filtered(Expr):
 
     def _agg(self, name: str, distinct: bool = False) -> Expr:
         return Expr(self._base._e.agg(name, distinct).agg_filter(self._pred._e))
+
+    def _agg2(self, name: str, other: Any) -> Expr:
+        return Expr(self._base._e.agg_with(name, [_expr(other)._e]).agg_filter(self._pred._e))
 
     def sum(self) -> Expr:
         return self._agg("sum")
@@ -426,6 +576,27 @@ class _Filtered(Expr):
     def last(self) -> Expr:
         return self._agg("last")
 
+    def product(self) -> Expr:
+        return self._agg("product")
+
+    def all(self) -> Expr:
+        return self._agg("bool_and")
+
+    def any(self) -> Expr:
+        return self._agg("bool_or")
+
+    def quantile(self, quantile: float, interpolation: str = "linear") -> Expr:
+        return Expr.quantile(self, quantile, interpolation)
+
+    def max_by(self, by: Any) -> Expr:
+        return self._agg2("max_by", by)
+
+    def min_by(self, by: Any) -> Expr:
+        return self._agg2("min_by", by)
+
+    def implode(self) -> Expr:
+        return _implode(self._base._e.agg("array_agg").agg_filter(self._pred._e))
+
 
 class _StrNamespace:
     __slots__ = ("_x",)
@@ -433,10 +604,11 @@ class _StrNamespace:
     def __init__(self, x: Expr) -> None:
         self._x = x
 
-    def contains(self, pattern: str, literal: bool = True) -> Expr:
+    def contains(self, pattern: str, literal: bool = False) -> Expr:
+        """True where the string contains `pattern` (a regex unless `literal`)."""
         if literal:
             return self._x._f("contains", pattern)
-        raise NotImplementedError("regex contains is not supported yet; use literal=True or .str.like()")
+        return self._x._f("regexp_like", pattern)
 
     def like(self, pattern: str, case_insensitive: bool = False) -> Expr:
         return Expr(self._x._e.like(pattern, False, case_insensitive))
@@ -476,10 +648,76 @@ class _StrNamespace:
     def tail(self, n: int) -> Expr:
         return self._x._f("right", n)
 
-    def replace_all(self, old: str, new: str) -> Expr:
-        return self._x._f("replace", old, new)
+    def replace_all(self, pattern: str, value: str, literal: bool = False) -> Expr:
+        """Replace every match; `value` may use `$1` / `${name}` group references."""
+        return self._x._f("regexp_replace", pattern, value, ("l" if literal else "") + "gr")
 
-    replace = replace_all
+    def replace(self, pattern: str, value: str, literal: bool = False, n: int = 1) -> Expr:
+        """Replace the first `n` matches (Polars); only n=1 or n<0 (all) are supported."""
+        if n < 0:
+            return self.replace_all(pattern, value, literal)
+        if n != 1:
+            raise NotImplementedError("str.replace supports n=1 or n=-1 (use replace_all)")
+        return self._x._f("regexp_replace", pattern, value, ("l" if literal else "") + "r")
+
+    def extract(self, pattern: str, group_index: int = 1) -> Expr:
+        """Capture group `group_index` of the first match (null when nothing matches)."""
+        return self._x._f("regexp_extract", pattern, group_index, "n")
+
+    def split(self, by: str, *, inclusive: bool = False) -> Expr:
+        """Split on the text `by` into a list of strings (`by` is not a regex)."""
+        if inclusive:
+            raise NotImplementedError("str.split(inclusive=True) is not supported")
+        return self._x._f("string_split", by)
+
+    def count_matches(self, pattern: str, literal: bool = False) -> Expr:
+        """Number of non-overlapping matches."""
+        return self._x._f("regexp_count", pattern, "l" if literal else "")
+
+    def to_date(self, format: str | None = None, strict: bool = True) -> Expr:
+        """Parse to a date; `format` is a strptime pattern. strict=False gives null on failure."""
+        if format is None:
+            return self._x.cast("date")
+        return self._x._f("strptime_date" if strict else "to_date", format)
+
+    def to_datetime(self, format: str | None = None, strict: bool = True) -> Expr:
+        """Parse to a timestamp; `format` is a strptime pattern. strict=False gives null on failure."""
+        if format is None:
+            return self._x.cast("timestamp")
+        return self._x._f("strptime" if strict else "to_timestamp", format)
+
+    def pad_start(self, length: int, fill_char: str = " ") -> Expr:
+        """Left-pad to `length` chars; longer strings are kept whole (Polars)."""
+        return when(self.len_chars() >= length).then(self._x).otherwise(self._x._f("lpad", length, fill_char))
+
+    def pad_end(self, length: int, fill_char: str = " ") -> Expr:
+        """Right-pad to `length` chars; longer strings are kept whole (Polars)."""
+        return when(self.len_chars() >= length).then(self._x).otherwise(self._x._f("rpad", length, fill_char))
+
+    def zfill(self, length: int) -> Expr:
+        """Left-pad with zeros, keeping a leading sign in front."""
+        return self._x._f("zfill", length)
+
+    def to_titlecase(self) -> Expr:
+        return self._x._f("initcap")
+
+    def json_decode(self, dtype: Any = None) -> Expr:
+        """Parse JSON text into `dtype` (``wh.Struct({...})``, ``wh.List(..)`` or a scalar type).
+
+        Polars infers the type from the data; a lazy plan needs it up front, so
+        `dtype` is required here. Members the type does not name are ignored and
+        absent ones are null; a value of the wrong type is an error.
+        """
+        if dtype is None:
+            raise TypeError(
+                "str.json_decode needs dtype=..: the engine types the whole plan before it runs, "
+                "e.g. dtype=wh.Struct({'a': 'int64', 'tags': wh.List('utf8')})"
+            )
+        return self._x._f("from_json", str(dtype))
+
+    def json_path_match(self, json_path: str) -> Expr:
+        """The value at `json_path` (``$.a.b[0]``) as a string; null when absent."""
+        return self._x._f("json_extract_string", json_path)
 
     def reverse(self) -> Expr:
         return self._x._f("reverse")
@@ -524,6 +762,20 @@ class _DtNamespace:
     def truncate(self, unit: str) -> Expr:
         return Expr(PyExpr.func("date_trunc", [PyExpr.lit(unit), self._x._e]))
 
+    def strftime(self, format: str) -> Expr:
+        """Format as text with a strftime pattern (`%f` = microseconds)."""
+        return self._x._f("strftime", format)
+
+    def offset_by(self, by: str) -> Expr:
+        """Shift by a duration string such as "1d", "-2mo", "1y3mo" or "12h"."""
+        return self._x._f("offset_by", by)
+
+    def month_start(self) -> Expr:
+        return self._x._f("month_start")
+
+    def month_end(self) -> Expr:
+        return self._x._f("month_end")
+
 
 def col(name: str, *more: str) -> Any:
     """Reference a column (several names -> list of expressions; "*" -> all)."""
@@ -540,6 +792,36 @@ def all() -> Expr:  # noqa: A001
 
 def lit(value: Any) -> Expr:
     return Expr(PyExpr.lit(value))
+
+
+def count_if(condition: Any) -> Expr:
+    """Number of rows where `condition` is true (nulls and false are skipped):
+    0 for a group with none, as Polars counts (SQL `count_if` gives NULL, as DuckDB)."""
+    return coalesce(Expr(_expr(condition)._e.agg("count_if")), lit(0))
+
+
+def now() -> Expr:
+    """The current timestamp (UTC, no time zone): one value for the whole query."""
+    return Expr(PyExpr.func("now", []))
+
+
+def pi() -> Expr:
+    return Expr(PyExpr.func("pi", []))
+
+
+def rand(seed: int | None = None, key: Any = None) -> Expr:
+    """Uniform random floats in [0, 1), one per row.
+
+    No seed: different on every run. With `seed`: reproducible when batches
+    are processed in order. With `seed` and `key` (an integer column): a pure
+    function of (seed, key), reproducible whatever the execution order.
+    """
+    if seed is None:
+        if key is not None:
+            raise ValueError("`key` needs a `seed`")
+        return Expr(PyExpr.func("random", []))
+    args = [lit(seed)._e] + ([_expr(key)._e] if key is not None else [])
+    return Expr(PyExpr.func("random", args))
 
 
 def count() -> Expr:
@@ -582,6 +864,18 @@ def greatest(*exprs: Any) -> Expr:
 
 def least(*exprs: Any) -> Expr:
     return Expr(PyExpr.func("least", [_col_or_expr(e)._e for e in _flatten(exprs)]))
+
+
+def _implode(agg: PyExpr) -> Expr:
+    return Expr(PyExpr.func("coalesce", [agg, PyExpr.func("list_value", [])]))
+
+
+def concat_list(*exprs: Any) -> Expr:
+    """Join lists (and plain values, as one-element lists) into one list per row.
+
+    A null list makes the result null (Polars).
+    """
+    return Expr(PyExpr.func("concat_list", [_col_or_expr(e)._e for e in _flatten(exprs)]))
 
 
 def concat_str(*exprs: Any, separator: str = "") -> Expr:
@@ -659,11 +953,18 @@ class LazyFrame:
 
     where = filter
 
+    def _expand_unnests(self, exprs: Iterable[Any]) -> list[Any]:
+        """`struct.unnest()` items become one expression per field."""
+        out: list[Any] = []
+        for item in _flatten(exprs):
+            out.extend(item.expand(self._lf) if isinstance(item, StructUnnest) else [item])
+        return out
+
     def select(self, *exprs: Any, **named: Any) -> LazyFrame:
-        return LazyFrame(self._lf.select(_exprs(exprs, named)))
+        return LazyFrame(self._lf.select(_exprs(self._expand_unnests(exprs), named)))
 
     def with_columns(self, *exprs: Any, **named: Any) -> LazyFrame:
-        return LazyFrame(self._lf.with_columns(_exprs(exprs, named)))
+        return LazyFrame(self._lf.with_columns(_exprs(self._expand_unnests(exprs), named)))
 
     with_column = with_columns
 
@@ -724,6 +1025,23 @@ class LazyFrame:
 
     def drop(self, *columns: str) -> LazyFrame:
         return LazyFrame(self._lf.drop(_flatten(columns)))
+
+    def explode(self, columns: Any, *more: Any) -> LazyFrame:
+        """One row per element of the list columns, in place of the lists.
+
+        Several columns are exploded together (the shorter lists padded with
+        nulls). A null or empty list gives one row with null (Polars).
+        """
+        names = [c if isinstance(c, str) else _col_or_expr(c)._e.output_name() for c in _flatten([columns, *more])]
+        return LazyFrame(self._lf.explode(names))
+
+    def unnest(self, columns: Any, *more: Any, separator: str | None = None) -> LazyFrame:
+        """Struct columns replaced by one column per field, in place (Polars).
+
+        With `separator`, fields are named ``column{separator}field``.
+        """
+        names = [c if isinstance(c, str) else _col_or_expr(c)._e.output_name() for c in _flatten([columns, *more])]
+        return LazyFrame(self._lf.unnest(names, separator))
 
     def rename(self, mapping: Mapping[str, str]) -> LazyFrame:
         return LazyFrame(self._lf.rename(list(mapping.items())))
@@ -789,6 +1107,12 @@ class LazyFrame:
     ) -> int:
         """Write the result to CSV while it is produced; returns the number of rows."""
         return self._lf.sink_csv(str(path), include_header, separator, _storage(storage_options))
+
+    def sink_ndjson(self, path: str, storage_options: StorageOptions | None = None) -> int:
+        """Write the result as NDJSON (one object per row) while it is produced;
+        returns the number of rows. Numbers and booleans are JSON values, nulls
+        are ``null``, every other type (dates, ...) is a string."""
+        return self._lf.sink_ndjson(str(path), _storage(storage_options))
 
     def to_reader(self) -> Any:
         """The result as a ``pyarrow.RecordBatchReader`` that runs the query as it
@@ -989,6 +1313,12 @@ class DataFrame:
     def group_by(self, *keys: Any) -> _EagerGroupBy:
         return _EagerGroupBy(self.lazy().group_by(*keys))
 
+    def explode(self, columns: Any, *more: Any) -> DataFrame:
+        return self.lazy().explode(columns, *more).collect()
+
+    def unnest(self, columns: Any, *more: Any, separator: str | None = None) -> DataFrame:
+        return self.lazy().unnest(columns, *more, separator=separator).collect()
+
     def unique(self) -> DataFrame:
         return self.lazy().unique().collect()
 
@@ -1014,6 +1344,10 @@ class DataFrame:
         storage_options: StorageOptions | None = None,
     ) -> None:
         self._df.write_csv(str(path), include_header, separator, _storage(storage_options))
+
+    def write_ndjson(self, path: str, storage_options: StorageOptions | None = None) -> None:
+        """Write one JSON object per row (a local file or an object store URL)."""
+        self._df.write_ndjson(str(path), _storage(storage_options))
 
 
 class _EagerGroupBy:
@@ -1044,10 +1378,55 @@ def scan_csv(
     infer_schema_length: int = 10000,
     parallel: bool = True,
     storage_options: StorageOptions | None = None,
+    **options: Any,
 ) -> LazyFrame:
+    """Lazily scan CSV files (a path, folder, glob or URL).
+
+    Besides the arguments above, see ``workhouse.file_io`` for ``quote_char``,
+    ``escape``, ``null_values``, ``skip_rows``, ``comment``, ``columns``,
+    ``schema_overrides`` / ``dtypes``, ``encoding`` and ``try_parse_dates``."""
     return LazyFrame(
-        _ctx().read_csv(str(path), has_header, separator, infer_schema_length, parallel, _storage(storage_options))
+        _ctx().read_csv(
+            str(path),
+            has_header,
+            separator,
+            infer_schema_length,
+            parallel,
+            _storage(storage_options),
+            _fio.csv_options(**options),
+        )
     )
+
+
+def scan_ndjson(
+    path: str,
+    infer_schema_length: int = 1000,
+    parallel: bool = True,
+    storage_options: StorageOptions | None = None,
+    format: str = "ndjson",
+    nested: str = "auto",
+) -> LazyFrame:
+    """Lazily scan newline-delimited JSON (a path, folder, glob or URL; ``.ndjson``,
+    ``.jsonl`` and ``.json`` files). The schema comes from the first
+    ``infer_schema_length`` records. Objects and arrays are read as struct and list
+    columns (``nested="auto"``, merging the shapes seen: a field missing from some
+    records is null there, and a conflict makes that field JSON text);
+    ``nested="text"`` reads them as JSON text."""
+    opts = _fio.json_options(infer_schema_length=infer_schema_length, parallel=parallel, format=format, nested=nested)
+    return LazyFrame(_ctx().read_json(str(path), opts, _storage(storage_options)))
+
+
+def scan_json(
+    path: str,
+    infer_schema_length: int = 1000,
+    parallel: bool = True,
+    storage_options: StorageOptions | None = None,
+    format: str = "auto",
+    nested: str = "auto",
+) -> LazyFrame:
+    """Like ``scan_ndjson``, but a file holding one JSON array of objects
+    (``[{...}, {...}]``) is read too (``format="auto"`` looks at its first byte)."""
+    return scan_ndjson(path, infer_schema_length, parallel, storage_options, format, nested)
 
 
 def read_parquet(path: str, storage_options: StorageOptions | None = None) -> DataFrame:
@@ -1056,6 +1435,14 @@ def read_parquet(path: str, storage_options: StorageOptions | None = None) -> Da
 
 def read_csv(path: str, **kwargs: Any) -> DataFrame:
     return scan_csv(path, **kwargs).collect()
+
+
+def read_ndjson(path: str, **kwargs: Any) -> DataFrame:
+    return scan_ndjson(path, **kwargs).collect()
+
+
+def read_json(path: str, **kwargs: Any) -> DataFrame:
+    return scan_json(path, **kwargs).collect()
 
 
 def from_arrow(data: Any) -> DataFrame:
@@ -1087,6 +1474,8 @@ def _register(ctx: PySessionContext, name: str, obj: Any) -> None:
     elif isinstance(obj, str):
         if obj.lower().endswith(".csv"):
             ctx.register_csv(name, obj)
+        elif _fio.is_json_path(obj):
+            ctx.register_json(name, obj)
         else:
             ctx.register_parquet(name, obj)
     else:
@@ -1121,8 +1510,26 @@ class SessionContext:
         separator: str = ",",
         storage_options: StorageOptions | None = None,
         lazy: bool = False,
+        **options: Any,
     ) -> SessionContext:
-        self._ctx.register_csv(name, str(path), has_header, separator, 10000, True, _storage(storage_options), lazy)
+        """Register CSV files; ``options`` are those of ``scan_csv``."""
+        opts = _fio.csv_options(**options)
+        self._ctx.register_csv(name, str(path), has_header, separator, 10000, True, _storage(storage_options), lazy, opts)
+        return self
+
+    def register_json(
+        self,
+        name: str,
+        path: str,
+        storage_options: StorageOptions | None = None,
+        lazy: bool = False,
+        infer_schema_length: int = 1000,
+        format: str = "auto",
+        nested: str = "auto",
+    ) -> SessionContext:
+        """Register JSON / NDJSON files (a path, folder, glob or URL)."""
+        opts = _fio.json_options(infer_schema_length=infer_schema_length, format=format, nested=nested)
+        self._ctx.register_json(name, str(path), opts, _storage(storage_options), lazy)
         return self
 
     def is_loaded(self, name: str) -> bool | None:
@@ -1181,9 +1588,26 @@ class SessionContext:
         return LazyFrame(self._ctx.read_parquet(str(path), _storage(storage_options)))
 
     def read_csv(
-        self, path: str, has_header: bool = True, separator: str = ",", storage_options: StorageOptions | None = None
+        self,
+        path: str,
+        has_header: bool = True,
+        separator: str = ",",
+        storage_options: StorageOptions | None = None,
+        **options: Any,
     ) -> LazyFrame:
-        return LazyFrame(self._ctx.read_csv(str(path), has_header, separator, 10000, True, _storage(storage_options)))
+        opts = _fio.csv_options(**options)
+        return LazyFrame(self._ctx.read_csv(str(path), has_header, separator, 10000, True, _storage(storage_options), opts))
+
+    def read_json(
+        self,
+        path: str,
+        storage_options: StorageOptions | None = None,
+        infer_schema_length: int = 1000,
+        format: str = "auto",
+        nested: str = "auto",
+    ) -> LazyFrame:
+        opts = _fio.json_options(infer_schema_length=infer_schema_length, format=format, nested=nested)
+        return LazyFrame(self._ctx.read_json(str(path), opts, _storage(storage_options)))
 
     def from_arrow(self, data: Any) -> LazyFrame:
         return LazyFrame(self._ctx.from_arrow(data))
@@ -1206,3 +1630,10 @@ def sql(query: str, **tables: Any) -> LazyFrame:
     for name, obj in tables.items():
         _register(ctx, name, obj)
     return LazyFrame(ctx.sql(query))
+
+
+# P1 frame ops (fill/drop nulls and NaN, unique, sample, row index, describe, union by name)
+from workhouse import frame_ops as _frame_ops  # noqa: E402
+
+_frame_ops.attach(LazyFrame, DataFrame)
+concat = _frame_ops.concat

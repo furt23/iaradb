@@ -18,6 +18,7 @@ thiserror.workspace = true
 chrono.workspace = true
 parking_lot.workspace = true
 memchr = "2"
+regex = "1"
 # remote storage (object_store; the "s3" feature adds Amazon S3)
 object_store = { version = "0.14", default-features = false, features = ["tokio"] }
 # the ObjectStore trait is declared with it (the request-counting wrapper implements it)

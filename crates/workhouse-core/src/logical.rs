@@ -10,6 +10,7 @@ use crate::error::{Result, WhError};
 use crate::expr::{Expr, SortExpr};
 use crate::io::TableProvider;
 use crate::io::work_table::WorkTable;
+use crate::nested::reject_nested_key;
 use crate::schema::{PlanSchema, PlanSchemaRef, QualifiedField};
 use crate::types::comparison_common;
 
@@ -122,6 +123,21 @@ pub struct Window {
     pub schema: PlanSchemaRef,
 }
 
+/// `UNNEST` of list expressions: the input columns followed by the elements,
+/// one output row per element (several lists are zipped, the shorter ones
+/// padded with NULLs).
+#[derive(Clone, Debug)]
+pub struct Unnest {
+    pub input: Arc<LogicalPlan>,
+    pub exprs: Vec<Expr>,
+    /// qualifier and name of the element column of each expression
+    pub outputs: Vec<(Option<String>, String)>,
+    /// a NULL or empty list gives one row of NULLs (Polars' `explode`)
+    /// instead of no row (SQL)
+    pub keep_empty: bool,
+    pub schema: PlanSchemaRef,
+}
+
 /// `WITH RECURSIVE name AS (static UNION [ALL] recursive)`: the recursive
 /// term reads the rows of the previous iteration from `work_table` and runs
 /// until it produces no new rows.
@@ -151,6 +167,7 @@ pub enum LogicalPlan {
     SubqueryAlias(SubqueryAlias),
     Values(Values),
     Window(Window),
+    Unnest(Unnest),
     RecursiveQuery(RecursiveQuery),
 }
 
@@ -197,6 +214,7 @@ impl LogicalPlan {
             LogicalPlan::SubqueryAlias(s) => &s.schema,
             LogicalPlan::Values(v) => &v.schema,
             LogicalPlan::Window(w) => &w.schema,
+            LogicalPlan::Unnest(u) => &u.schema,
             LogicalPlan::RecursiveQuery(r) => &r.schema,
         }
     }
@@ -213,6 +231,7 @@ impl LogicalPlan {
             LogicalPlan::Union(u) => u.inputs.iter().collect(),
             LogicalPlan::SubqueryAlias(s) => vec![&s.input],
             LogicalPlan::Window(w) => vec![&w.input],
+            LogicalPlan::Unnest(u) => vec![&u.input],
             LogicalPlan::RecursiveQuery(r) => vec![&r.static_term, &r.recursive_term],
         }
     }
@@ -236,6 +255,9 @@ impl LogicalPlan {
             LogicalPlan::Union(_) => LogicalPlan::union(inputs)?,
             LogicalPlan::SubqueryAlias(s) => LogicalPlan::subquery_alias(inputs.remove(0), &s.alias),
             LogicalPlan::Window(w) => LogicalPlan::window(inputs.remove(0), w.exprs.clone())?,
+            LogicalPlan::Unnest(u) => {
+                LogicalPlan::unnest(inputs.remove(0), u.exprs.clone(), u.outputs.clone(), u.keep_empty)?
+            }
             LogicalPlan::RecursiveQuery(r) => {
                 let static_term = inputs.remove(0);
                 let recursive_term = inputs.remove(0);
@@ -304,7 +326,9 @@ impl LogicalPlan {
             if g.contains_agg() {
                 return Err(WhError::Plan(format!("aggregate '{g}' is not allowed in GROUP BY")));
             }
-            fields.push(g.to_field(input.schema())?);
+            let field = g.to_field(input.schema())?;
+            reject_nested_key(field.field.data_type(), "a grouping key (GROUP BY, DISTINCT, UNION)")?;
+            fields.push(field);
         }
         for a in &aggs {
             if !matches!(a.unalias_ref(), Expr::Agg { .. }) {
@@ -328,8 +352,8 @@ impl LogicalPlan {
         join_type: JoinType,
     ) -> Result<LogicalPlan> {
         for (l, r) in &on {
-            l.data_type(left.schema())?;
-            r.data_type(right.schema())?;
+            reject_nested_key(&l.data_type(left.schema())?, "a join key")?;
+            reject_nested_key(&r.data_type(right.schema())?, "a join key")?;
         }
         let nullable = |s: &PlanSchema| -> Vec<QualifiedField> {
             s.fields()
@@ -369,7 +393,7 @@ impl LogicalPlan {
 
     pub fn sort(input: Arc<LogicalPlan>, exprs: Vec<SortExpr>, fetch: Option<usize>) -> Result<LogicalPlan> {
         for e in &exprs {
-            e.expr.data_type(input.schema())?;
+            reject_nested_key(&e.expr.data_type(input.schema())?, "a sort key")?;
         }
         Ok(LogicalPlan::Sort(Sort { input, exprs, fetch }))
     }
@@ -445,6 +469,9 @@ impl LogicalPlan {
                 return Err(WhError::Plan(format!("'{e}' is not a window function")));
             };
             w.validate()?;
+            for x in w.partition_by.iter().chain(w.order_by.iter().map(|o| &o.expr)) {
+                reject_nested_key(&x.data_type(input.schema())?, "a window partition or order key")?;
+            }
             for x in w.args.iter().chain(&w.partition_by).chain(w.order_by.iter().map(|o| &o.expr)) {
                 if x.contains_agg() || x.contains_window() {
                     return Err(WhError::Plan(format!("aggregates and window functions cannot be nested in '{e}'")));
@@ -453,6 +480,24 @@ impl LogicalPlan {
             fields.push(e.to_field(input.schema())?);
         }
         Ok(LogicalPlan::Window(Window { input, exprs, schema: Arc::new(PlanSchema::new(fields)) }))
+    }
+
+    pub fn unnest(
+        input: Arc<LogicalPlan>,
+        exprs: Vec<Expr>,
+        outputs: Vec<(Option<String>, String)>,
+        keep_empty: bool,
+    ) -> Result<LogicalPlan> {
+        let mut fields = input.schema().fields().to_vec();
+        for (e, (qualifier, name)) in exprs.iter().zip(&outputs) {
+            let t = e.data_type(input.schema())?;
+            let Some(elem) = crate::nested::element_type(&t) else {
+                return Err(WhError::Plan(format!("unnest expects a list, got {} for {e}", crate::nested::type_name(&t))));
+            };
+            fields.push(QualifiedField::new(qualifier.clone(), Field::new(name, elem.clone(), true)));
+        }
+        let schema = Arc::new(PlanSchema::new(fields));
+        Ok(LogicalPlan::Unnest(Unnest { input, exprs, outputs, keep_empty, schema }))
     }
 
     pub fn recursive_query(
@@ -562,6 +607,7 @@ impl LogicalPlan {
                 v.schema.len()
             ),
             LogicalPlan::Window(w) => format!("Window: {}", list(&w.exprs)),
+            LogicalPlan::Unnest(u) => format!("Unnest: {}{}", list(&u.exprs), if u.keep_empty { " (keep empty)" } else { "" }),
             LogicalPlan::RecursiveQuery(r) => {
                 let mut line = format!("RecursiveQuery: {} [UNION{}]", r.name, if r.distinct { "" } else { " ALL" });
                 if let Some(f) = r.fetch {

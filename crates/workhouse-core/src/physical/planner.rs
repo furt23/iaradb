@@ -65,6 +65,7 @@ pub enum PhysicalPlan {
     Union { inputs: Vec<PhysicalPlan>, schema: SchemaRef },
     Values { batches: Vec<RecordBatch>, schema: SchemaRef },
     Window { input: Box<PhysicalPlan>, specs: Vec<WindowSpec>, schema: SchemaRef },
+    Unnest { input: Box<PhysicalPlan>, exprs: Vec<PhysExpr>, keep_empty: bool, schema: SchemaRef },
     RecursiveQuery {
         static_term: Box<PhysicalPlan>,
         recursive_term: Box<PhysicalPlan>,
@@ -88,6 +89,7 @@ impl PhysicalPlan {
             | PhysicalPlan::Union { schema, .. }
             | PhysicalPlan::Values { schema, .. }
             | PhysicalPlan::Window { schema, .. }
+            | PhysicalPlan::Unnest { schema, .. }
             | PhysicalPlan::RecursiveQuery { schema, .. } => schema.clone(),
             PhysicalPlan::Limit { input, .. } => input.schema(),
         }
@@ -101,7 +103,8 @@ impl PhysicalPlan {
             | PhysicalPlan::Aggregate { input, .. }
             | PhysicalPlan::Sort { input, .. }
             | PhysicalPlan::Limit { input, .. }
-            | PhysicalPlan::Window { input, .. } => vec![input],
+            | PhysicalPlan::Window { input, .. }
+            | PhysicalPlan::Unnest { input, .. } => vec![input],
             PhysicalPlan::RecursiveQuery { static_term, recursive_term, .. } => vec![static_term, recursive_term],
             PhysicalPlan::HashJoin { probe, build, .. } | PhysicalPlan::NestedLoopJoin { probe, build, .. } => {
                 vec![probe, build]
@@ -167,6 +170,9 @@ impl PhysicalPlan {
             PhysicalPlan::Values { batches, .. } => {
                 format!("Values: {} rows", batches.iter().map(|b| b.num_rows()).sum::<usize>())
             }
+            PhysicalPlan::Unnest { exprs, keep_empty, .. } => {
+                format!("Unnest: {}{}", join(exprs), if *keep_empty { " (keep empty)" } else { "" })
+            }
             PhysicalPlan::Window { specs, .. } => {
                 format!("Window: {}", specs.iter().map(|s| format!("[{}]", s.describe())).collect::<Vec<_>>().join(" "))
             }
@@ -216,6 +222,7 @@ impl PhysicalPlan {
             PhysicalPlan::Union { .. } => "Union".into(),
             PhysicalPlan::Values { .. } => "Values".into(),
             PhysicalPlan::Window { .. } => "Window".into(),
+            PhysicalPlan::Unnest { .. } => "Unnest".into(),
             PhysicalPlan::RecursiveQuery { .. } => "RecursiveQuery".into(),
         }
     }
@@ -513,6 +520,10 @@ pub fn cardinality(plan: &LogicalPlan) -> (f64, f64) {
         LogicalPlan::Union(u) => (u.inputs.iter().map(|i| estimate_rows(i)).sum(), 1.0),
         LogicalPlan::Values(v) => (v.batches.iter().map(|b| b.num_rows()).sum::<usize>() as f64, 1.0),
         LogicalPlan::Window(w) => cardinality(&w.input),
+        LogicalPlan::Unnest(u) => {
+            let (b, s) = cardinality(&u.input);
+            (b * 8.0, s)
+        }
         LogicalPlan::RecursiveQuery(r) => {
             let n = estimate_rows(&r.static_term) * 10.0;
             (r.fetch.map_or(n, |f| n.min(f as f64)), 1.0)
@@ -621,18 +632,29 @@ pub fn create_physical_plan(plan: &LogicalPlan) -> Result<PhysicalPlan> {
                 .map(|f| Field::new(f.name(), f.field.data_type().clone(), true))
                 .collect();
             for (i, ae) in a.aggs.iter().enumerate() {
-                let Expr::Agg { func, args, distinct, filter } = ae.unalias_ref() else {
+                let Expr::Agg { func, args, distinct, filter, order_by } = ae.unalias_ref() else {
                     return Err(WhError::Plan(format!("not an aggregate: {ae}")));
                 };
                 let mut pargs = args.iter().map(|x| compile(x, in_schema)).collect::<Result<Vec<_>>>()?;
+                // order keys follow the value
+                let mut order = vec![];
+                for o in order_by {
+                    pargs.push(compile(&o.expr, in_schema)?);
+                    order.push(arrow::compute::SortOptions { descending: o.descending, nulls_first: o.nulls_first });
+                }
                 if let Some(first) = pargs.first_mut() {
                     let t = first.data_type();
                     if t == DataType::Boolean && matches!(func, AggFunc::Sum | AggFunc::Mean) {
                         *first = cast_expr(first.clone(), &DataType::Int64)?;
                     }
                     if t == DataType::Null {
-                        *first = cast_expr(first.clone(), &DataType::Int64)?;
+                        *first = cast_expr(first.clone(), &null_agg_type(*func))?;
                     }
+                }
+                if matches!(func, AggFunc::ArrayAgg | AggFunc::CollectList | AggFunc::CollectSet) {
+                    // lists hold plain strings (no views): cast the value once
+                    let elem = crate::nested::canonical_element(&pargs[0].data_type());
+                    pargs[0] = cast_expr(pargs[0].clone(), &elem)?;
                 }
                 let input_type = pargs.first().map(|p| p.data_type());
                 let out_type = a.schema.field(a.group_by.len() + i).data_type().clone();
@@ -649,6 +671,7 @@ pub fn create_physical_plan(plan: &LogicalPlan) -> Result<PhysicalPlan> {
                     filter: pfilter,
                     input_type,
                     name,
+                    order,
                 });
             }
             PhysicalPlan::Aggregate {
@@ -688,6 +711,12 @@ pub fn create_physical_plan(plan: &LogicalPlan) -> Result<PhysicalPlan> {
             PhysicalPlan::Values { batches: v.batches.clone(), schema: v.schema.arrow_schema().clone() }
         }
         LogicalPlan::Window(w) => plan_window(w)?,
+        LogicalPlan::Unnest(u) => {
+            let input = create_physical_plan(&u.input)?;
+            let exprs = u.exprs.iter().map(|e| compile(e, u.input.schema())).collect::<Result<Vec<_>>>()?;
+            let schema = output_schema(&u.schema, &[]);
+            PhysicalPlan::Unnest { input: Box::new(input), exprs, keep_empty: u.keep_empty, schema }
+        }
         LogicalPlan::RecursiveQuery(r) => PhysicalPlan::RecursiveQuery {
             static_term: Box::new(create_physical_plan(&r.static_term)?),
             recursive_term: Box::new(create_physical_plan(&r.recursive_term)?),
@@ -697,6 +726,14 @@ pub fn create_physical_plan(plan: &LogicalPlan) -> Result<PhysicalPlan> {
             schema: r.work_table.schema_ref(),
         },
     })
+}
+
+/// Type given to an untyped NULL argument of an aggregate.
+fn null_agg_type(func: AggFunc) -> DataType {
+    match func {
+        AggFunc::CountIf | AggFunc::BoolAnd | AggFunc::BoolOr => DataType::Boolean,
+        _ => DataType::Int64,
+    }
 }
 
 /// Group the window functions by (PARTITION BY, ORDER BY): each group sorts
@@ -717,8 +754,10 @@ fn plan_window(w: &crate::logical::Window) -> Result<PhysicalPlan> {
         let mut args = we.args.iter().map(|a| compile(a, in_schema)).collect::<Result<Vec<_>>>()?;
         if let (WindowFunc::Agg(func), Some(first)) = (we.func, args.first_mut()) {
             let t = first.data_type();
-            if (t == DataType::Boolean && matches!(func, AggFunc::Sum | AggFunc::Mean)) || t == DataType::Null {
+            if t == DataType::Boolean && matches!(func, AggFunc::Sum | AggFunc::Mean) {
                 *first = cast_expr(first.clone(), &DataType::Int64)?;
+            } else if t == DataType::Null {
+                *first = cast_expr(first.clone(), &null_agg_type(func))?;
             }
         }
         let field = w.schema.field(n_in + i);

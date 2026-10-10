@@ -20,3 +20,5 @@ next-env.d.ts
 bench_ec2.json
 .next*
 .aws
+# internal test briefs and reports
+test-briefs/

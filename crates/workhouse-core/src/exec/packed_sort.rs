@@ -238,4 +238,28 @@ mod tests {
         let keys: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![2, 1, 2]))];
         assert_eq!(sort_indices(&keys, &[SortOptions::default()], None).unwrap(), vec![1, 0, 2]);
     }
+
+    /// Booleans are read through `BooleanBuffer::value`, which honours the
+    /// slice's bit offset: sliced arrays (offsets inside and across bytes)
+    /// sort like their row format, with and without nulls.
+    #[test]
+    fn sliced_boolean_keys_keep_their_offset() {
+        let vals: Vec<Option<bool>> = (0..61).map(|i| if i % 7 == 3 { None } else { Some((i * i + i / 3) % 5 < 2) }).collect();
+        let full: ArrayRef = Arc::new(arrow::array::BooleanArray::from(vals.clone()));
+        let dense: ArrayRef = Arc::new(arrow::array::BooleanArray::from(vals.iter().map(|v| v.unwrap_or(true)).collect::<Vec<_>>()));
+        for (offset, len) in [(3, 21), (8, 16), (13, 7), (13, 40), (60, 1)] {
+            for base in [&full, &dense] {
+                let sliced = base.slice(offset, len);
+                assert_eq!(sliced.len(), len);
+                for desc in [false, true] {
+                    for nulls_first in [false, true] {
+                        check(vec![sliced.clone()], vec![SortOptions { descending: desc, nulls_first }]);
+                    }
+                }
+                // and as the second key next to a sliced integer key
+                let ints: ArrayRef = (Arc::new(Int32Array::from((0..61).map(|i| i % 4).collect::<Vec<_>>())) as ArrayRef).slice(offset, len);
+                check(vec![ints, sliced], vec![SortOptions::default(); 2]);
+            }
+        }
+    }
 }

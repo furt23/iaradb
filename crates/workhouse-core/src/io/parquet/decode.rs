@@ -57,8 +57,9 @@ pub fn decode(input: RangeChunks, mask: ProjectionMask, part: &Part<'_>, emit: E
     for b in builder.build()? {
         let b = b?;
         if b.schema().fields() != part.schema.fields() {
-            // normalise schema metadata differences
-            emit(RecordBatch::try_new(part.schema.clone(), b.columns().to_vec())?)?;
+            // normalise schema metadata differences and list types
+            let cols = b.columns().iter().map(crate::nested::canonical_array).collect::<Result<Vec<_>>>()?;
+            emit(RecordBatch::try_new(part.schema.clone(), cols)?)?;
         } else {
             emit(b)?;
         }

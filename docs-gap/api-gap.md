@@ -1,5 +1,9 @@
 # Workhouse API gap vs PySpark and Polars
 
+> **Status (2026-10-10).**
+> - Done: P1 items 1–7 (frame ops), 8–9 (JSON and CSV options), 10–15 and 19 (scalars, regex, dates), 17–18 (aggregates), and the list work (P1 16 and 20: `array_agg`, `collect_list`/`collect_set`, `explode`/`unnest`; the `split` item; the list namespace). Also `ROLLUP`/`CUBE`/`GROUPING SETS`, trig, `now()` and `random()`.
+> - Next: structs and nested JSON.
+
 Scope: Workhouse Python (`python/workhouse/__init__.py`, `_window.py`) and the SQL/Rust function registry (`crates/workhouse-core/src`: `expr.rs` enums `AggFunc`, `ScalarFunc`, `WindowFunc`; `physical/functions.rs`; `sql/mod.rs`; `io/`).
 
 Reference versions: Polars 1.44.2 (installed, introspected with `dir()`). PySpark: not installed; names taken from the official docs index (`pyspark.sql.functions` and `pyspark.sql.DataFrame`). Status marks are based on the code read. Items marked "unverified" were only seen in a keyword grep.

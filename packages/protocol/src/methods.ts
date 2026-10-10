@@ -52,7 +52,7 @@ export interface KernelMethods {
   "catalog.schema": [Empty, Record<string, { name: string; type: string }[]>];
   "catalog.preview": [{ name: string; limit?: number }, CellOutput];
   /** `entry`: the table's workhouse.toml section (the Studio appends it when `persist: false`) */
-  "catalog.add": [{ name: string; path: string; format?: "parquet" | "csv"; persist?: boolean }, TableRef & { entry: string }];
+  "catalog.add": [{ name: string; path: string; format?: "parquet" | "csv" | "json"; persist?: boolean }, TableRef & { entry: string }];
   "sql.run": [{ query: string; source?: string }, CellOutput];
   "sql.explain": [{ query: string }, ExplainResult];
   /** runs the query with profiling; the rows are counted, not returned */

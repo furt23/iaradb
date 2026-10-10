@@ -191,7 +191,7 @@ impl fmt::Display for PlanSchema {
         let parts: Vec<String> = self
             .fields
             .iter()
-            .map(|fl| format!("{}: {}", fl.column(), fl.field.data_type()))
+            .map(|fl| format!("{}: {}", fl.column(), crate::nested::type_name(fl.field.data_type())))
             .collect();
         write!(f, "[{}]", parts.join(", "))
     }

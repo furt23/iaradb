@@ -1,5 +1,9 @@
 //! Execution: pipelines, operators and sinks.
 
+pub mod acc_list;
+pub mod acc_misc;
+pub mod acc_quantile;
+pub mod acc_stats;
 pub mod accumulators;
 pub mod agg_spill;
 pub mod aggregate;
@@ -18,4 +22,5 @@ pub mod recursive;
 pub mod sort;
 pub mod spill;
 pub mod stream;
+pub mod unnest;
 pub mod window;

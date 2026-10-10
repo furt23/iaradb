@@ -118,6 +118,36 @@ ctx.sql("""
 """)
 ```
 
+### Schemas, Nested Types & JSON
+Tables live in schemas (`tpch.lineitem`, or `orders` in `main`), managed with `CREATE SCHEMA`, `DROP SCHEMA [CASCADE]` and `USE`. List and struct columns work in every operator: scans, joins, sorts, windows, aggregates and spill. Nested JSON is read as lists and structs:
+
+```python
+ctx.sql("select unnest(string_split(tags, ',')) as tag, count(*) from posts group by tag")
+ctx.sql("select user.name, array_agg(item order by ts) from read_ndjson('events.jsonl') group by user.name")
+lf.with_columns(col("tags").list.len(), col("user").struct.field("name")).explode("tags")
+ctx.sql("select payload ->> '$.order.id' from raw_events")
+```
+
+### Functions & Frame Operations
+The SQL dialect follows DuckDB and the Python API follows Polars:
+- **Strings and regex:** `regexp_like` / `replace` / `extract`, `split_part`, `lpad`, `concat_ws`, `initcap`, `str.contains(regex)`.
+- **Dates:** `datediff`, `add_months`, `strptime` / `strftime`, `dt.offset_by`.
+- **Aggregates:** `quantile` / `percentile_cont`, `count_if`, `max_by`, `corr`, `array_agg`, `collect_set`.
+- **Grouping:** `ROLLUP`, `CUBE`, `GROUPING SETS`.
+- **Comparison:** null-safe equality (`<=>`, `IS NOT DISTINCT FROM`).
+- **Frame operations:** `fill_null`, `drop_nulls`, `unique(keep=)`, `sample`, `with_row_index`, `describe`, `concat(how="diagonal")`.
+- **JSON and CSV:** NDJSON and JSON files are read and written. CSV takes quoting, null values, comment and type-override options, and multi-line quoted fields are split safely in parallel.
+- **Overflow:** an integer `sum` that overflows raises an error instead of wrapping.
+
+### Request Costs (S3 / Cloudflare R2)
+Each query reports the storage requests it made (`profile()["requests"]`, `wh.storage_requests()`). What keeps the count low:
+- consecutive row groups and column chunks are fetched together;
+- a footer, and a file up to 512 KB, arrive in one GET;
+- footers are cached per file version, and listings for 30 s;
+- partitioned tables read only the footers of files that survive pruning.
+
+For R2, set `{"endpoint": "https://<account>.r2.cloudflarestorage.com", "region": "auto"}` as the bucket's storage options. `LazyFrame.analyze()` and `EXPLAIN ANALYZE` give per-operator rows and time.
+
 ---
 
 ## Workhouse Studio
