@@ -1,7 +1,7 @@
 import type { Cell, CellStatus, NotebookView } from "@workhouse/protocol";
 import { describe, expect, it } from "vitest";
 
-import { initialState, isStale, makeCell, nextResultName, notebookReducer, totalElapsed, type NotebookAction, type NotebookState } from "./notebookState";
+import { initialState, isStale, makeCell, newCellId, nextResultName, notebookReducer, totalElapsed, type NotebookAction, type NotebookState } from "./notebookState";
 
 const st = (cell_id: string, status: CellStatus, elapsed_ms: number | null = null): NotebookAction => ({
   type: "cell.state",
@@ -97,10 +97,54 @@ describe("notebook state", () => {
     expect(s.lastRun?.computeMs).toBe(50);
   });
 
+  it("clears the outputs of chosen cells and keeps the last run", () => {
+    let s = notebookReducer(state(), { type: "run", cells: state().cells, at: 0 });
+    s = notebookReducer(s, st("a", "done", 120));
+    s = notebookReducer(s, st("b", "done", 30));
+    s = notebookReducer(s, { type: "finished", at: 200 });
+    const lastRun = s.lastRun;
+    s = notebookReducer(s, { type: "progress", data: { cell_id: "a", queries: [] } });
+    s = notebookReducer(s, { type: "clearOutputs", cells: ["a"] });
+    expect(s.states.a).toEqual({ status: "idle", stale: false, output: null, streams: [], elapsed_ms: null });
+    expect(s.states.b.status).toBe("done");
+    expect(s.progress).toEqual({});
+    expect(s.lastRun).toBe(lastRun);
+    expect(totalElapsed(s)).toBe(30);
+  });
+
+  it("keeps outputs after a restart, shown as stale", () => {
+    let s = notebookReducer(state(), { type: "run", cells: state().cells, at: 0 });
+    s = notebookReducer(s, st("a", "done", 120));
+    s = notebookReducer(s, { type: "finished", at: 200 });
+    s = notebookReducer(s, { type: "restarted" });
+    expect(s.states.a.status).toBe("done");
+    expect(s.states.a.stale).toBe(true);
+    expect(isStale(s, s.cells[0])).toBe(true);
+    expect(s.running).toBe(false);
+  });
+
+  it("clears every cell's outputs but leaves running cells as they are", () => {
+    let s = notebookReducer(state(), { type: "run", cells: state().cells, at: 0 });
+    s = notebookReducer(s, st("a", "running"));
+    s = notebookReducer(s, { type: "clearOutputs", cells: null });
+    expect(s.states.a.status).toBe("running");
+    expect(s.states.b.status).toBe("idle");
+    expect(s.states.b.output).toBeNull();
+  });
+
   it("names SQL results uniquely", () => {
     const cells = [{ ...cell("s1", "", "sql"), output: "df_1" }, { ...cell("s2", "", "sql"), output: "df_3" }];
     expect(nextResultName(cells)).toBe("df_2");
     expect(makeCell("sql", cells).output).toBe("df_2");
     expect(makeCell("python", cells).output).toBeNull();
+  });
+});
+
+describe("newCellId", () => {
+  it("makes 8 characters of a-z and 0-9, as the kernel does (they are written in the notebook file)", () => {
+    const ids = Array.from({ length: 100 }, newCellId);
+    for (const id of ids) expect(id).toMatch(/^[a-z0-9]{8}$/);
+    expect(new Set(ids).size).toBe(100);
+    expect(makeCell("python", []).id).toMatch(/^[a-z0-9]{8}$/);
   });
 });

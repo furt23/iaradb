@@ -11,7 +11,9 @@ A cell is one of three kinds:
 
 from __future__ import annotations
 
-import uuid
+import re
+import secrets
+import string
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -20,8 +22,19 @@ CellKind = Literal["python", "sql", "markdown"]
 CELL_KINDS: tuple[str, ...] = ("python", "sql", "markdown")
 
 
+#: ids are stable: they are written in the file (``@app.cell(id="...")``) and linked to (``#cell-<id>``)
+_ID_ALPHABET = string.ascii_lowercase + string.digits
+_VALID_ID = re.compile(r"[A-Za-z0-9_-]{1,32}")
+#: the id of the ``with app.setup:`` cell
+SETUP_CELL_ID = "setup"
+
+
 def new_cell_id() -> str:
-    return uuid.uuid4().hex[:10]
+    return "".join(secrets.choice(_ID_ALPHABET) for _ in range(8))
+
+
+def is_valid_cell_id(value: object) -> bool:
+    return isinstance(value, str) and _VALID_ID.fullmatch(value) is not None
 
 
 @dataclass

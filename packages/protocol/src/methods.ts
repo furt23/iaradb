@@ -5,8 +5,8 @@
 
 import type { Completions, Diagnostic, SignatureHelp } from "./assist";
 import type { Cell, CellKind, CellOutput, CellState, NotebookView, RunResult, Variable } from "./notebook";
-import type { ExplainResult, QueryProfile } from "./query";
-import type { ResultPage, SortKey } from "./results";
+import type { ExplainResult, QueryAnalysis, QueryProfile } from "./query";
+import type { ChartData, ChartSpec, ResultPage, SortKey } from "./results";
 import type { HistoryEntry, KernelInfo, TableInfo, TableRef } from "./workspace";
 
 type Empty = Record<string, never>;
@@ -31,14 +31,18 @@ export interface KernelMethods {
   /** the open notebook's file moved: same state under the new path */
   "notebook.rename": [{ path: string }, NotebookView];
   "notebook.save": [{ cells: Cell[]; persist?: boolean }, NotebookSource];
-  "notebook.run": [{ cells: Cell[]; cell_ids: string[] | null }, RunResult];
+  /** `cells: null` runs the notebook as opened (a job) */
+  "notebook.run": [{ cells: Cell[] | null; cell_ids: string[] | null }, RunResult];
   "notebook.variables": [Empty, Variable[]];
+  /** `cells: null`: every cell. Their outputs go back to idle; values stay */
+  "notebook.clear": [{ path: string; cells: string[] | null }, { cleared: number }];
   /** null when a newer request for the same cell superseded this one */
   "assist.complete": [{ code: string; cursor: number; cell_id: string }, Completions | null];
   "assist.signature": [{ code: string; cursor: number; cell_id: string }, SignatureHelp | null];
   "assist.lint": [{ code: string; kind: CellKind; cell_id: string }, Diagnostic[] | null];
   interrupt: [Empty, { interrupted: boolean }];
   "result.page": [{ result_id: string; offset: number; limit: number; sort?: SortKey[] }, ResultPage];
+  "result.chart": [{ result_id: string; spec: ChartSpec }, ChartData];
   "result.export": [{ result_id: string; format: "csv" | "parquet"; name?: string }, { path: string }];
   /** a chunk of an exported file (base64): downloads from remote kernels */
   "file.read": [{ path: string; offset?: number; length?: number }, { data: string; size: number; eof: boolean }];
@@ -48,9 +52,11 @@ export interface KernelMethods {
   "catalog.schema": [Empty, Record<string, { name: string; type: string }[]>];
   "catalog.preview": [{ name: string; limit?: number }, CellOutput];
   /** `entry`: the table's workhouse.toml section (the Studio appends it when `persist: false`) */
-  "catalog.add": [{ name: string; path: string; format?: "parquet" | "csv"; persist?: boolean }, TableRef & { entry: string }];
+  "catalog.add": [{ name: string; path: string; format?: "parquet" | "csv" | "json"; persist?: boolean }, TableRef & { entry: string }];
   "sql.run": [{ query: string; source?: string }, CellOutput];
   "sql.explain": [{ query: string }, ExplainResult];
+  /** runs the query with profiling; the rows are counted, not returned */
+  "sql.analyze": [{ query: string }, QueryAnalysis];
   "history.list": [{ limit?: number }, HistoryEntry[]];
   shutdown: [Empty, { ok: boolean }];
 }
@@ -74,11 +80,25 @@ export interface ProgressEvent {
   queries: QueryProfile[];
 }
 
+/**
+ * A statement (`CREATE TABLE ... AS`, `DROP TABLE`) changed the catalog: the
+ * table's new `workhouse.toml` section (null: it was dropped). The Studio,
+ * which owns the file, applies it.
+ */
+export interface CatalogChange {
+  /** the display name: `orders`, `tpch.lineitem`, or a schema's name */
+  name: string;
+  entry: string | null;
+  /** what `name` is: a table (the default) or a schema (`[schemas.<name>]`) */
+  kind?: "table" | "schema";
+}
+
 export interface KernelEvents {
   "kernel.ready": KernelInfo;
   "cell.state": CellStateEvent;
   "cell.stream": CellStreamEvent;
   progress: ProgressEvent;
+  "catalog.changed": CatalogChange;
 }
 
 export type KernelEventName = keyof KernelEvents;

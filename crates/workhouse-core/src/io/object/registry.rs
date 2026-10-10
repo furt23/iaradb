@@ -2,19 +2,30 @@
 //! storage options by URL prefix (`s3://bucket` or `s3://bucket/some/prefix`).
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 
 use object_store::ObjectStore;
 use object_store::memory::InMemory;
 use parking_lot::{Mutex, RwLock};
 
+use super::counting::CountingStore;
 use crate::error::{Result, WhError};
 use crate::io::location::ObjectUrl;
 use crate::io::options::StorageOptions;
 
 type StoreKey = (String, StorageOptions);
 
-static STORES: LazyLock<Mutex<HashMap<StoreKey, Arc<dyn ObjectStore>>>> = LazyLock::new(Default::default);
+/// A built store. Its `id` tells it from every other store the registry
+/// ever built (a rebuilt store gets a new one), for cache keys.
+#[derive(Clone)]
+pub struct Store {
+    pub store: Arc<dyn ObjectStore>,
+    pub id: u64,
+}
+
+static STORES: LazyLock<Mutex<HashMap<StoreKey, Store>>> = LazyLock::new(Default::default);
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 static DEFAULTS: LazyLock<RwLock<Vec<(String, StorageOptions)>>> = LazyLock::new(Default::default);
 static MEMORY: LazyLock<Mutex<HashMap<String, Arc<InMemory>>>> = LazyLock::new(Default::default);
 
@@ -40,9 +51,12 @@ pub fn storage_options_for(url: &str) -> StorageOptions {
         .unwrap_or_default()
 }
 
-/// Forget built stores (e.g. after credentials changed); defaults stay.
+/// Forget built stores (e.g. after credentials changed), and what was cached
+/// from them; defaults stay.
 pub fn clear_object_stores() {
     STORES.lock().clear();
+    super::list_cache::clear();
+    crate::io::parquet::meta_cache::clear();
 }
 
 /// The in-memory store behind `memory://<name>/...` (tests, scratch data).
@@ -52,18 +66,23 @@ pub fn memory_store(name: &str) -> Arc<InMemory> {
 
 /// The store serving `url`: `explicit` options over the prefix defaults over
 /// the environment (`AWS_*` variables, then the instance profile).
-pub fn store(url: &ObjectUrl, explicit: &StorageOptions) -> Result<Arc<dyn ObjectStore>> {
+pub fn open(url: &ObjectUrl, explicit: &StorageOptions) -> Result<Store> {
     let options = explicit.over(&storage_options_for(&url.to_string()));
     let key = (url.root(), options);
     if let Some(s) = STORES.lock().get(&key) {
         return Ok(s.clone());
     }
-    let built: Arc<dyn ObjectStore> = match url.scheme.as_str() {
+    let raw: Arc<dyn ObjectStore> = match url.scheme.as_str() {
         "memory" => memory_store(&url.bucket),
         "s3" => build_s3(url, &key.1)?,
         other => return Err(WhError::Storage(format!("unsupported storage scheme '{other}://'"))),
     };
+    let built = Store { store: CountingStore::wrap(raw, &key.0), id: NEXT_ID.fetch_add(1, Ordering::Relaxed) };
     Ok(STORES.lock().entry(key).or_insert(built).clone())
+}
+
+pub fn store(url: &ObjectUrl, explicit: &StorageOptions) -> Result<Arc<dyn ObjectStore>> {
+    open(url, explicit).map(|s| s.store)
 }
 
 #[cfg(feature = "s3")]

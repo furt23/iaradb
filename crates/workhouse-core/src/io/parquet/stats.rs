@@ -12,6 +12,7 @@ use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 
 use super::decode::{chunk_ranges, reader};
 use super::file::ParquetFile;
+use super::sample_cache;
 use crate::io::ColumnStats;
 
 /// Distinct count of a string column, extrapolated from its first row
@@ -19,6 +20,13 @@ use crate::io::ColumnStats;
 /// unique-ish ones scale with the table size.
 pub fn sample_ndv(files: &[Arc<ParquetFile>], column: usize, table_rows: usize) -> Option<f64> {
     let f = files.first()?;
+    let (distinct, rows) = sample_cache::get_or_compute(f.blob.object().map(|o| o.version_key()), column, || sample(f, column))?;
+    let (d, n) = (distinct as f64, rows as f64);
+    Some(if d < n * 0.5 { d } else { d / n * table_rows as f64 })
+}
+
+/// (distinct values, rows) among the first rows of the file's first row group.
+fn sample(f: &ParquetFile, column: usize) -> Option<(usize, usize)> {
     if f.meta.metadata().num_row_groups() == 0 {
         return None;
     }
@@ -34,11 +42,14 @@ pub fn sample_ndv(files: &[Arc<ParquetFile>], column: usize, table_rows: usize) 
         n += hashes.len();
         seen.extend(hashes);
     }
-    if n == 0 {
-        return None;
-    }
-    let d = seen.len() as f64;
-    Some(if d < n as f64 * 0.5 { d } else { d / n as f64 * table_rows as f64 })
+    (n > 0).then_some((seen.len(), n))
+}
+
+/// Whether [`ndv`] of the column reads the statistics of every file (a
+/// sample of the first one answers for strings).
+pub fn reads_all_files(schema: &SchemaRef, column: usize) -> bool {
+    let dt = schema.field(column).data_type();
+    dt.is_integer() || matches!(dt, DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _))
 }
 
 /// Distinct-count estimate: from a sample for strings, and an upper bound

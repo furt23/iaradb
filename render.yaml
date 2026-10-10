@@ -1,0 +1,49 @@
+# Render Blueprint for the Workhouse monorepo (pnpm workspace).
+# Both services install from the repo root so workspace packages resolve.
+services:
+  # Public Python API docs (Starlight / Astro, static output).
+  - type: web
+    name: workhouse-docs
+    runtime: static
+    branch: master
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @workhouse/docs build
+    staticPublishPath: apps/docs/dist
+    buildFilter:
+      paths:
+        - apps/docs/**
+
+  # Workhouse Studio (Next.js 16 App Router, Node server).
+  - type: web
+    name: workhouse-studio
+    runtime: node
+    branch: master
+    plan: starter # persistent disk below needs a paid plan
+    region: oregon
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @workhouse/web build
+    # Render injects $PORT; next start is run via the workspace package so the port is not hardcoded.
+    startCommand: pnpm --filter @workhouse/web exec next start --hostname 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    buildFilter:
+      paths:
+        - apps/web/**
+        - packages/**
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: WORKHOUSE_WORKSPACE
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_REGION
+        sync: false
+      - key: WORKHOUSE_STUDIO_DATA
+        sync: false
+    # Studio data dir. Requires a paid instance type (set above).
+    disk:
+      name: studio-data
+      mountPath: /var/data/workhouse
+      sizeGB: 1
+    # TODO: the Studio runs Python kernels that need the workhouse wheel.
+    # The native Node runtime may not provide that; a Docker-based service may be needed later.

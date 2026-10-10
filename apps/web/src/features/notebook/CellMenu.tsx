@@ -2,7 +2,9 @@
 
 import ArrowDownward from "@mui/icons-material/ArrowDownward";
 import ArrowUpward from "@mui/icons-material/ArrowUpward";
+import ClearAll from "@mui/icons-material/ClearAll";
 import DeleteOutline from "@mui/icons-material/DeleteOutlineOutlined";
+import LinkOutlined from "@mui/icons-material/LinkOutlined";
 import MoreVert from "@mui/icons-material/MoreVert";
 import UnfoldLess from "@mui/icons-material/UnfoldLess";
 import UnfoldMore from "@mui/icons-material/UnfoldMore";
@@ -21,10 +23,12 @@ export interface CellMenuProps {
   onMove(delta: -1 | 1): void;
   onToggleHidden(): void;
   onToggleOutput(): void;
+  onClearOutput?(): void;
+  onCopyLink?(): void;
   onDelete(): void;
 }
 
-export function CellMenu({ hidden, hasOutput, outputHidden, onMove, onToggleHidden, onToggleOutput, onDelete }: CellMenuProps) {
+export function CellMenu({ hidden, hasOutput, outputHidden, onMove, onToggleHidden, onToggleOutput, onClearOutput, onCopyLink, onDelete }: CellMenuProps) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const close = (fn: () => void) => () => {
     setAnchor(null);
@@ -58,6 +62,22 @@ export function CellMenu({ hidden, hasOutput, outputHidden, onMove, onToggleHidd
               {outputHidden ? <UnfoldMore fontSize="small" /> : <UnfoldLess fontSize="small" />}
             </ListItemIcon>
             {outputHidden ? "Show output" : "Hide output"}
+          </MenuItem>
+        )}
+        {hasOutput && onClearOutput && (
+          <MenuItem onClick={close(onClearOutput)}>
+            <ListItemIcon>
+              <ClearAll fontSize="small" />
+            </ListItemIcon>
+            Clear output
+          </MenuItem>
+        )}
+        {onCopyLink && (
+          <MenuItem onClick={close(onCopyLink)}>
+            <ListItemIcon>
+              <LinkOutlined fontSize="small" />
+            </ListItemIcon>
+            Copy link to cell
           </MenuItem>
         )}
         <MenuItem onClick={close(onDelete)} sx={{ color: "error.main" }}>

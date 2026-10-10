@@ -150,6 +150,24 @@ class NotebookService:
                 marimo_io.write(nb)
         return {"path": nb.path.relative_to(self.ws.root).as_posix(), "source": source}
 
+    def clear(self, rel: str, cells: list[str] | None) -> dict[str, Any]:
+        """Outputs of ``cells`` (every cell when None) go back to idle, so a
+        reload does not bring them back. Values stay. Queued and running cells
+        keep their state: their output is still coming. Nothing is cleared
+        unless ``rel`` is the open notebook."""
+        path = resolve_in(self.ws.root, rel)
+        with self._lock:
+            if self.notebook is None or self.notebook.path != path:
+                return {"cleared": 0}
+            cleared = 0
+            for cid in list(self.states) if cells is None else cells:
+                s = self.states.get(cid)
+                if s is None or s.status in ("queued", "running"):
+                    continue
+                s.status, s.output, s.streams, s.elapsed_ms = "idle", None, [], None
+                cleared += 1
+        return {"cleared": cleared}
+
     # -- execution -----------------------------------------------------------
     def _needs_run(self, cell: Cell) -> bool:
         s = self.states.get(cell.id)

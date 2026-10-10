@@ -13,7 +13,7 @@ export function ThemeToggle() {
   const next = current === "dark" ? "light" : "dark";
   return (
     <Tooltip title={`Switch to ${next} theme`} placement="right">
-      <IconButton onClick={() => setMode(next)} aria-label="toggle theme" sx={{ color: "text.secondary" }}>
+      <IconButton onClick={() => setMode(next)} aria-label="toggle theme" sx={{ width: 40, height: 36, borderRadius: 2, color: "text.secondary" }}>
         {current === "dark" ? <LightModeOutlined fontSize="small" /> : <DarkModeOutlined fontSize="small" />}
       </IconButton>
     </Tooltip>

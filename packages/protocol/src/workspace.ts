@@ -4,7 +4,7 @@ export interface TableRef {
   name: string;
   /** relative to the workspace root when inside it */
   path: string;
-  format: "parquet" | "csv";
+  format: "parquet" | "csv" | "json";
 }
 
 export interface ColumnStats {
@@ -34,6 +34,8 @@ export interface KernelInfo {
   root: string;
   name: string;
   tables: TableRef[];
+  /** `main` first (absent from older kernels) */
+  schemas?: string[];
 }
 
 export interface HistoryEntry {

@@ -46,6 +46,10 @@ export type NotebookAction =
   | { type: "run"; cells: Cell[]; at: number }
   | { type: "finished"; at: number }
   | { type: "reset" }
+  /** the kernel restarted: values are gone, outputs stay (shown as stale) */
+  | { type: "restarted" }
+  /** `cells: null`: every cell */
+  | { type: "clearOutputs"; cells: string[] | null }
   | { type: "cell.state"; data: CellStateEvent }
   | { type: "cell.stream"; data: CellStreamEvent }
   | { type: "progress"; data: ProgressEvent };
@@ -108,8 +112,12 @@ export function isStale(state: NotebookState, cell: Cell): boolean {
   return !!s && (s.status === "done" || s.status === "error") && state.runCode[cell.id] !== cell.code;
 }
 
+const ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
+
+/** A cell id: 8 characters of a-z and 0-9. Written in the notebook file, so it is also what a link to the cell names. */
 export function newCellId(): string {
-  return Math.random().toString(16).slice(2, 12).padEnd(10, "0");
+  const bytes = crypto.getRandomValues(new Uint8Array(8));
+  return Array.from(bytes, (b) => ID_ALPHABET[b % ID_ALPHABET.length]).join("");
 }
 
 /** An unused `df_<n>` name for a new SQL cell's result. */
@@ -163,6 +171,28 @@ export function notebookReducer(state: NotebookState, action: NotebookAction): N
     }
     case "reset":
       return { ...state, running: false, progress: {}, runCode: {}, states: {}, current: null, lastRun: null };
+    case "restarted": {
+      const states: Record<string, CellState> = {};
+      const runCode: Record<string, string> = {};
+      for (const [id, s] of Object.entries(state.states)) {
+        if (s.status !== "done" && s.status !== "error") continue;
+        states[id] = { ...s, stale: true };
+        runCode[id] = STALE_MARK;
+      }
+      return { ...state, running: false, progress: {}, runCode, states, current: null };
+    }
+    case "clearOutputs": {
+      const states = { ...state.states };
+      let progress = state.progress;
+      for (const id of action.cells ?? state.cells.map((c) => c.id)) {
+        const s = states[id];
+        // queued and running cells keep their state: their output is still coming
+        if (!s || s.status === "queued" || s.status === "running") continue;
+        states[id] = IDLE;
+        progress = omit(progress, id);
+      }
+      return { ...state, states, progress };
+    }
     case "cell.state": {
       const { cell_id, ...cellState } = action.data;
       const runCode = { ...state.runCode };

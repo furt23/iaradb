@@ -8,14 +8,11 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 
 use crate::error::{Result, WhError};
-use crate::exec::aggregate::{AggregateExpr, AggregateSink};
-use crate::exec::join::{BuildSide, HashJoinProbe, JoinBuildSink, NestedLoopJoin, concat_parallel, joined_schema};
-use crate::exec::join_spill::{GraceJoin, GraceJoinSource, PartitionSink};
-use crate::exec::ops::{FilterOp, ProjectOp, nullable_schema};
-use crate::exec::pipeline::{CollectSink, MemorySource, NullSink, Pipeline, Source, UnionSource, run_pipeline};
-use crate::exec::sort::SortSink;
-use crate::exec::stream::{Emitter, StreamSink};
-use crate::exec::window::{WindowFunctionExpr, WindowSink, WindowSpec, Windowed};
+use crate::exec::aggregate::AggregateExpr;
+use crate::exec::join::joined_schema;
+use crate::exec::ops::nullable_schema;
+use crate::exec::pipeline::Source;
+use crate::exec::window::{WindowFunctionExpr, WindowSpec};
 use crate::io::work_table::WorkTable;
 use crate::expr::{AggFunc, Expr, Operator, SortExpr, WindowFunc, split_conjunction};
 use crate::logical::{JoinType, LogicalPlan};
@@ -23,6 +20,8 @@ use crate::physical::expr::{PhysExpr, PhysSortExpr, cast_expr, create_physical_e
 use crate::scalar::Scalar;
 use crate::schema::PlanSchema;
 use crate::types::comparison_common;
+
+pub use crate::physical::execute::{execute, execute_stream};
 
 /// A physical plan node for display: operator kind, its full description,
 /// the role it plays for its parent (`probe` / `build` of a join) and inputs.
@@ -66,6 +65,7 @@ pub enum PhysicalPlan {
     Union { inputs: Vec<PhysicalPlan>, schema: SchemaRef },
     Values { batches: Vec<RecordBatch>, schema: SchemaRef },
     Window { input: Box<PhysicalPlan>, specs: Vec<WindowSpec>, schema: SchemaRef },
+    Unnest { input: Box<PhysicalPlan>, exprs: Vec<PhysExpr>, keep_empty: bool, schema: SchemaRef },
     RecursiveQuery {
         static_term: Box<PhysicalPlan>,
         recursive_term: Box<PhysicalPlan>,
@@ -89,12 +89,13 @@ impl PhysicalPlan {
             | PhysicalPlan::Union { schema, .. }
             | PhysicalPlan::Values { schema, .. }
             | PhysicalPlan::Window { schema, .. }
+            | PhysicalPlan::Unnest { schema, .. }
             | PhysicalPlan::RecursiveQuery { schema, .. } => schema.clone(),
             PhysicalPlan::Limit { input, .. } => input.schema(),
         }
     }
 
-    fn children(&self) -> Vec<&PhysicalPlan> {
+    pub(crate) fn children(&self) -> Vec<&PhysicalPlan> {
         match self {
             PhysicalPlan::Source { .. } | PhysicalPlan::Values { .. } => vec![],
             PhysicalPlan::Filter { input, .. }
@@ -102,13 +103,33 @@ impl PhysicalPlan {
             | PhysicalPlan::Aggregate { input, .. }
             | PhysicalPlan::Sort { input, .. }
             | PhysicalPlan::Limit { input, .. }
-            | PhysicalPlan::Window { input, .. } => vec![input],
+            | PhysicalPlan::Window { input, .. }
+            | PhysicalPlan::Unnest { input, .. } => vec![input],
             PhysicalPlan::RecursiveQuery { static_term, recursive_term, .. } => vec![static_term, recursive_term],
             PhysicalPlan::HashJoin { probe, build, .. } | PhysicalPlan::NestedLoopJoin { probe, build, .. } => {
                 vec![probe, build]
             }
             PhysicalPlan::Union { inputs, .. } => inputs.iter().collect(),
         }
+    }
+
+    /// Nodes of the plan, as `tree` lists them.
+    pub fn node_count(&self) -> usize {
+        1 + self.children().iter().map(|c| c.node_count()).sum::<usize>()
+    }
+
+    /// The ids of the children of node `id`, numbering nodes in pre-order
+    /// as `tree` lists them.
+    pub(crate) fn child_ids(&self, id: usize) -> Vec<usize> {
+        let mut next = id + 1;
+        self.children()
+            .iter()
+            .map(|c| {
+                let at = next;
+                next += c.node_count();
+                at
+            })
+            .collect()
     }
 
     fn line(&self) -> String {
@@ -148,6 +169,9 @@ impl PhysicalPlan {
             PhysicalPlan::Union { .. } => "Union".into(),
             PhysicalPlan::Values { batches, .. } => {
                 format!("Values: {} rows", batches.iter().map(|b| b.num_rows()).sum::<usize>())
+            }
+            PhysicalPlan::Unnest { exprs, keep_empty, .. } => {
+                format!("Unnest: {}{}", join(exprs), if *keep_empty { " (keep empty)" } else { "" })
             }
             PhysicalPlan::Window { specs, .. } => {
                 format!("Window: {}", specs.iter().map(|s| format!("[{}]", s.describe())).collect::<Vec<_>>().join(" "))
@@ -198,6 +222,7 @@ impl PhysicalPlan {
             PhysicalPlan::Union { .. } => "Union".into(),
             PhysicalPlan::Values { .. } => "Values".into(),
             PhysicalPlan::Window { .. } => "Window".into(),
+            PhysicalPlan::Unnest { .. } => "Unnest".into(),
             PhysicalPlan::RecursiveQuery { .. } => "RecursiveQuery".into(),
         }
     }
@@ -495,6 +520,10 @@ pub fn cardinality(plan: &LogicalPlan) -> (f64, f64) {
         LogicalPlan::Union(u) => (u.inputs.iter().map(|i| estimate_rows(i)).sum(), 1.0),
         LogicalPlan::Values(v) => (v.batches.iter().map(|b| b.num_rows()).sum::<usize>() as f64, 1.0),
         LogicalPlan::Window(w) => cardinality(&w.input),
+        LogicalPlan::Unnest(u) => {
+            let (b, s) = cardinality(&u.input);
+            (b * 8.0, s)
+        }
         LogicalPlan::RecursiveQuery(r) => {
             let n = estimate_rows(&r.static_term) * 10.0;
             (r.fetch.map_or(n, |f| n.min(f as f64)), 1.0)
@@ -603,18 +632,29 @@ pub fn create_physical_plan(plan: &LogicalPlan) -> Result<PhysicalPlan> {
                 .map(|f| Field::new(f.name(), f.field.data_type().clone(), true))
                 .collect();
             for (i, ae) in a.aggs.iter().enumerate() {
-                let Expr::Agg { func, args, distinct, filter } = ae.unalias_ref() else {
+                let Expr::Agg { func, args, distinct, filter, order_by } = ae.unalias_ref() else {
                     return Err(WhError::Plan(format!("not an aggregate: {ae}")));
                 };
                 let mut pargs = args.iter().map(|x| compile(x, in_schema)).collect::<Result<Vec<_>>>()?;
+                // order keys follow the value
+                let mut order = vec![];
+                for o in order_by {
+                    pargs.push(compile(&o.expr, in_schema)?);
+                    order.push(arrow::compute::SortOptions { descending: o.descending, nulls_first: o.nulls_first });
+                }
                 if let Some(first) = pargs.first_mut() {
                     let t = first.data_type();
                     if t == DataType::Boolean && matches!(func, AggFunc::Sum | AggFunc::Mean) {
                         *first = cast_expr(first.clone(), &DataType::Int64)?;
                     }
                     if t == DataType::Null {
-                        *first = cast_expr(first.clone(), &DataType::Int64)?;
+                        *first = cast_expr(first.clone(), &null_agg_type(*func))?;
                     }
+                }
+                if matches!(func, AggFunc::ArrayAgg | AggFunc::CollectList | AggFunc::CollectSet) {
+                    // lists hold plain strings (no views): cast the value once
+                    let elem = crate::nested::canonical_element(&pargs[0].data_type());
+                    pargs[0] = cast_expr(pargs[0].clone(), &elem)?;
                 }
                 let input_type = pargs.first().map(|p| p.data_type());
                 let out_type = a.schema.field(a.group_by.len() + i).data_type().clone();
@@ -631,6 +671,7 @@ pub fn create_physical_plan(plan: &LogicalPlan) -> Result<PhysicalPlan> {
                     filter: pfilter,
                     input_type,
                     name,
+                    order,
                 });
             }
             PhysicalPlan::Aggregate {
@@ -670,6 +711,12 @@ pub fn create_physical_plan(plan: &LogicalPlan) -> Result<PhysicalPlan> {
             PhysicalPlan::Values { batches: v.batches.clone(), schema: v.schema.arrow_schema().clone() }
         }
         LogicalPlan::Window(w) => plan_window(w)?,
+        LogicalPlan::Unnest(u) => {
+            let input = create_physical_plan(&u.input)?;
+            let exprs = u.exprs.iter().map(|e| compile(e, u.input.schema())).collect::<Result<Vec<_>>>()?;
+            let schema = output_schema(&u.schema, &[]);
+            PhysicalPlan::Unnest { input: Box::new(input), exprs, keep_empty: u.keep_empty, schema }
+        }
         LogicalPlan::RecursiveQuery(r) => PhysicalPlan::RecursiveQuery {
             static_term: Box::new(create_physical_plan(&r.static_term)?),
             recursive_term: Box::new(create_physical_plan(&r.recursive_term)?),
@@ -679,6 +726,14 @@ pub fn create_physical_plan(plan: &LogicalPlan) -> Result<PhysicalPlan> {
             schema: r.work_table.schema_ref(),
         },
     })
+}
+
+/// Type given to an untyped NULL argument of an aggregate.
+fn null_agg_type(func: AggFunc) -> DataType {
+    match func {
+        AggFunc::CountIf | AggFunc::BoolAnd | AggFunc::BoolOr => DataType::Boolean,
+        _ => DataType::Int64,
+    }
 }
 
 /// Group the window functions by (PARTITION BY, ORDER BY): each group sorts
@@ -699,8 +754,10 @@ fn plan_window(w: &crate::logical::Window) -> Result<PhysicalPlan> {
         let mut args = we.args.iter().map(|a| compile(a, in_schema)).collect::<Result<Vec<_>>>()?;
         if let (WindowFunc::Agg(func), Some(first)) = (we.func, args.first_mut()) {
             let t = first.data_type();
-            if (t == DataType::Boolean && matches!(func, AggFunc::Sum | AggFunc::Mean)) || t == DataType::Null {
+            if t == DataType::Boolean && matches!(func, AggFunc::Sum | AggFunc::Mean) {
                 *first = cast_expr(first.clone(), &DataType::Int64)?;
+            } else if t == DataType::Null {
+                *first = cast_expr(first.clone(), &null_agg_type(func))?;
             }
         }
         let field = w.schema.field(n_in + i);
@@ -819,146 +876,5 @@ fn plan_join(j: &crate::logical::Join, _plan: &LogicalPlan) -> Result<PhysicalPl
         schema: out_schema,
         order,
         mark_build,
-    })
-}
-
-// ---------------------------------------------------------------------------
-// execution
-// ---------------------------------------------------------------------------
-
-pub fn execute(plan: &PhysicalPlan) -> Result<Vec<RecordBatch>> {
-    match plan {
-        PhysicalPlan::Aggregate { input, group_exprs, aggs, schema } => {
-            let pipe = build_pipeline(input)?;
-            let sink = AggregateSink::new(group_exprs.clone(), aggs.clone(), schema.clone());
-            run_pipeline(&pipe, &sink)
-        }
-        PhysicalPlan::Sort { input, keys, fetch, schema } => {
-            let pipe = build_pipeline(input)?;
-            run_pipeline(&pipe, &SortSink { keys: keys.clone(), fetch: *fetch, schema: schema.clone() })?.into_batches()
-        }
-        PhysicalPlan::Limit { input, skip, fetch } => {
-            let pipe = build_pipeline(input)?;
-            run_pipeline(&pipe, &CollectSink::with_limit(*skip, *fetch))
-        }
-        PhysicalPlan::Values { batches, .. } => Ok(batches.clone()),
-        PhysicalPlan::Window { input, specs, schema } => {
-            let pipe = build_pipeline(input)?;
-            run_pipeline(&pipe, &WindowSink::new(specs.clone(), schema.clone()))?.into_batches()
-        }
-        PhysicalPlan::RecursiveQuery { static_term, recursive_term, work_table, distinct, fetch, .. } => {
-            let base = execute(static_term)?;
-            crate::exec::recursive::iterate(base, work_table, *distinct, *fetch, || execute(recursive_term))
-        }
-        _ => run_pipeline(&build_pipeline(plan)?, &CollectSink::new()),
-    }
-}
-
-/// Run a plan, handing its batches to `emit` in order as they are produced:
-/// pipelines stream through an order-preserving sink, a sort's runs are
-/// merged straight into `emit`. Only aggregations and window results are
-/// produced whole before being handed out.
-pub fn execute_stream(plan: &PhysicalPlan, emit: Emitter<'_>) -> Result<()> {
-    match plan {
-        PhysicalPlan::Sort { input, keys, fetch, schema } => {
-            let pipe = build_pipeline(input)?;
-            run_pipeline(&pipe, &SortSink { keys: keys.clone(), fetch: *fetch, schema: schema.clone() })?.emit(emit)
-        }
-        PhysicalPlan::Limit { input, skip, fetch } => run_pipeline(&build_pipeline(input)?, &StreamSink::new(emit, *skip, *fetch)),
-        PhysicalPlan::Window { input, specs, schema } => match run_pipeline(&build_pipeline(input)?, &WindowSink::new(specs.clone(), schema.clone()))? {
-            Windowed::Batches(b) => b.into_iter().try_for_each(emit),
-            Windowed::Partitions(p) => run_pipeline(&Pipeline::new(Arc::new(p)), &StreamSink::new(emit, 0, None)),
-        },
-        PhysicalPlan::Aggregate { .. } | PhysicalPlan::Values { .. } | PhysicalPlan::RecursiveQuery { .. } => {
-            execute(plan)?.into_iter().try_for_each(emit)
-        }
-        _ => run_pipeline(&build_pipeline(plan)?, &StreamSink::new(emit, 0, None)),
-    }
-}
-
-fn build_pipeline(plan: &PhysicalPlan) -> Result<Pipeline> {
-    Ok(match plan {
-        PhysicalPlan::Source { source, .. } => Pipeline::new(source.clone()),
-        PhysicalPlan::Filter { input, predicate, projection, .. } => build_pipeline(input)?
-            .with_op(Arc::new(FilterOp { predicate: predicate.clone(), projection: projection.clone() })),
-        PhysicalPlan::Project { input, exprs, schema } => {
-            build_pipeline(input)?.with_op(Arc::new(ProjectOp { exprs: exprs.clone(), schema: schema.clone() }))
-        }
-        PhysicalPlan::HashJoin { probe, build, probe_keys, build_keys, join_type, filter, joined_schema, schema, order, mark_build } => {
-            let build_pipe = build_pipeline(build)?;
-            let track_matches = matches!(join_type, JoinType::Full | JoinType::Right) || *mark_build;
-            let sink = JoinBuildSink::new(build_keys.clone(), build.schema(), track_matches);
-            let table = match run_pipeline(&build_pipe, &sink)? {
-                BuildSide::Table(t) => Arc::new(t),
-                BuildSide::Spilled(build_parts) => {
-                    // grace hash join: the probe side is partitioned like the build side
-                    let probe_sink = PartitionSink::new(probe_keys.clone(), probe.schema(), build_parts.len());
-                    let probe_parts = run_pipeline(&build_pipeline(probe)?, &probe_sink)?;
-                    let join = GraceJoin {
-                        build_keys: build_keys.clone(),
-                        build_schema: build.schema(),
-                        probe_keys: probe_keys.clone(),
-                        join_type: *join_type,
-                        filter: filter.clone(),
-                        joined_schema: joined_schema.clone(),
-                        output_schema: schema.clone(),
-                        order: order.clone(),
-                        mark_build: *mark_build,
-                    };
-                    return Ok(Pipeline::new(Arc::new(GraceJoinSource::new(join, build_parts, probe_parts))));
-                }
-            };
-            let op = Arc::new(HashJoinProbe {
-                table: table.clone(),
-                probe_keys: probe_keys.clone(),
-                join_type: *join_type,
-                filter: filter.clone(),
-                joined_schema: joined_schema.clone(),
-                output_schema: schema.clone(),
-                order: order.clone(),
-                mark_only: *mark_build,
-            });
-            if *mark_build {
-                // run the probe side only to mark matches, then stream the kept build rows
-                run_pipeline(&build_pipeline(probe)?.with_op(op), &NullSink)?;
-                let rows = table.rows_by_match(*join_type == JoinType::Semi)?;
-                return Ok(Pipeline::new(Arc::new(MemorySource::new(rows, schema.clone(), "SemiJoinMarked"))));
-            }
-            build_pipeline(probe)?.with_op(op)
-        }
-        PhysicalPlan::NestedLoopJoin { probe, build, join_type, filter, joined_schema, schema, order } => {
-            let batches = execute(build)?;
-            let bschema = build.schema();
-            let build_batch = if batches.is_empty() {
-                RecordBatch::new_empty(bschema.clone())
-            } else {
-                concat_parallel(&bschema, &batches)?
-            };
-            build_pipeline(probe)?.with_op(Arc::new(NestedLoopJoin {
-                build: build_batch,
-                join_type: *join_type,
-                filter: filter.clone(),
-                joined_schema: joined_schema.clone(),
-                output_schema: schema.clone(),
-                order: order.clone(),
-            }))
-        }
-        PhysicalPlan::Union { inputs, schema } => {
-            let pipes = inputs.iter().map(build_pipeline).collect::<Result<Vec<_>>>()?;
-            Pipeline::new(Arc::new(UnionSource::new(pipes, schema.clone())))
-        }
-        // spilled window partitions are evaluated one per morsel, in the next pipeline
-        PhysicalPlan::Window { input, specs, schema } => match run_pipeline(&build_pipeline(input)?, &WindowSink::new(specs.clone(), schema.clone()))? {
-            Windowed::Batches(b) => Pipeline::new(Arc::new(MemorySource::new(b, schema.clone(), "Materialized"))),
-            Windowed::Partitions(p) => Pipeline::new(Arc::new(p)),
-        },
-        PhysicalPlan::Aggregate { .. }
-        | PhysicalPlan::Sort { .. }
-        | PhysicalPlan::Limit { .. }
-        | PhysicalPlan::Values { .. }
-        | PhysicalPlan::RecursiveQuery { .. } => {
-            let batches = execute(plan)?;
-            Pipeline::new(Arc::new(MemorySource::new(batches, plan.schema(), "Materialized")))
-        }
     })
 }

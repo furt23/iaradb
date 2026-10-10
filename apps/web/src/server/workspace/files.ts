@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { config } from "../config";
 import { normalizeRelative } from "../kernel/keys";
+import { idsFor } from "./fileIds";
 
 export type FileKind = "dir" | "notebook" | "python" | "sql" | "data" | "text" | "other";
 
@@ -13,6 +14,8 @@ export interface FileNode {
   /** workspace-relative, forward slashes */
   path: string;
   kind: FileKind;
+  /** stable id of a notebook or SQL file: what its URL names (survives renames) */
+  id?: string;
   children?: FileNode[];
 }
 
@@ -50,7 +53,7 @@ async function kindOf(file: string, name: string): Promise<FileKind> {
   return "other";
 }
 
-export async function listTree(rel = "", depth = 0, budget = { left: MAX_ENTRIES }): Promise<FileNode[]> {
+async function walk(rel: string, depth: number, budget: { left: number }): Promise<FileNode[]> {
   const dir = resolveWorkspacePath(rel);
   const entries = await fs.readdir(dir, { withFileTypes: true });
   entries.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name));
@@ -60,13 +63,30 @@ export async function listTree(rel = "", depth = 0, budget = { left: MAX_ENTRIES
     if (IGNORED.has(e.name) || (e.name.startsWith(".") && e.name !== ".gitignore")) continue;
     const childRel = rel ? `${rel}/${e.name}` : e.name;
     if (e.isDirectory()) {
-      const children = depth < MAX_DEPTH ? await listTree(childRel, depth + 1, budget) : [];
+      const children = depth < MAX_DEPTH ? await walk(childRel, depth + 1, budget) : [];
       out.push({ name: e.name, path: childRel, kind: "dir", children });
     } else if (e.isFile()) {
       out.push({ name: e.name, path: childRel, kind: await kindOf(path.join(dir, e.name), e.name) });
     }
   }
   return out;
+}
+
+function withIds(nodes: FileNode[]): FileNode[] {
+  return nodes.flatMap((n) => (n.kind === "notebook" || n.kind === "sql" ? [n] : n.children ? withIds(n.children) : []));
+}
+
+/** The workspace's files; notebooks and SQL files carry their stable `id`. */
+export async function listTree(rel = ""): Promise<FileNode[]> {
+  const tree = await walk(rel, 0, { left: MAX_ENTRIES });
+  const files = withIds(tree);
+  try {
+    const ids = idsFor(files.map((n) => n.path));
+    for (const n of files) n.id = ids[n.path];
+  } catch {
+    // the id index cannot be kept: files are opened by path (their URLs are redirected later)
+  }
+  return tree;
 }
 
 export async function readText(rel: string): Promise<{ text: string; truncated: boolean }> {

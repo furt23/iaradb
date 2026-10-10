@@ -1,18 +1,20 @@
 //! CSV scanning (parallel over byte ranges, local or remote) and writing.
 
+pub mod args;
 mod lines;
+mod options;
+pub mod ranges;
 pub mod source;
+mod split;
 mod write;
 
-use std::io::Cursor;
 use std::sync::Arc;
 
-use arrow::csv::reader::Format;
 use arrow::datatypes::SchemaRef;
-use bytes::Bytes;
 
+pub use options::{CsvEncoding, CsvOptions};
 pub use source::CsvSource;
-pub use write::{CsvSink, write_csv, write_csv_with};
+pub use write::{CsvSink, CsvWriteOptions, sink_csv_with, write_csv, write_csv_with};
 
 use crate::error::Result;
 use crate::exec::pipeline::Source;
@@ -20,25 +22,6 @@ use crate::expr::Expr;
 use crate::io::blob::Blob;
 use crate::io::options::StorageOptions;
 use crate::io::{TableProvider, list_files};
-use source::ByteRange;
-
-#[derive(Debug, Clone)]
-pub struct CsvOptions {
-    pub has_header: bool,
-    pub delimiter: u8,
-    pub infer_rows: usize,
-    /// Split files into byte ranges (assumes no newlines inside quoted fields).
-    pub parallel: bool,
-    /// Bytes per range (default: enough ranges for every thread, at least
-    /// 4 MiB locally and 8 MiB remotely).
-    pub chunk_bytes: Option<usize>,
-}
-
-impl Default for CsvOptions {
-    fn default() -> Self {
-        Self { has_header: true, delimiter: b',', infer_rows: 10_000, parallel: true, chunk_bytes: None }
-    }
-}
 
 /// Bytes of a remote file read to infer the schema.
 const REMOTE_SAMPLE: u64 = 4 << 20;
@@ -46,9 +29,17 @@ const REMOTE_SAMPLE: u64 = 4 << 20;
 pub struct CsvTable {
     names: Vec<String>,
     files: Arc<Vec<Blob>>,
+    /// The columns of the files (after type overrides).
+    file_schema: SchemaRef,
+    /// The columns the table exposes (`CsvOptions::columns`), as indices of `file_schema`.
+    selected: Option<Vec<usize>>,
     schema: SchemaRef,
+    /// Where the data of each file begins (after `skip_rows`).
+    starts: Vec<usize>,
     options: CsvOptions,
     est_rows: usize,
+    /// Whether the schema sample holds a quote byte (decides how remote files are split).
+    sample_quoted: bool,
 }
 
 impl std::fmt::Debug for CsvTable {
@@ -66,55 +57,35 @@ impl CsvTable {
         let listed = list_files(pattern, "csv", storage)?;
         let names = listed.iter().map(|f| f.name()).collect();
         let files = listed.into_iter().map(Blob::open).collect::<Result<Vec<_>>>()?;
-        let sample = sample(&files[0])?;
-        let fmt = Format::default().with_header(options.has_header).with_delimiter(options.delimiter);
-        let (schema, _) = fmt.infer_schema(Cursor::new(&sample[..]), Some(options.infer_rows))?;
+        let first = ranges::sample(&files[0], REMOTE_SAMPLE)?;
+        let starts = data_starts(&files, &first, options.skip_rows)?;
+        let sample_quoted = files.iter().any(|f| f.object().is_some()) && options.quote != 0 && memchr::memchr(options.quote, &first).is_some();
+        let body = options.decode(first.slice(starts[0]..));
+        let inferred = options::infer(&body, &options)?;
+        let (file_schema, selected, schema) = options::shape(inferred, &options)?;
         // estimate the number of rows from the average length of the first lines
-        let head = &sample[..sample.len().min(1 << 20)];
+        let head = &body[..body.len().min(1 << 20)];
         let lines = head.iter().filter(|&&b| b == b'\n').count().max(1);
         let total: u64 = files.iter().map(|f| f.len()).sum();
         let est_rows = (total as usize) * lines / head.len().max(1);
-        Ok(Self { names, files: Arc::new(files), schema: Arc::new(schema), options, est_rows })
+        Ok(Self { names, files: Arc::new(files), file_schema, selected, schema, starts, options, est_rows, sample_quoted })
     }
 
-    fn byte_ranges(&self) -> Vec<ByteRange> {
-        let threads = rayon::current_num_threads();
-        let total: u64 = self.files.iter().map(|f| f.len()).sum();
-        let remote = self.files.iter().any(|f| f.object().is_some());
-        // remote ranges are larger: fewer requests, each worth its latency
-        let min = if remote { 8 << 20 } else { 4 << 20 };
-        let chunk = self.options.chunk_bytes.unwrap_or((total as usize / (threads * 4)).max(min)).max(1);
-        let mut ranges = vec![];
-        for (fi, f) in self.files.iter().enumerate() {
-            let len = f.len() as usize;
-            if !self.options.parallel {
-                ranges.push(ByteRange { file: fi, start: 0, end: len });
-                continue;
-            }
-            let mut start = 0;
-            while start < len {
-                let end = (start + chunk).min(len);
-                ranges.push(ByteRange { file: fi, start, end });
-                start = end;
-            }
-        }
-        ranges
+    fn byte_ranges(&self) -> Vec<ranges::ByteRange> {
+        split::plan(&self.files, &self.options, &self.starts, self.sample_quoted)
     }
 }
 
-/// The first lines of a file: all of a mapped file, a prefix cut at a line
-/// end for a remote one.
-fn sample(file: &Blob) -> Result<Bytes> {
-    let len = file.len();
-    if let Blob::Mapped(b) = file {
-        return Ok(b.clone());
+/// Where each file's data begins: past `skip_rows` lines.
+fn data_starts(files: &[Blob], first: &bytes::Bytes, skip_rows: usize) -> Result<Vec<usize>> {
+    if skip_rows == 0 {
+        return Ok(vec![0; files.len()]);
     }
-    let s = file.read_range(0..len.min(REMOTE_SAMPLE), None)?;
-    if s.len() as u64 == len {
-        return Ok(s);
+    let mut starts = vec![ranges::skip_lines(first, skip_rows)];
+    for f in &files[1..] {
+        starts.push(ranges::skip_lines(&ranges::sample(f, REMOTE_SAMPLE)?, skip_rows));
     }
-    let end = memchr::memrchr(b'\n', &s).map_or(s.len(), |i| i + 1);
-    Ok(s.slice(..end))
+    Ok(starts)
 }
 
 impl TableProvider for CsvTable {
@@ -128,8 +99,14 @@ impl TableProvider for CsvTable {
         "csv"
     }
     fn create_source(&self, projection: Option<&[usize]>, _filters: &[Expr], _fetch: Option<usize>) -> Result<Arc<dyn Source>> {
-        let projection = projection.map(|p| p.to_vec());
-        let src = CsvSource::new(self.files.clone(), self.schema.clone(), projection, self.byte_ranges(), self.options.clone())?;
-        Ok(Arc::new(src))
+        // table column -> file column
+        let projection: Option<Vec<usize>> = match (projection, &self.selected) {
+            (Some(p), Some(s)) => Some(p.iter().map(|&i| s[i]).collect()),
+            (Some(p), None) => Some(p.to_vec()),
+            (None, Some(s)) => Some(s.clone()),
+            (None, None) => None,
+        };
+        let ranges = ranges::RangedLines::new(self.files.clone(), self.byte_ranges(), self.starts.clone());
+        Ok(Arc::new(CsvSource::new(self.file_schema.clone(), projection, ranges, self.options.clone())?))
     }
 }

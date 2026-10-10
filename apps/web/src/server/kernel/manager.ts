@@ -14,11 +14,14 @@ import { exists } from "../workspace/files";
 import { readNotebookSource, writeNotebookSource } from "../workspace/sources";
 import { bootstrap } from "./bootstrap";
 import { KernelClient, KernelError } from "./client";
-import { notebookKernel, notebookPath, WORKSPACE_KERNEL, type KernelKey } from "./keys";
+import { jobKernel, type KernelKey, notebookKernel, notebookPath, WORKSPACE_KERNEL } from "./keys";
 import { localLauncher } from "./launchers/local";
 import { remoteCommand } from "./launchers/remoteCommand";
 import { ssh2Transport } from "./launchers/ssh2";
 import type { Launcher } from "./launchers/types";
+
+/** how long saves to a renamed notebook's old path follow it to the new one */
+const RENAME_GRACE_MS = 60_000;
 
 export interface KernelStatus {
   key: KernelKey;
@@ -38,11 +41,13 @@ export interface KernelStatus {
  */
 export class KernelManager {
   private readonly kernels = new Map<KernelKey, KernelClient>();
+  /** the cluster of each job run's kernel */
+  private readonly jobClusters = new Map<KernelKey, string>();
   /** notebook kernels whose notebook is open in the kernel */
   private readonly opened = new WeakSet<KernelClient>();
   private readonly clusterOf = new WeakMap<KernelClient, string>();
-  /** notebooks that moved: old path -> new path (late saves of old editors follow them) */
-  private readonly renamed = new Map<string, string>();
+  /** notebooks that moved: old path -> new path and when (late saves of old editors follow them for a while) */
+  private readonly renamed = new Map<string, { to: string; at: number }>();
   private chain: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly cfg: StudioConfig) {
@@ -53,6 +58,9 @@ export class KernelManager {
 
   /** The cluster a kernel runs on: its notebook's attachment, else the default cluster. */
   clusterFor(key: KernelKey): string {
+    const job = this.jobClusters.get(key);
+    if (job) return job;
+    if (key.startsWith("job:")) throw new KernelError("NoCluster", "the job run has no cluster");
     const id = clusters.clusterOf(notebookPath(key));
     if (!id) throw new KernelError("NoCluster", "there is no cluster to run on: create one on the Compute page");
     return id;
@@ -96,6 +104,19 @@ export class KernelManager {
     return this.get(WORKSPACE_KERNEL);
   }
 
+  /** A kernel of its own for a job run, on the run's cluster (its activity keeps the cluster up). */
+  forJob(runId: string, clusterId: string): KernelClient {
+    const key = jobKernel(runId);
+    this.jobClusters.set(key, clusterId);
+    return this.get(key);
+  }
+
+  endJob(runId: string): void {
+    const key = jobKernel(runId);
+    this.restart(key);
+    this.jobClusters.delete(key);
+  }
+
   /** Run notebook file operations (saves, renames, deletes) one at a time. */
   exclusive<T>(fn: () => Promise<T>): Promise<T> {
     const run = this.chain.then(fn, fn);
@@ -105,13 +126,23 @@ export class KernelManager {
 
   /** Where a notebook is now (following renames). */
   currentPath(path: string): string {
-    for (let i = 0; i < 16 && this.renamed.has(path); i++) path = this.renamed.get(path)!;
+    for (let i = 0; i < 16; i++) {
+      const r = this.renamed.get(path);
+      if (!r) break;
+      // only editors still open on the old path save late; later, the old path is free for a new file
+      if (Date.now() - r.at > RENAME_GRACE_MS) {
+        this.renamed.delete(path);
+        break;
+      }
+      path = r.to;
+    }
     return path;
   }
 
   /** The kernel of a notebook, with the notebook open in it (created first when asked). */
   async notebook(path: string, create = false): Promise<{ kernel: KernelClient; view: NotebookView }> {
-    path = this.currentPath(path);
+    if (create) this.renamed.delete(path);
+    else path = this.currentPath(path);
     let view: NotebookView;
     let kernel: KernelClient;
     if (create) {
@@ -153,6 +184,12 @@ export class KernelManager {
     this.restart(notebookKernel(path));
   }
 
+  /** Run a notebook on the default cluster from now on (its kernel restarts there on next use). */
+  detach(path: string): void {
+    clusters.detach(path);
+    this.restart(notebookKernel(path));
+  }
+
   /** Notebooks whose files moved from `from` to `to` (a file or a folder) keep their kernels, state and cluster. */
   async moved(from: string, to: string): Promise<void> {
     clusters.moved((p) => movedPath(p, from, to));
@@ -162,7 +199,7 @@ export class KernelManager {
       if (next === null) continue;
       this.kernels.delete(key);
       this.kernels.set(notebookKernel(next), kernel);
-      this.renamed.set(path!, next);
+      this.renamed.set(path!, { to: next, at: Date.now() });
       if (kernel.alive && this.opened.has(kernel)) await kernel.request("notebook.rename", { path: next });
     }
   }
@@ -192,6 +229,21 @@ export class KernelManager {
     this.kernels.delete(key);
   }
 
+  /**
+   * Restart a kernel and start it again at once: a notebook's reopens its
+   * notebook, the workspace kernel boots. A job run's kernel is not restarted
+   * (its run would lose its state).
+   */
+  async restartNow(key: KernelKey): Promise<void> {
+    if (notebookPath(key) === null && key !== WORKSPACE_KERNEL) {
+      throw new KernelError("JobKernel", "a job run's kernel cannot be restarted: cancel the run instead");
+    }
+    this.restart(key);
+    const path = notebookPath(key);
+    if (path !== null) await this.notebookForRun(path);
+    else await this.get(key).ready;
+  }
+
   status(): KernelStatus[] {
     return [...this.kernels.entries()].map(([key, k]) => ({
       key,
@@ -202,6 +254,11 @@ export class KernelManager {
       startedAt: k.startedAt,
       lastUsed: k.lastUsed,
     }));
+  }
+
+  /** The live kernels on a cluster. */
+  onCluster(clusterId: string): KernelStatus[] {
+    return this.status().filter((k) => k.alive && k.cluster === clusterId);
   }
 
   private reapIdle(): void {

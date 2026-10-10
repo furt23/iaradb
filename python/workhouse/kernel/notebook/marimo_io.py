@@ -10,7 +10,7 @@ the returned tuple the names it defines::
     app = marimo.App(width="medium")
 
 
-    @app.cell
+    @app.cell(id="k3j9x0aq")
     def _(wh):
         ws = wh.workspace()
         return (ws,)
@@ -18,6 +18,10 @@ the returned tuple the names it defines::
 
     if __name__ == "__main__":
         app.run()
+
+Each cell's ``id`` is ours (marimo ignores extra decorator options): it keeps a
+cell addressable across sessions, e.g. in a link to it. The setup cell is
+always ``setup``. A file without ids gets them when it is first saved.
 
 Files stay valid marimo notebooks and plain runnable scripts, and diff well.
 """
@@ -30,7 +34,7 @@ from pathlib import Path
 
 from workhouse.kernel.notebook.codegen import INDENT, detect_markdown, detect_sql, markdown_source, sql_source
 from workhouse.kernel.notebook.graph import DependencyGraph
-from workhouse.kernel.notebook.model import Cell, Notebook, new_cell_id
+from workhouse.kernel.notebook.model import SETUP_CELL_ID, Cell, Notebook, is_valid_cell_id, new_cell_id
 
 FOOTER = 'if __name__ == "__main__":\n    app.run()\n'
 
@@ -84,15 +88,26 @@ def _body_source(fn: ast.FunctionDef | ast.With, lines: list[str], header_end: i
     return textwrap.dedent(text).strip("\n")
 
 
-def _cell_from_code(code: str, name: str, config: dict) -> Cell:
+def _take_id(config: dict, seen: set[str]) -> str:
+    """The id written in a cell's options (removed from them); a fresh one if it is missing, invalid or used."""
+    wanted = config.pop("id", None)
+    cid = wanted if is_valid_cell_id(wanted) and wanted not in seen else new_cell_id()
+    while cid in seen:
+        cid = new_cell_id()
+    seen.add(cid)
+    return cid
+
+
+def _cell_from_code(code: str, name: str, config: dict, seen: set[str]) -> Cell:
+    cid = _take_id(config, seen)
     sql = detect_sql(code)
     if sql is not None:
         query, output = sql
-        return Cell(new_cell_id(), "sql", query, name=name, output=output, config=config)
+        return Cell(cid, "sql", query, name=name, output=output, config=config)
     md = detect_markdown(code)
     if md is not None:
-        return Cell(new_cell_id(), "markdown", md, name=name, config=config)
-    return Cell(new_cell_id(), "python", code, name=name, config=config)
+        return Cell(cid, "markdown", md, name=name, config=config)
+    return Cell(cid, "python", code, name=name, config=config)
 
 
 def _is_app_assign(node: ast.stmt) -> bool:
@@ -120,16 +135,17 @@ def parse(src: str, path: Path) -> Notebook:
     tree = ast.parse(src)
     lines = src.splitlines()
     nb = Notebook(path=path)
+    seen = {SETUP_CELL_ID}
     for node in tree.body:
         if isinstance(node, ast.FunctionDef):
             is_cell, config = _decorator_config(node, src)
             if is_cell:
                 code = _body_source(node, lines, _header_end(node, lines))
-                nb.cells.append(_cell_from_code(code, node.name, config))
+                nb.cells.append(_cell_from_code(code, node.name, config, seen))
                 continue
         if _is_setup(node):
             code = _body_source(node, lines, node.lineno - 1)
-            nb.cells.append(Cell(new_cell_id(), "python", code, name="setup", setup=True))
+            nb.cells.append(Cell(SETUP_CELL_ID, "python", code, name="setup", setup=True))
         elif _is_app_assign(node):
             call = node.value
             if isinstance(call, ast.Call):
@@ -153,11 +169,11 @@ def read(path: Path) -> Notebook:
 # ---------------------------------------------------------------------------
 
 
-def _decorator(config: dict) -> str:
-    if not config:
-        return "@app.cell"
-    args = ", ".join(f"{k}={v!r}" for k, v in config.items())
-    return f"@app.cell({args})"
+def _decorator(cell: Cell) -> str:
+    """``@app.cell(id="...", <options>)``: the id first (one that is not valid is left out)."""
+    args = [f'id="{cell.id}"'] if is_valid_cell_id(cell.id) else []
+    args += [f"{k}={v!r}" for k, v in cell.config.items() if k != "id"]
+    return f"@app.cell({', '.join(args)})" if args else "@app.cell"
 
 
 def _signature(name: str, params: list[str]) -> str:
@@ -201,7 +217,7 @@ def _render_cell(cell: Cell, graph: DependencyGraph, globals_: set[str]) -> str:
         params = ["mo"] if "mo" not in globals_ else []
     defs = sorted(graph.analyses[cell.id].defs)
     body = textwrap.indent(code, INDENT, lambda line: bool(line.strip())) if code.strip() else ""
-    parts = [_decorator(cell.config), _signature(cell.name or "_", params)]
+    parts = [_decorator(cell), _signature(cell.name or "_", params)]
     if body:
         parts.append(body)
     parts.append(INDENT + _returns(defs))

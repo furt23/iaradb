@@ -3,6 +3,7 @@
 import type { CellOutput, PlanNode, QueryProfile, RunStreamEvent } from "@workhouse/protocol";
 import { useCallback, useState } from "react";
 
+import { useCatalogRefresh } from "@/features/data/useCatalogRefresh";
 import { unwrap } from "@/lib/action";
 import { streamEvents } from "@/lib/sse";
 import { interruptKernel } from "@/server/actions/kernels";
@@ -15,14 +16,17 @@ export function useSqlRunner() {
   const [view, setView] = useState<SqlView>(null);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<QueryProfile[]>([]);
+  const refreshCatalog = useCatalogRefresh();
 
   const run = useCallback(async (query: string) => {
     setRunning(true);
     setProgress([]);
+    let catalogChanged = false;
     try {
       await streamEvents("/api/run", { kind: "sql", query }, (e) => {
         const ev = e as RunStreamEvent;
-        if (ev.event === "progress") setProgress(ev.data.queries);
+        if (ev.event === "catalog.changed") catalogChanged = true;
+        else if (ev.event === "progress") setProgress(ev.data.queries);
         else if (ev.event === "done") setView({ kind: "output", output: ev.data as CellOutput });
         else if (ev.event === "failed") setView({ kind: "error", message: ev.data.message });
       });
@@ -31,8 +35,9 @@ export function useSqlRunner() {
     } finally {
       setRunning(false);
       setProgress([]);
+      if (catalogChanged) refreshCatalog();
     }
-  }, []);
+  }, [refreshCatalog]);
 
   const explain = useCallback(async (query: string) => {
     try {

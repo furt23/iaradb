@@ -471,7 +471,8 @@ impl DepStore {
 
     /// Check every row against its group's representative (`gids` are dense
     /// ids in first-occurrence order, so a row of a new group carries the
-    /// next id). Returns false on the first disagreement.
+    /// next id). Returns false on the first disagreement, and on an id past
+    /// the next one (the caller then falls back to keying on these columns).
     fn check(&mut self, array: &ArrayRef, gids: &[u32]) -> bool {
         let nulls = array.nulls().filter(|n| n.null_count() > 0);
         let is_valid = |i: usize| nulls.is_none_or(|n| n.is_valid(i));
@@ -484,6 +485,9 @@ impl DepStore {
                     let g = g as usize;
                     let ok = is_valid(i);
                     let v = &src[i * w..(i + 1) * w];
+                    if g > valid.len() {
+                        return false;
+                    }
                     if g == valid.len() {
                         valid.push(ok);
                         bytes.extend_from_slice(v);
@@ -498,6 +502,9 @@ impl DepStore {
                 for (i, &g) in gids.iter().enumerate() {
                     let v = is_valid(i).then(|| a.value(i));
                     let g = g as usize;
+                    if g > vals.len() {
+                        return false;
+                    }
                     if g == vals.len() {
                         vals.push(v);
                     } else if vals[g] != v {
@@ -509,6 +516,9 @@ impl DepStore {
             DepStore::Bytes { data, offsets, valid, .. } => {
                 let mut step = |g: u32, v: Option<&[u8]>| -> bool {
                     let g = g as usize;
+                    if g > valid.len() {
+                        return false;
+                    }
                     if g == valid.len() {
                         valid.push(v.is_some());
                         data.extend_from_slice(v.unwrap_or_default());
@@ -787,3 +797,6 @@ impl GroupKeys {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod dep_tests;

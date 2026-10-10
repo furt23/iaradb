@@ -1,11 +1,12 @@
 import type { CloudApi } from "./cloud/api";
+import type { ClusterEvent, ClusterEventKind, ClusterEventLog } from "./events";
 import { DEFAULT_AUTO_TERMINATE_MINUTES, DEFAULT_INSTANCE_TYPE, DEFAULT_VOLUME_GB, instanceType, MIN_AUTO_TERMINATE_MINUTES } from "./instanceTypes";
 import type { Identity, StudioState } from "./store";
 import { LOCAL_CLUSTER, type ClusterRecord, type ClusterView } from "./types";
 import { READY_MARKER, userData } from "./userData";
 
 /**
- * Clusters as in Databricks: a configuration the user creates once, and a
+ * On-demand compute clusters: a configuration the user creates once, and a
  * machine that exists only while the cluster runs. Start launches a machine
  * (engine from the artifacts bucket), Terminate releases it, and a cluster
  * without kernel activity for its auto-terminate time is terminated. Many
@@ -37,6 +38,8 @@ export interface ClusterDeps {
   /** buckets the clusters' role must reach (the workspace's) */
   dataBuckets(): Promise<string[]>;
   localCompute: boolean;
+  /** what happened to each cluster */
+  events: ClusterEventLog;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   /** how long to wait for a machine to become ready */
@@ -50,10 +53,21 @@ export interface Activity {
   busy: boolean;
 }
 
+export interface NewCluster {
+  name: string;
+  instanceType?: string;
+  autoTerminateMinutes?: number;
+  volumeGb?: number;
+  job?: string;
+}
+
+/** The reason a user's Terminate gives (the phase the UI shows while it goes on). */
+const USER_STOP = "stopped by the user";
 const SSH_USER = "ec2-user";
 /** a machine powers itself off this long after the Studio would have terminated it */
 const WATCHDOG_GRACE_MINUTES = 5;
 const MAX_MINUTES = 12 * 60;
+const NAME_MAX = 40;
 
 export class ClusterError extends Error {
   constructor(
@@ -103,7 +117,7 @@ export class ClusterService {
   defaultCluster(): string | null {
     const s = this.d.store.read();
     if (s.defaultCluster && (this.exists(s.defaultCluster))) return s.defaultCluster;
-    return this.d.localCompute ? LOCAL_CLUSTER : (s.clusters[0]?.id ?? null);
+    return this.d.localCompute ? LOCAL_CLUSTER : (s.clusters.find((c) => !c.job)?.id ?? null);
   }
 
   private exists(id: string): boolean {
@@ -125,12 +139,33 @@ export class ClusterService {
     const current = s.attachments[notebook];
     if (current && this.exists(current)) return;
     const def = this.defaultCluster();
-    if (def) this.d.store.update((x) => void (x.attachments[notebook] = def));
+    if (def) {
+      this.d.store.update((x) => void (x.attachments[notebook] = def));
+      this.noteAttachment(notebook, undefined, def);
+    }
   }
 
   attach(notebook: string, clusterId: string): void {
     if (!this.exists(clusterId)) throw new ClusterError("UnknownCluster", `unknown cluster ${clusterId}`);
+    const from = this.d.store.read().attachments[notebook];
     this.d.store.update((s) => void (s.attachments[notebook] = clusterId));
+    this.noteAttachment(notebook, from, clusterId);
+  }
+
+  /** The notebook runs on the default cluster from now on. */
+  detach(notebook: string): void {
+    const from = this.d.store.read().attachments[notebook];
+    if (!from) return;
+    this.d.store.update((s) => {
+      delete s.attachments[notebook];
+    });
+    this.log(from, "detached", `${notebook} detached`);
+  }
+
+  private noteAttachment(notebook: string, from: string | undefined, to: string): void {
+    if (from === to) return;
+    if (from) this.log(from, "detached", `${notebook} detached`);
+    this.log(to, "attached", `${notebook} attached`);
   }
 
   /** Moved notebooks keep their clusters (`move` maps an old path to its new one, or null). */
@@ -148,9 +183,15 @@ export class ClusterService {
 
   /** Deleted notebooks lose their attachments. */
   forget(within: (path: string) => boolean): void {
+    const gone: [string, string][] = [];
     this.d.store.update((s) => {
-      for (const path of Object.keys(s.attachments)) if (within(path)) delete s.attachments[path];
+      for (const [path, id] of Object.entries(s.attachments)) {
+        if (!within(path)) continue;
+        delete s.attachments[path];
+        gone.push([path, id]);
+      }
     });
+    for (const [path, id] of gone) this.log(id, "detached", `${path} deleted`);
   }
 
   setDefault(id: string): void {
@@ -158,7 +199,29 @@ export class ClusterService {
     this.d.store.update((s) => void (s.defaultCluster = id));
   }
 
-  create(input: { name: string; instanceType?: string; autoTerminateMinutes?: number; volumeGb?: number }): ClusterRecord {
+  create(input: NewCluster): ClusterRecord {
+    const rec = this.add(input);
+    const job = input.job ? `, job run ${input.job}` : "";
+    this.log(rec.id, "created", `${rec.instanceType}, ${rec.volumeGb} GB, ${rec.autoTerminateMinutes} min idle limit${job}`);
+    return rec;
+  }
+
+  /** A new cluster with the machine and limits of `id` (not started). */
+  clone(id: string): ClusterRecord {
+    const src = this.d.store.cluster(id);
+    if (!src) throw new ClusterError("UnknownCluster", `unknown cluster ${id}`);
+    const taken = this.d.store.read().clusters.map((c) => c.name);
+    const copy = this.add({
+      name: copyName(src.name, taken),
+      instanceType: src.instanceType,
+      autoTerminateMinutes: src.autoTerminateMinutes,
+      volumeGb: src.volumeGb,
+    });
+    this.log(copy.id, "cloned", `copy of ${src.name}`);
+    return copy;
+  }
+
+  private add(input: NewCluster): ClusterRecord {
     const name = input.name.trim();
     if (!/^[A-Za-z0-9][A-Za-z0-9 _.-]{0,39}$/.test(name)) throw new ClusterError("InvalidCluster", "names are 1-40 letters, digits, spaces, _ . -");
     if (this.d.store.read().clusters.some((c) => c.name.toLowerCase() === name.toLowerCase())) {
@@ -172,13 +235,16 @@ export class ClusterService {
       volumeGb: checkedVolume(input.volumeGb ?? DEFAULT_VOLUME_GB),
       createdAt: this.now(),
       runtime: { state: "terminated" },
+      ...(input.job ? { job: input.job } : {}),
     };
     this.d.store.update((s) => void s.clusters.push(record));
     return record;
   }
 
   update(id: string, patch: { name?: string; instanceType?: string; autoTerminateMinutes?: number; volumeGb?: number }): ClusterRecord {
-    return this.d.store.updateCluster(id, (c) => {
+    const before = this.d.store.cluster(id);
+    const snapshot = before ? { ...before } : undefined;
+    const rec = this.d.store.updateCluster(id, (c) => {
       const machineChange = (patch.instanceType && patch.instanceType !== c.instanceType) || (patch.volumeGb && patch.volumeGb !== c.volumeGb);
       if (machineChange && c.runtime.state !== "terminated" && c.runtime.state !== "error") {
         throw new ClusterError("ClusterRunning", "terminate the cluster before changing its machine");
@@ -188,6 +254,9 @@ export class ClusterService {
       if (patch.volumeGb) c.volumeGb = checkedVolume(patch.volumeGb);
       if (patch.autoTerminateMinutes !== undefined) c.autoTerminateMinutes = checkedMinutes(patch.autoTerminateMinutes);
     });
+    const changed = snapshot ? changes(snapshot, rec) : [];
+    if (changed.length) this.log(id, "edited", changed.join(", "));
+    return rec;
   }
 
   remove(id: string): void {
@@ -201,6 +270,20 @@ export class ClusterService {
       for (const [nb, cid] of Object.entries(s.attachments)) if (cid === id) delete s.attachments[nb];
       if (s.defaultCluster === id) delete s.defaultCluster;
     });
+    this.d.events.forget(id);
+  }
+
+  /** The cluster's event log, newest first. */
+  eventsOf(id: string): ClusterEvent[] {
+    return this.d.events.list(id);
+  }
+
+  private log(id: string, kind: ClusterEventKind, message: string): void {
+    try {
+      this.d.events.record(id, { at: this.now(), kind, message });
+    } catch (e) {
+      console.error(`[clusters] event log of ${id}: ${(e as Error).message}`); // logging never fails a lifecycle step
+    }
   }
 
   // -- lifecycle ---------------------------------------------------------------
@@ -223,6 +306,7 @@ export class ClusterService {
     if (c.runtime.state === "terminating") throw new ClusterError("ClusterBusy", "the cluster is still terminating");
     this.cloud();
     const rec = this.d.store.updateCluster(id, (x) => void (x.runtime = { state: "starting", phase: "preparing" }));
+    this.log(id, "start", "start requested");
     this.track(id, this.launch(id));
     return rec;
   }
@@ -231,6 +315,7 @@ export class ClusterService {
     const tracked = job
       .catch((e: Error) => {
         this.d.store.updateCluster(id, (c) => void (c.runtime = { ...c.runtime, state: "error", error: e.message, phase: undefined }));
+        this.log(id, "error", e.message);
         const instance = this.d.store.cluster(id)?.runtime.instanceId;
         if (instance) void this.d.cloud()?.terminate(instance).catch(() => {});
       })
@@ -289,6 +374,7 @@ export class ClusterService {
       await this.sleep(5000);
     }
     this.d.store.updateCluster(id, (x) => void (x.runtime = { ...x.runtime, state: "running", phase: undefined, lastActivity: this.now() }));
+    this.log(id, "running", `machine ${instanceId} running at ${this.d.store.cluster(id)?.runtime.publicIp ?? "no address"}`);
   }
 
   private async engineReady(id: string): Promise<boolean> {
@@ -315,18 +401,35 @@ export class ClusterService {
     };
   }
 
-  /** Terminate the cluster's machine (its configuration stays). */
-  async terminate(id: string, reason = "terminated"): Promise<void> {
+  /**
+   * Terminate the cluster's machine (its configuration stays). `kind` says in
+   * the event log why: a user's request, or the auto-termination for idleness.
+   */
+  async terminate(id: string, reason = USER_STOP, kind: "terminate" | "auto-terminate" = "terminate"): Promise<void> {
     const c = this.d.store.cluster(id);
-    if (!c || c.runtime.state === "terminated") return;
+    if (!c) return;
+    if (c.runtime.state === "terminated") {
+      this.dropJobClusters(); // a job run's cluster that never got a machine
+      return;
+    }
     this.terminateHook(id);
     const instance = c.runtime.instanceId;
+    this.log(id, kind, kind === "auto-terminate" ? reason : reason === USER_STOP ? "terminate requested" : `terminate requested: ${reason}`);
     this.d.store.updateCluster(id, (x) => void (x.runtime = { ...x.runtime, state: "terminating", phase: reason }));
     if (!instance) {
       this.d.store.updateCluster(id, (x) => void (x.runtime = { state: "terminated", phase: reason }));
+      this.log(id, "terminated", "no machine was running");
+      this.dropJobClusters();
       return;
     }
     await this.cloud().terminate(instance);
+  }
+
+  /** Clusters made for job runs go away once their machines are gone. */
+  private dropJobClusters(): void {
+    for (const c of this.d.store.read().clusters) {
+      if (c.job && (c.runtime.state === "terminated" || c.runtime.state === "error")) this.remove(c.id);
+    }
   }
 
   /** Bring states in line with the machines (terminations finishing, machines that shut themselves down). */
@@ -344,7 +447,9 @@ export class ClusterService {
       if (s === "terminated" || c.runtime.state === "running") {
         this.d.store.updateCluster(c.id, (x) => void (x.runtime = { state: s === "terminated" ? "terminated" : "terminating", phase: why }));
       }
+      if (s === "terminated") this.log(c.id, "terminated", `machine stopped: ${why}`);
     }
+    this.dropJobClusters();
   }
 
   /** Resume starts interrupted by a Studio restart. */
@@ -352,7 +457,11 @@ export class ClusterService {
     for (const c of this.d.store.read().clusters) {
       if (c.runtime.state !== "starting" || this.jobs.has(c.id)) continue;
       if (c.runtime.instanceId) this.track(c.id, this.waitReady(c.id, c.runtime.instanceId));
-      else this.d.store.updateCluster(c.id, (x) => void (x.runtime = { state: "error", error: "the Studio restarted while starting the cluster" }));
+      else {
+        const error = "the Studio restarted while starting the cluster";
+        this.d.store.updateCluster(c.id, (x) => void (x.runtime = { state: "error", error }));
+        this.log(c.id, "error", error);
+      }
     }
   }
 
@@ -365,7 +474,7 @@ export class ClusterService {
       const last = act.busy ? this.now() : Math.max(c.runtime.lastActivity ?? 0, act.lastUsed);
       if (last !== c.runtime.lastActivity) this.d.store.updateCluster(c.id, (x) => void (x.runtime.lastActivity = last));
       if (!act.busy && this.now() - last >= c.autoTerminateMinutes * 60_000) {
-        await this.terminate(c.id, `idle for ${c.autoTerminateMinutes} min`);
+        await this.terminate(c.id, `idle for ${c.autoTerminateMinutes} min`, "auto-terminate");
         done.push(c.id);
       }
     }
@@ -399,9 +508,30 @@ export class ClusterService {
         publicIp: c.runtime.publicIp,
         notebooks: byCluster.get(c.id) ?? [],
         isDefault: def === c.id,
+        ...(c.job ? { job: c.job } : {}),
       });
     }
     return out;
+  }
+}
+
+/** What an edit changed, as "name a → b" parts. */
+function changes(before: ClusterRecord, after: ClusterRecord): string[] {
+  const out: string[] = [];
+  if (before.name !== after.name) out.push(`name ${before.name} → ${after.name}`);
+  if (before.instanceType !== after.instanceType) out.push(`machine ${before.instanceType} → ${after.instanceType}`);
+  if (before.volumeGb !== after.volumeGb) out.push(`disk ${before.volumeGb} → ${after.volumeGb} GB`);
+  if (before.autoTerminateMinutes !== after.autoTerminateMinutes) out.push(`idle timeout ${before.autoTerminateMinutes} → ${after.autoTerminateMinutes} min`);
+  return out;
+}
+
+/** "<name> copy", then "<name> copy 2", ...: the first free name, shortened to fit. */
+export function copyName(name: string, taken: string[]): string {
+  const used = new Set(taken.map((t) => t.toLowerCase()));
+  for (let n = 1; ; n++) {
+    const suffix = n === 1 ? " copy" : ` copy ${n}`;
+    const candidate = `${name.slice(0, NAME_MAX - suffix.length).trimEnd()}${suffix}`;
+    if (!used.has(candidate.toLowerCase())) return candidate;
   }
 }
 

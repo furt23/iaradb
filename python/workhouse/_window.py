@@ -1,4 +1,4 @@
-"""Window functions for the expression API: Polars-style `over`, plus
+"""Window functions for the expression API: windowing via `over`, plus
 `rank`, `shift`, `diff`, `cum_*` and `rolling_*`.
 
 Window expressions without `over()` run over the whole frame, in its row
@@ -35,7 +35,7 @@ def _per_key(flag: bool | Sequence[bool], n: int) -> list[bool]:
 
 
 def _keep_nulls(value: PyExpr, x: PyExpr) -> PyExpr:
-    """`value` where `x` is not null, null elsewhere (Polars semantics)."""
+    """`value` where `x` is not null, null elsewhere."""
     return PyExpr.case([(x.is_not_null(), value)], None)
 
 

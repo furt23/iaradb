@@ -28,6 +28,19 @@ MAX_SAFE_INT = 2**53 - 1
 DEFAULT_PAGE = 100
 
 
+def _flat_for_csv(table: Any) -> Any:
+    """CSV has no lists or structs: nested columns are written as JSON text."""
+    import json
+
+    import pyarrow as pa
+
+    for i, field in enumerate(table.schema):
+        if pa.types.is_nested(field.type):
+            text = [None if v is None else json.dumps(json_value(v), ensure_ascii=False) for v in table.column(i).to_pylist()]
+            table = table.set_column(i, pa.field(field.name, pa.string()), pa.array(text, pa.string()))
+    return table
+
+
 def json_value(v: Any) -> Any:
     if v is None or isinstance(v, (bool, str)):
         return v
@@ -141,7 +154,7 @@ class ResultStore:
         if fmt == "csv":
             import pyarrow.csv as pcsv
 
-            pcsv.write_csv(table, path)
+            pcsv.write_csv(_flat_for_csv(table), path)
         elif fmt == "parquet":
             import pyarrow.parquet as pq
 

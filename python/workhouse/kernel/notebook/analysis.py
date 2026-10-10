@@ -17,7 +17,8 @@ from workhouse.kernel.notebook.model import Cell
 from workhouse.kernel.notebook.scopes import module_scope
 
 _BUILTINS = frozenset(dir(builtins))
-_SQL_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+#: a name as SQL writes it: ``t``, ``s.t`` or ``"s"."t"`` (dotted parts make one name)
+_SQL_NAME = re.compile(r'(?:[A-Za-z_][A-Za-z0-9_]*|"[^"]*")(?:\s*\.\s*(?:[A-Za-z_][A-Za-z0-9_]*|"[^"]*"))*')
 #: name of the workspace session that SQL cells run against
 WORKSPACE_VAR = "ws"
 
@@ -52,11 +53,18 @@ def analyze_python(code: str) -> Analysis:
 
 
 def sql_identifiers(query: str) -> set[str]:
-    """Identifier-like tokens of a query, outside string literals and comments."""
+    """Names a query mentions, outside string literals and comments. A dotted
+    name (``schema.table``) is one name: a qualified table, not a variable
+    called ``table``."""
     text = re.sub(r"'(?:[^']|'')*'", " ", query)
     text = re.sub(r"--[^\n]*", " ", text)
     text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
-    return {m.group(0) for m in _SQL_IDENT.finditer(text)}
+    return {_plain(m.group(0)) for m in _SQL_NAME.finditer(text)}
+
+
+def _plain(name: str) -> str:
+    """``"tpch" . "lineitem"`` as ``tpch.lineitem``."""
+    return re.sub(r"\s*\.\s*", ".", name).replace('"', "")
 
 
 def analyze(cell: Cell) -> Analysis:

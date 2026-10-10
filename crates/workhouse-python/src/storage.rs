@@ -1,10 +1,11 @@
 //! Remote storage from Python: option dicts, defaults by URL prefix, file
-//! listings and column statistics of registered tables.
+//! listings, request counts and column statistics of registered tables.
 
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict};
 
 use workhouse_core::WhError;
+use workhouse_core::io::object::StorageRequests;
 use workhouse_core::io::{StorageOptions, object};
 
 use crate::PyResultExt;
@@ -45,6 +46,23 @@ fn list_files(py: Python<'_>, pattern: &str, extension: &str, storage_options: O
     .py()
 }
 
+/// `{list, head, get, bytes}`: requests made to object stores (GET `bytes`
+/// are the bytes asked for).
+pub fn requests_dict<'py>(py: Python<'py>, r: &StorageRequests) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("list", r.list)?;
+    d.set_item("head", r.head)?;
+    d.set_item("get", r.get)?;
+    d.set_item("bytes", r.bytes)?;
+    Ok(d)
+}
+
+/// Requests this process has made to object stores so far.
+#[pyfunction]
+fn storage_requests(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
+    requests_dict(py, &object::storage_requests())
+}
+
 /// Forget connections to object stores (e.g. after credentials changed).
 #[pyfunction]
 fn clear_object_stores() {
@@ -55,5 +73,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(set_storage_options, m)?)?;
     m.add_function(wrap_pyfunction!(list_files, m)?)?;
     m.add_function(wrap_pyfunction!(clear_object_stores, m)?)?;
+    m.add_function(wrap_pyfunction!(storage_requests, m)?)?;
     Ok(())
 }

@@ -11,12 +11,14 @@
 //!                          parallel sinks: hash aggregate, join build, sort)
 //! ```
 
+pub mod catalog_names;
 pub mod error;
 pub mod exec;
 pub mod expr;
 pub mod hash;
 pub mod io;
 pub mod logical;
+pub mod nested;
 pub mod optimizer;
 pub mod physical;
 pub mod scalar;

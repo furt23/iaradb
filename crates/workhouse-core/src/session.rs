@@ -1,12 +1,13 @@
 //! Session context (catalog) and the lazy DataFrame API.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use parking_lot::RwLock;
 
+use crate::catalog_names::{MAIN, TableName, TableRef, parse_schema, unknown_schema};
 use crate::error::{Result, WhError};
 use crate::exec::query::{QueryStats, with_query};
 use crate::expr::{Expr, SortExpr};
@@ -19,6 +20,8 @@ use crate::logical::{JoinType, LogicalPlan};
 use crate::optimizer::optimize;
 use crate::physical::planner::{PhysicalPlan, PlanNode, create_physical_plan, execute, execute_stream};
 use crate::schema::{Column, PlanSchema, PlanSchemaRef};
+
+mod unnest;
 
 #[derive(Clone, Debug)]
 pub enum TableEntry {
@@ -64,9 +67,54 @@ enum Slot {
     Deferred(Arc<DeferredTable>),
 }
 
+/// The tables by `schema.table` key, the schemas that exist (`main` always)
+/// and the current one.
+#[derive(Clone)]
+struct Catalog {
+    tables: HashMap<String, Slot>,
+    schemas: BTreeSet<String>,
+    current: String,
+}
+
+impl Default for Catalog {
+    fn default() -> Self {
+        Self { tables: HashMap::new(), schemas: BTreeSet::from([MAIN.to_string()]), current: MAIN.to_string() }
+    }
+}
+
+impl Catalog {
+    fn insert(&mut self, name: &TableName, slot: Slot) {
+        self.schemas.insert(name.schema.clone());
+        self.tables.insert(name.key(), slot);
+    }
+
+    /// Where a table name resolves: its schema if written, else the current
+    /// schema, then `main`.
+    fn resolve(&self, r: &TableRef) -> Option<TableName> {
+        let schemas = match &r.schema {
+            Some(s) => vec![s.as_str()],
+            None => vec![self.current.as_str(), MAIN],
+        };
+        schemas.into_iter().map(|s| TableName::new(s, &r.table)).find(|t| self.tables.contains_key(&t.key()))
+    }
+
+    fn tables_in(&self, schema: &str) -> Vec<TableName> {
+        let mut v: Vec<TableName> = self.tables.keys().map(|k| TableName::from_key(k)).filter(|t| t.schema == schema).collect();
+        v.sort_by(|a, b| a.table.cmp(&b.table));
+        v
+    }
+}
+
+/// A table name given to the registry: `main`'s when bare.
+fn exact(name: &str) -> TableName {
+    TableRef::lenient(name).in_schema(MAIN)
+}
+
 #[derive(Default)]
 pub struct SessionState {
-    tables: RwLock<HashMap<String, Slot>>,
+    catalog: RwLock<Catalog>,
+    /// where `CREATE TABLE ... AS` writes tables (none: they stay in memory)
+    warehouse: RwLock<Option<(String, StorageOptions)>>,
 }
 
 #[derive(Clone, Default)]
@@ -79,16 +127,45 @@ impl SessionContext {
         Self::default()
     }
 
-    /// A new context starting with this one's tables (providers are shared,
-    /// so cached metadata and statistics are reused); later registrations on
-    /// either side are independent.
+    /// A new context starting with this one's tables, schemas and current
+    /// schema (providers are shared, so cached metadata and statistics are
+    /// reused); later registrations on either side are independent.
     pub fn fork(&self) -> Self {
-        let tables = self.state.tables.read().clone();
-        Self { state: Arc::new(SessionState { tables: RwLock::new(tables) }) }
+        let catalog = self.state.catalog.read().clone();
+        let warehouse = self.state.warehouse.read().clone();
+        Self { state: Arc::new(SessionState { catalog: RwLock::new(catalog), warehouse: RwLock::new(warehouse) }) }
     }
 
+    /// The folder (or object prefix) where `CREATE TABLE name AS ...` writes
+    /// `name/` as Parquet; without one, created tables stay in memory.
+    pub fn set_warehouse(&self, path: Option<&str>, storage: &StorageOptions) {
+        *self.state.warehouse.write() = path.map(|p| (p.to_string(), storage.clone()));
+    }
+
+    pub fn warehouse(&self) -> Option<(String, StorageOptions)> {
+        self.state.warehouse.read().clone()
+    }
+
+    /// Whether a table or view of that name is registered (without loading
+    /// it). Like every call taking a table name but `table` and `sql`, a
+    /// bare name means `main`'s, whatever the current schema is.
+    pub fn contains(&self, name: &str) -> bool {
+        self.table_exists(&exact(name))
+    }
+
+    pub fn table_exists(&self, name: &TableName) -> bool {
+        self.state.catalog.read().tables.contains_key(&name.key())
+    }
+
+    /// Where a name written in a query resolves to: its schema if it has
+    /// one, else the current schema, then `main`.
+    pub fn resolve_table(&self, r: &TableRef) -> Option<TableName> {
+        self.state.catalog.read().resolve(r)
+    }
+
+    /// A name registers in its schema; a bare one, in `main`.
     fn insert(&self, name: &str, slot: Slot) {
-        self.state.tables.write().insert(name.to_ascii_lowercase(), slot);
+        self.state.catalog.write().insert(&exact(name), slot);
     }
 
     pub fn register_table(&self, name: &str, provider: Arc<dyn TableProvider>) {
@@ -115,7 +192,7 @@ impl SessionContext {
     }
 
     pub fn deregister(&self, name: &str) -> bool {
-        self.state.tables.write().remove(&name.to_ascii_lowercase()).is_some()
+        self.state.catalog.write().tables.remove(&exact(name).key()).is_some()
     }
 
     pub fn register_parquet(&self, name: &str, path: &str) -> Result<()> {
@@ -140,15 +217,95 @@ impl SessionContext {
         self.register_table(name, Arc::new(MemTable::new(schema, batches)));
     }
 
+    /// The tables' display names, sorted: bare in `main`, `schema.table` elsewhere.
     pub fn table_names(&self) -> Vec<String> {
-        let mut v: Vec<String> = self.state.tables.read().keys().cloned().collect();
+        let mut v: Vec<String> = self.state.catalog.read().tables.keys().map(|k| TableName::from_key(k).display()).collect();
         v.sort();
         v
     }
 
-    /// A registered table or view (loading a deferred table).
+    /// The schemas: `main` first, then the others sorted.
+    pub fn schemas(&self) -> Vec<String> {
+        let catalog = self.state.catalog.read();
+        let others = catalog.schemas.iter().filter(|s| *s != MAIN).cloned();
+        std::iter::once(MAIN.to_string()).chain(others).collect()
+    }
+
+    pub fn has_schema(&self, name: &str) -> bool {
+        self.state.catalog.read().schemas.contains(&name.to_ascii_lowercase())
+    }
+
+    /// The schema a bare table name in a query is looked up in first (`USE`).
+    pub fn current_schema(&self) -> String {
+        self.state.catalog.read().current.clone()
+    }
+
+    pub fn use_schema(&self, name: &str) -> Result<()> {
+        let name = parse_schema(name)?;
+        let mut catalog = self.state.catalog.write();
+        if !catalog.schemas.contains(&name) {
+            return Err(unknown_schema(&name));
+        }
+        catalog.current = name;
+        Ok(())
+    }
+
+    pub fn create_schema(&self, name: &str, if_not_exists: bool) -> Result<()> {
+        let name = parse_schema(name)?;
+        let mut catalog = self.state.catalog.write();
+        if catalog.schemas.contains(&name) {
+            return if if_not_exists { Ok(()) } else { Err(WhError::Plan(format!("schema '{name}' already exists"))) };
+        }
+        catalog.schemas.insert(name);
+        Ok(())
+    }
+
+    /// Drop a schema; with `cascade` its tables leave the session too (their
+    /// files stay), otherwise it must be empty. Returns the display names of
+    /// the tables dropped.
+    pub fn drop_schema(&self, name: &str, if_exists: bool, cascade: bool) -> Result<Vec<String>> {
+        let name = parse_schema(name)?;
+        if name == MAIN {
+            return Err(WhError::Plan("schema 'main' cannot be dropped".into()));
+        }
+        let mut catalog = self.state.catalog.write();
+        if !catalog.schemas.contains(&name) {
+            return if if_exists { Ok(vec![]) } else { Err(WhError::Plan(format!("schema '{name}' does not exist"))) };
+        }
+        let tables = catalog.tables_in(&name);
+        if !tables.is_empty() && !cascade {
+            return Err(WhError::Plan(format!(
+                "schema '{name}' is not empty ({} tables): use DROP SCHEMA {name} CASCADE",
+                tables.len()
+            )));
+        }
+        for t in &tables {
+            catalog.tables.remove(&t.key());
+        }
+        catalog.schemas.remove(&name);
+        if catalog.current == name {
+            catalog.current = MAIN.to_string();
+        }
+        Ok(tables.iter().map(TableName::display).collect())
+    }
+
+    /// A registered table or view (loading a deferred table). A bare name is
+    /// `main`'s, like in `register_*`.
     pub fn lookup(&self, name: &str) -> Result<Option<TableEntry>> {
-        let slot = self.state.tables.read().get(&name.to_ascii_lowercase()).cloned();
+        self.entry(&exact(name))
+    }
+
+    /// The table or view a name written in a query refers to (see
+    /// [`Self::resolve_table`]).
+    pub fn lookup_ref(&self, r: &TableRef) -> Result<Option<TableEntry>> {
+        match self.resolve_table(r) {
+            Some(t) => self.entry(&t),
+            None => Ok(None),
+        }
+    }
+
+    fn entry(&self, name: &TableName) -> Result<Option<TableEntry>> {
+        let slot = self.state.catalog.read().tables.get(&name.key()).cloned();
         Ok(match slot {
             None => None,
             Some(Slot::Entry(e)) => Some(e),
@@ -159,7 +316,7 @@ impl SessionContext {
     /// Whether a registered table is loaded (`Some(false)`: deferred, not
     /// used yet); `None` if there is no such table.
     pub fn is_loaded(&self, name: &str) -> Option<bool> {
-        self.state.tables.read().get(&name.to_ascii_lowercase()).map(|s| match s {
+        self.state.catalog.read().tables.get(&exact(name).key()).map(|s| match s {
             Slot::Entry(_) => true,
             Slot::Deferred(d) => d.is_loaded(),
         })
@@ -189,22 +346,35 @@ impl SessionContext {
         self.scan_provider("memory", Arc::new(MemTable::new(schema, batches)))
     }
 
+    /// A table as a query sees it: a bare name is looked up in the current
+    /// schema, then in `main`; `s.t` only in `s`.
     pub fn table(&self, name: &str) -> Result<LazyFrame> {
-        match self.lookup(name)? {
+        // columns are qualified by the bare table name, as in a query
+        let qualifier = name.rsplit('.').next().unwrap_or(name);
+        match self.lookup_ref(&TableRef::lenient(name))? {
             Some(TableEntry::Table(t)) => Ok(LazyFrame::new(
-                Arc::new(LogicalPlan::scan(name, Some(name.to_string()), t, None, vec![], None)?),
+                Arc::new(LogicalPlan::scan(qualifier, Some(qualifier.to_string()), t, None, vec![], None)?),
                 self.clone(),
             )),
             Some(TableEntry::View(p)) => {
-                Ok(LazyFrame::new(Arc::new(LogicalPlan::subquery_alias(p, name)), self.clone()))
+                Ok(LazyFrame::new(Arc::new(LogicalPlan::subquery_alias(p, qualifier)), self.clone()))
             }
             None => Err(WhError::Plan(format!("table '{name}' not found"))),
         }
     }
 
+    /// A query, planned (it runs when collected or streamed); or a statement
+    /// that writes (`COPY`, `CREATE TABLE ... AS`, `INSERT`, `DROP TABLE`) or
+    /// changes the catalog (`CREATE SCHEMA`, `DROP SCHEMA`, `USE`), run now,
+    /// returning what it did.
     pub fn sql(&self, query: &str) -> Result<LazyFrame> {
-        let plan = crate::sql::plan_sql(self, query)?;
-        Ok(LazyFrame::new(Arc::new(plan), self.clone()))
+        match crate::sql::command::parse_command(query)? {
+            crate::sql::command::Command::Query => {
+                let plan = crate::sql::plan_sql(self, query)?;
+                Ok(LazyFrame::new(Arc::new(plan), self.clone()))
+            }
+            command => crate::sql::write::run(self, command),
+        }
     }
 }
 
@@ -469,6 +639,26 @@ impl LazyFrame {
         self.select(exprs)
     }
 
+    /// Polars' `explode`: one row per element of the list columns (several
+    /// are zipped), in place of the columns. A NULL or empty list gives one
+    /// row holding NULL.
+    pub fn explode(&self, columns: &[String]) -> Result<LazyFrame> {
+        let helper = |c: &String| format!("__explode_{c}");
+        let lists = columns.iter().map(|c| Expr::Column(Column::from_name(c.clone()))).collect();
+        let outputs = columns.iter().map(|c| (None, helper(c))).collect();
+        let unnest = LogicalPlan::unnest(self.plan.clone(), lists, outputs, true)?;
+        let out = self
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| match columns.iter().find(|c| c.as_str() == f.name()) {
+                Some(c) => Expr::Column(Column::from_name(helper(c))).alias(f.name()),
+                None => Expr::Column(f.column()),
+            })
+            .collect();
+        Ok(self.wrap(LogicalPlan::project(Arc::new(unnest), out)?))
+    }
+
     pub fn alias(&self, name: &str) -> LazyFrame {
         self.wrap(LogicalPlan::subquery_alias(self.plan.clone(), name))
     }
@@ -514,14 +704,15 @@ impl LazyFrame {
     }
 
     /// Write the result to Parquet (a local path or an object store URL) as it is
-    /// produced; returns the number of rows written.
-    pub fn sink_parquet(&self, path: &str, compression: &str, row_group_size: Option<usize>, storage: &crate::io::StorageOptions) -> Result<usize> {
-        use crate::io::parquet::ParquetSink;
-        let sink = parking_lot::Mutex::new(None::<ParquetSink>);
+    /// produced: one file, or a Hive-partitioned folder with `partition_by`;
+    /// returns the number of rows written.
+    pub fn sink_parquet(&self, path: &str, opts: &crate::io::parquet::ParquetOptions, storage: &crate::io::StorageOptions) -> Result<usize> {
+        use crate::io::parquet::DatasetSink;
+        let sink = parking_lot::Mutex::new(None::<DatasetSink>);
         let rows = std::sync::atomic::AtomicUsize::new(0);
         self.stream(
             &mut |schema| {
-                *sink.lock() = Some(ParquetSink::create(path, schema.clone(), compression, row_group_size, storage)?);
+                *sink.lock() = Some(DatasetSink::create(path, schema.clone(), opts, storage)?);
                 Ok(())
             },
             &mut |b| {

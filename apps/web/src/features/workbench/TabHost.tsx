@@ -4,6 +4,8 @@ import Box from "@mui/material/Box";
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 
+import { SqlFileTab } from "@/features/queries/SqlFileTab";
+
 import { NotebookTab } from "./NotebookTab";
 
 /**
@@ -32,7 +34,14 @@ export function useTabElements(open: string[]) {
 }
 
 export function TabHost({ open, shown, element, schema }: { open: string[]; shown: Set<string>; element(path: string): HTMLDivElement; schema: Record<string, { name: string }[]> }) {
-  return <>{open.map((path) => createPortal(<NotebookTab path={path} shown={shown.has(path)} schema={schema} />, element(path), path))}</>;
+  return (
+    <>
+      {open.map((path) => {
+        const Tab = path.toLowerCase().endsWith(".sql") ? SqlFileTab : NotebookTab;
+        return createPortal(<Tab path={path} shown={shown.has(path)} schema={schema} />, element(path), path);
+      })}
+    </>
+  );
 }
 
 /** Where a pane shows its active notebook. */

@@ -11,6 +11,8 @@ export interface ClusterConfig {
   autoTerminateMinutes: number;
   volumeGb: number;
   createdAt: number;
+  /** the job run this cluster was made for (it goes away with its machine) */
+  job?: string;
 }
 
 /** The current machine of a cluster, if any. */
@@ -58,6 +60,8 @@ export interface ClusterView {
   /** notebooks attached to it */
   notebooks: string[];
   isDefault: boolean;
+  /** made for a job run (not offered for notebooks) */
+  job?: string;
 }
 
 export const LOCAL_CLUSTER = "local";

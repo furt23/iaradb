@@ -18,4 +18,7 @@ next-env.d.ts
 /examples/workspace/exports/
 /apps/web/.next-e2e/
 bench_ec2.json
+.next*
 .aws
+# internal test briefs and reports
+test-briefs/

@@ -38,6 +38,11 @@ impl MemoryPool {
         self.peak.store(self.used(), Ordering::Relaxed);
     }
 
+    /// Bring the peak up to at least `peak` (after a measurement that reset it).
+    pub fn raise_peak(&self, peak: usize) {
+        self.peak.fetch_max(peak, Ordering::Relaxed);
+    }
+
     pub fn used(&self) -> usize {
         self.used.load(Ordering::Relaxed)
     }

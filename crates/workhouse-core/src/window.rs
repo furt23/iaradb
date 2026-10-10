@@ -72,7 +72,7 @@ impl WindowFunc {
         use WindowFunc::*;
         match self {
             Agg(AggFunc::Count) => (0, 1),
-            Agg(_) => (1, 1),
+            Agg(f) => (f.arity(), f.arity()),
             RowNumber | Rank | DenseRank | PercentRank | CumeDist => (0, 0),
             Ntile => (1, 1),
             Lag | Lead => (1, 3),

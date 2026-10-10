@@ -1,9 +1,9 @@
 /**
  * Kernel keys. The workspace kernel serves the catalog, the SQL editor and
- * history; each open notebook gets its own kernel.
+ * history; each open notebook gets its own kernel, and so does each job run.
  */
 
-export type KernelKey = "workspace" | `notebook:${string}`;
+export type KernelKey = "workspace" | `notebook:${string}` | `job:${string}`;
 
 export const WORKSPACE_KERNEL: KernelKey = "workspace";
 
@@ -18,6 +18,10 @@ export function normalizeRelative(p: string): string {
     throw new Error(`invalid workspace path: ${p}`);
   }
   return parts.join("/");
+}
+
+export function jobKernel(runId: string): KernelKey {
+  return `job:${runId}`;
 }
 
 /** The notebook a kernel key belongs to (null for the workspace kernel). */

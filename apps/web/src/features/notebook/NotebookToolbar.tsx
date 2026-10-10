@@ -1,16 +1,13 @@
 "use client";
 
-import DataObjectOutlined from "@mui/icons-material/DataObjectOutlined";
-import DeleteOutline from "@mui/icons-material/DeleteOutlineOutlined";
+import ViewSidebarOutlined from "@mui/icons-material/ViewSidebarOutlined";
 import MoreVert from "@mui/icons-material/MoreVert";
 import PlayCircleOutline from "@mui/icons-material/PlayCircleOutlineOutlined";
-import RestartAlt from "@mui/icons-material/RestartAlt";
 import StopCircleOutlined from "@mui/icons-material/StopCircleOutlined";
 import UnfoldLess from "@mui/icons-material/UnfoldLess";
 import UnfoldMore from "@mui/icons-material/UnfoldMore";
 import Box from "@mui/material/Box";
 import Button, { type ButtonProps } from "@mui/material/Button";
-import Divider from "@mui/material/Divider";
 import IconButton from "@mui/material/IconButton";
 import ListItemIcon from "@mui/material/ListItemIcon";
 import Menu from "@mui/material/Menu";
@@ -19,6 +16,7 @@ import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { useState, type ReactNode } from "react";
 
+import { KernelMenu } from "./KernelMenu";
 import { RunTimer, type RunTimerProps } from "./RunTimer";
 
 export interface NotebookToolbarProps {
@@ -29,17 +27,24 @@ export interface NotebookToolbarProps {
   onRunAll(): void;
   onInterrupt(): void;
   onRestart(): void;
-  onToggleVariables(): void;
+  onRestartAndClear(): void;
+  onRestartAndRunAll(): void;
+  onClearOutputs(): void;
+  /** the side panel: outline and variables */
+  onToggleSide(): void;
+  sideOpen: boolean;
   onOutputs(hidden: boolean): void;
-  onDelete(): void;
   /** where the notebook runs (a cluster picker) */
   cluster?: ReactNode;
+  /** the File menu, after the save state */
+  fileMenu?: ReactNode;
 }
 
 /** A toolbar button whose label disappears when the pane is narrow. */
 function ToolButton({ label, icon, sx, ...props }: { label: string; icon: ReactNode; sx?: Record<string, unknown> } & Omit<ButtonProps, "startIcon" | "children" | "sx">) {
   return (
-    <Tooltip title={label}>
+    // not on focus: after a click the tooltip would stay over what the button opened
+    <Tooltip title={label} disableFocusListener>
       <span>
         <Button startIcon={icon} aria-label={label} sx={{ minWidth: 0, ...sx }} {...props}>
           <span className="tool-label">{label}</span>
@@ -49,7 +54,7 @@ function ToolButton({ label, icon, sx, ...props }: { label: string; icon: ReactN
   );
 }
 
-function MoreMenu({ onOutputs, onDelete }: Pick<NotebookToolbarProps, "onOutputs" | "onDelete">) {
+function MoreMenu({ onOutputs }: Pick<NotebookToolbarProps, "onOutputs">) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const run = (fn: () => void) => () => {
     setAnchor(null);
@@ -72,13 +77,6 @@ function MoreMenu({ onOutputs, onDelete }: Pick<NotebookToolbarProps, "onOutputs
             <UnfoldMore fontSize="small" />
           </ListItemIcon>
           Show all outputs
-        </MenuItem>
-        <Divider />
-        <MenuItem onClick={run(onDelete)} sx={{ color: "error.main" }}>
-          <ListItemIcon>
-            <DeleteOutline fontSize="small" color="error" />
-          </ListItemIcon>
-          Delete notebook…
         </MenuItem>
       </Menu>
     </>
@@ -119,14 +117,22 @@ export function NotebookToolbar(p: NotebookToolbarProps) {
       <Typography variant="body2" className="save-state" sx={{ color: p.dirty ? "warning.main" : "text.disabled", flexShrink: 0 }}>
         {p.dirty ? "unsaved" : "saved"}
       </Typography>
+      {p.fileMenu}
       <RunTimer {...p.timer} />
       <Box sx={{ flex: 1 }} />
       {p.cluster}
       <ToolButton label="Run all" icon={<PlayCircleOutline />} onClick={p.onRunAll} disabled={p.running} variant="contained" color="secondary" />
       <ToolButton label="Interrupt" icon={<StopCircleOutlined />} onClick={p.onInterrupt} disabled={!p.running} color="error" />
-      <ToolButton label="Restart" icon={<RestartAlt />} onClick={p.onRestart} sx={{ color: "text.secondary" }} />
-      <ToolButton label="Variables" icon={<DataObjectOutlined />} onClick={p.onToggleVariables} sx={{ color: "text.secondary" }} />
-      <MoreMenu onOutputs={p.onOutputs} onDelete={p.onDelete} />
+      <KernelMenu
+        running={p.running}
+        onInterrupt={p.onInterrupt}
+        onRestart={p.onRestart}
+        onRestartAndClear={p.onRestartAndClear}
+        onRestartAndRunAll={p.onRestartAndRunAll}
+        onClearOutputs={p.onClearOutputs}
+      />
+      <ToolButton label="Outline" icon={<ViewSidebarOutlined />} onClick={p.onToggleSide} sx={{ color: p.sideOpen ? "secondary.main" : "text.secondary" }} />
+      <MoreMenu onOutputs={p.onOutputs} />
     </Box>
   );
 }

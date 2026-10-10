@@ -20,11 +20,24 @@ pub struct MemTable {
 
 impl MemTable {
     pub fn new(schema: SchemaRef, batches: Vec<RecordBatch>) -> Self {
+        let (schema, batches) = canonical_lists(schema, batches);
         let rows = batches.iter().map(|b| b.num_rows()).sum();
         Self { schema, batches, rows, ndv_cache: Default::default() }
     }
     pub fn batches(&self) -> &[RecordBatch] {
         &self.batches
+    }
+}
+
+/// List columns in the engine's canonical form (see [`crate::nested`]); a
+/// column that cannot be converted is kept as it is.
+fn canonical_lists(schema: SchemaRef, batches: Vec<RecordBatch>) -> (SchemaRef, Vec<RecordBatch>) {
+    let Some(canonical) = crate::nested::canonical_schema(&schema) else { return (schema, batches) };
+    let converted: Result<Vec<RecordBatch>> =
+        batches.iter().cloned().map(|b| crate::nested::canonical_batch(b, &canonical)).collect();
+    match converted {
+        Ok(batches) => (canonical, batches),
+        Err(_) => (schema, batches),
     }
 }
 
@@ -37,6 +50,9 @@ impl TableProvider for MemTable {
     }
     fn kind(&self) -> &'static str {
         "memory"
+    }
+    fn memory_batches(&self) -> Option<&[RecordBatch]> {
+        Some(&self.batches)
     }
     fn column_ndv(&self, column: usize) -> Option<f64> {
         if let Some(v) = self.ndv_cache.lock().get(&column) {

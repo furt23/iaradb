@@ -1,13 +1,9 @@
-import { TableDetail } from "@/features/catalog/TableDetail";
-import { ErrorState } from "@/features/shell/PageHeader";
-import { previewTable, tableInfo } from "@/server/actions/catalog";
+import { redirect } from "next/navigation";
 
-export const dynamic = "force-dynamic";
+import { tableHref } from "@/features/data/links";
 
-export default async function TablePage({ params }: { params: Promise<{ name: string }> }) {
+/** The catalog moved to the Data section. */
+export default async function CatalogTablePage({ params }: { params: Promise<{ name: string }> }) {
   const { name } = await params;
-  const table = decodeURIComponent(name);
-  const [info, preview] = await Promise.all([tableInfo(table), previewTable(table)]);
-  if (!info.ok) return <ErrorState title={`Table ${table}`} message={info.error.message} />;
-  return <TableDetail info={info.data} preview={preview.ok ? preview.data : null} />;
+  redirect(tableHref(decodeURIComponent(name)));
 }

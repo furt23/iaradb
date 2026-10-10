@@ -4,14 +4,20 @@ import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import type { Variable } from "@workhouse/protocol";
 
-export function VariablesPanel({ variables }: { variables: Variable[] }) {
-  return (
-    <Box component="aside" sx={{ width: 300, flexShrink: 0, borderLeft: 1, borderColor: "divider", bgcolor: "background.paper", overflow: "auto" }}>
-      <Typography variant="overline" sx={{ display: "block", px: 2, pt: 1.5, color: "text.disabled" }}>
-        Variables
-      </Typography>
+/**
+ * The variables the notebook defines. Standalone it is a bordered side column;
+ * `embedded` (inside the notebook side panel) drops the frame and the heading.
+ */
+export function VariablesPanel({ variables, embedded = false }: { variables: Variable[]; embedded?: boolean }) {
+  const body = (
+    <>
+      {!embedded && (
+        <Typography variant="overline" sx={{ display: "block", px: 2, pt: 1.5, color: "text.disabled" }}>
+          Variables
+        </Typography>
+      )}
       {variables.length === 0 && (
-        <Typography variant="body2" sx={{ px: 2, color: "text.secondary" }}>
+        <Typography variant="body2" sx={{ px: 2, py: embedded ? 1.5 : 0, color: "text.secondary" }}>
           Run cells to see the values they define.
         </Typography>
       )}
@@ -30,6 +36,12 @@ export function VariablesPanel({ variables }: { variables: Variable[] }) {
           </Typography>
         </Box>
       ))}
+    </>
+  );
+  if (embedded) return <Box>{body}</Box>;
+  return (
+    <Box component="aside" sx={{ width: 300, flexShrink: 0, borderLeft: 1, borderColor: "divider", bgcolor: "background.paper", overflow: "auto" }}>
+      {body}
     </Box>
   );
 }

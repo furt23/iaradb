@@ -3,10 +3,10 @@
 
 use std::io::Write;
 
-use object_store::path::Path;
 use object_store::{ObjectStoreExt, WriteMultipart};
 
 use super::error::storage_err;
+use super::list_cache;
 use super::registry;
 use super::runtime::{block_on, runtime};
 use crate::error::Result;
@@ -21,19 +21,22 @@ const PARTS_IN_FLIGHT: usize = 4;
 pub struct ObjectWriter {
     upload: Option<WriteMultipart>,
     url: String,
+    /// the object, to drop cached listings of it when it appears
+    written: ObjectUrl,
 }
 
 impl ObjectWriter {
     pub fn create(url: &ObjectUrl, options: &StorageOptions) -> Result<Self> {
         let store = registry::store(url, options)?;
-        let path = Path::from(url.key.as_str());
+        let path = super::object_path(&url.key);
         let upload = block_on(store.put_multipart(&path)).map_err(|e| storage_err(e, &url.to_string()))?;
-        Ok(Self { upload: Some(WriteMultipart::new_with_chunk_size(upload, PART_SIZE)), url: url.to_string() })
+        Ok(Self { upload: Some(WriteMultipart::new_with_chunk_size(upload, PART_SIZE)), url: url.to_string(), written: url.clone() })
     }
 
     pub fn finish(mut self) -> Result<()> {
         let upload = self.upload.take().expect("upload already finished");
         block_on(upload.finish()).map_err(|e| storage_err(e, &self.url))?;
+        list_cache::invalidate(&self.written.root(), &self.written.key);
         Ok(())
     }
 }

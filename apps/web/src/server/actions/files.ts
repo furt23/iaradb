@@ -1,15 +1,27 @@
 "use server";
 
+import { retargetJobs } from "../jobs/files";
 import { kernels } from "../kernel/manager";
 import { attempt, type ActionResult } from "../result";
 import * as ops from "../workspace/fileOps";
 
-/** Rename or move a file or folder; open notebooks inside keep their kernels. */
+/** The jobs that run what moved follow it; the move itself has happened, so this cannot fail it. */
+async function followWithJobs(from: string, to: string): Promise<void> {
+  if (from === to) return;
+  try {
+    await retargetJobs(from, to);
+  } catch (e) {
+    console.error(`jobs: could not follow ${from} to ${to}: ${(e as Error).message}`);
+  }
+}
+
+/** Rename or move a file or folder; open notebooks inside keep their kernels, their ids and their jobs. */
 export async function renameEntry(from: string, to: string): Promise<ActionResult<{ from: string; to: string }>> {
   return attempt(() =>
     kernels.exclusive(async () => {
       const moved = await ops.renameEntry(from, to);
       await kernels.moved(moved.from, moved.to);
+      await followWithJobs(moved.from, moved.to);
       return moved;
     }),
   );

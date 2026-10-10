@@ -1,6 +1,7 @@
 "use client";
 
 import CloseRounded from "@mui/icons-material/CloseRounded";
+import DescriptionOutlined from "@mui/icons-material/DescriptionOutlined";
 import GridViewOutlined from "@mui/icons-material/GridViewOutlined";
 import MenuBookOutlined from "@mui/icons-material/MenuBookOutlined";
 import VerticalSplitOutlined from "@mui/icons-material/VerticalSplitOutlined";
@@ -14,14 +15,25 @@ import ListItemIcon from "@mui/material/ListItemIcon";
 import Menu from "@mui/material/Menu";
 import MenuItem from "@mui/material/MenuItem";
 import Tooltip from "@mui/material/Tooltip";
-import Typography from "@mui/material/Typography";
 import { useState, type MouseEvent } from "react";
+
+import { TabBar, TabChip } from "@/features/shell/TabChip";
 
 import { useWorkbench } from "./WorkbenchProvider";
 import { MAX_PANES, type Arrangement, type Pane } from "./workbenchState";
 
 function tabLabel(path: string): string {
   return (path.split("/").pop() ?? path).replace(/\.py$/, "");
+}
+
+function tabIcon(path: string) {
+  const sql = path.toLowerCase().endsWith(".sql");
+  return (on: boolean) =>
+    sql ? (
+      <DescriptionOutlined sx={{ fontSize: 14, color: on ? "primary.main" : "text.disabled" }} />
+    ) : (
+      <MenuBookOutlined sx={{ fontSize: 14, color: on ? "secondary.main" : "text.disabled" }} />
+    );
 }
 
 const ARRANGEMENTS: { value: Arrangement; label: string; icon: React.ReactNode }[] = [
@@ -57,49 +69,15 @@ function TabMenu({ anchor, pane, path, onClose }: { anchor: { x: number; y: numb
 function Tab({ pane, path, active, onMenu }: { pane: Pane; path: string; active: boolean; onMenu(e: MouseEvent, path: string): void }) {
   const { act } = useWorkbench();
   return (
-    <Tooltip title={path} enterDelay={600}>
-      <Box
-        role="tab"
-        aria-selected={active}
-        onClick={() => act({ type: "activate", pane: pane.id, path })}
-        onAuxClick={(e) => e.button === 1 && act({ type: "close", pane: pane.id, path })}
-        onContextMenu={(e) => onMenu(e, path)}
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          gap: 0.75,
-          pl: 1.25,
-          pr: 0.5,
-          height: "100%",
-          maxWidth: 220,
-          flexShrink: 0,
-          cursor: "pointer",
-          borderRight: 1,
-          borderColor: "divider",
-          color: active ? "text.primary" : "text.secondary",
-          bgcolor: active ? "background.default" : "transparent",
-          boxShadow: active ? (t) => `inset 0 -2px 0 ${t.palette.secondary.main}` : "none",
-          "&:hover": { bgcolor: active ? "background.default" : "action.hover" },
-          "&:hover .tab-close, & .tab-close.on": { opacity: 1 },
-        }}
-      >
-        <MenuBookOutlined sx={{ fontSize: 14, color: active ? "secondary.main" : "text.disabled" }} />
-        <Typography noWrap sx={{ fontSize: 13, fontWeight: active ? 650 : 450 }}>
-          {tabLabel(path)}
-        </Typography>
-        <IconButton
-          className={`tab-close${active ? " on" : ""}`}
-          aria-label={`close ${tabLabel(path)}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            act({ type: "close", pane: pane.id, path });
-          }}
-          sx={{ p: 0.25, opacity: 0, transition: "opacity 100ms" }}
-        >
-          <CloseRounded sx={{ fontSize: 14 }} />
-        </IconButton>
-      </Box>
-    </Tooltip>
+    <TabChip
+      label={tabLabel(path)}
+      title={path}
+      icon={tabIcon(path)}
+      active={active}
+      onSelect={() => act({ type: "activate", pane: pane.id, path })}
+      onClose={() => act({ type: "close", pane: pane.id, path })}
+      onMenu={(e) => onMenu(e, path)}
+    />
   );
 }
 
@@ -153,49 +131,17 @@ function PaneActions({ pane }: { pane: Pane }) {
 export function TabStrip({ pane, focused }: { pane: Pane; focused: boolean }) {
   const { state } = useWorkbench();
   const [menu, setMenu] = useState<{ x: number; y: number; path: string } | null>(null);
-  const highlight = focused && state.panes.length > 1;
   return (
-    <Box
-      role="tablist"
-      aria-label="notebook tabs"
-      sx={{
-        display: "flex",
-        alignItems: "stretch",
-        height: 36,
-        flexShrink: 0,
-        borderBottom: 1,
-        borderColor: "divider",
-        bgcolor: "background.paper",
-        boxShadow: highlight ? (t) => `inset 0 2px 0 ${t.palette.secondary.main}` : "none",
-      }}
-    >
-      <Box
-        // the wheel scrolls the tabs sideways (their scrollbar is hidden)
-        onWheel={(e) => {
-          if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY;
-        }}
-        sx={{ display: "flex", flex: 1, minWidth: 0, overflowX: "auto", scrollbarWidth: "none", "&::-webkit-scrollbar": { display: "none" } }}
-      >
-        {pane.tabs.map((path) => (
-          <Tab
-            key={path}
-            pane={pane}
-            path={path}
-            active={path === pane.active}
-            onMenu={(e, p) => {
-              e.preventDefault();
-              setMenu({ x: e.clientX, y: e.clientY, path: p });
-            }}
-          />
-        ))}
-        {!pane.tabs.length && (
-          <ButtonBase disabled sx={{ px: 1.5, fontSize: 13, color: "text.disabled" }}>
-            Empty pane
-          </ButtonBase>
-        )}
-      </Box>
-      <PaneActions pane={pane} />
+    <TabBar label="notebook tabs" highlight={focused && state.panes.length > 1} actions={<PaneActions pane={pane} />}>
+      {pane.tabs.map((path) => (
+        <Tab key={path} pane={pane} path={path} active={path === pane.active} onMenu={(e, p) => setMenu({ x: e.clientX, y: e.clientY, path: p })} />
+      ))}
+      {!pane.tabs.length && (
+        <ButtonBase disabled sx={{ px: 1.5, fontSize: 13, color: "text.disabled" }}>
+          Empty pane
+        </ButtonBase>
+      )}
       {menu && <TabMenu anchor={menu} pane={pane} path={menu.path} onClose={() => setMenu(null)} />}
-    </Box>
+    </TabBar>
   );
 }

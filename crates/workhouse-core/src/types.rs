@@ -153,6 +153,18 @@ pub fn comparison_common(a: &DataType, b: &DataType) -> Option<DataType> {
             Some(Timestamp(unit, tz.clone()))
         }
         (Boolean, Boolean) => Some(Boolean),
+        (List(x), List(y)) => {
+            let elem = comparison_common(x.data_type(), y.data_type())?;
+            Some(crate::nested::list_of(crate::nested::canonical_element(&elem)))
+        }
+        (Struct(x), Struct(y)) if x.len() == y.len() && x.iter().zip(y.iter()).all(|(f, g)| f.name() == g.name()) => {
+            let fields: Option<Vec<(String, DataType)>> = x
+                .iter()
+                .zip(y.iter())
+                .map(|(f, g)| Some((f.name().clone(), comparison_common(f.data_type(), g.data_type())?)))
+                .collect();
+            Some(crate::nested::struct_of(fields?))
+        }
         (Dictionary(_, v), other) | (other, Dictionary(_, v)) => comparison_common(v, other),
         _ => None,
     }
@@ -219,6 +231,13 @@ pub fn binary_signature(op: Operator, lt: &DataType, rt: &DataType) -> Result<Bi
             })?;
             sig(c.clone(), c, Boolean)
         }
+        Operator::StringConcat if crate::nested::is_list(lt) || crate::nested::is_list(rt) => {
+            let elems: Vec<DataType> =
+                [lt, rt].into_iter().filter_map(|t| crate::nested::element_type(t).cloned()).collect();
+            let elem = common_supertype(elems.iter()).unwrap_or(Null);
+            let res = crate::nested::list_of(crate::nested::canonical_element(&elem));
+            sig(res.clone(), res.clone(), res)
+        }
         Operator::StringConcat => sig(Utf8, Utf8, Utf8),
         Operator::Plus | Operator::Minus | Operator::Multiply | Operator::Divide | Operator::Modulo => {
             if matches!(lt, Null) || matches!(rt, Null) {
@@ -251,9 +270,13 @@ pub fn binary_signature(op: Operator, lt: &DataType, rt: &DataType) -> Result<Bi
     }
 }
 
-/// Parse a type name (SQL or Polars style) into an Arrow type.
+/// Parse a type name (SQL or common shorthand) into an Arrow type.
 pub fn parse_data_type(s: &str) -> Result<DataType> {
     use DataType::*;
+    // nested types keep the case of their field names
+    if let Some(nested) = crate::nested::parse_nested_type(s, &parse_data_type)? {
+        return Ok(nested);
+    }
     let t = s.trim().to_ascii_lowercase();
     let t = t.as_str();
     if let Some(rest) = t.strip_prefix("decimal").or_else(|| t.strip_prefix("numeric")) {

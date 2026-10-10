@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { addCell, cells, newNotebook, runCell, setCode } from "./helpers";
+import { addCell, cells, fileUrl, newNotebook, runCell, setCode } from "./helpers";
 
 const tree = (page: Page) => page.getByRole("tree");
 
@@ -35,18 +35,35 @@ test("files and folders are renamed, duplicated and deleted from the tree", asyn
 
 test("an open notebook renamed from the tree keeps its kernel state", async ({ page }) => {
   await newNotebook(page, "notebooks/e2e_keep.py");
+  // the URL names the notebook's id: a rename does not change it
+  const url = page.url();
   const define = await addCell(page, "Python");
   await setCode(define, "kept = 6 * 7\nprint('defined')");
   await runCell(define);
-  await expect(define.getByText("defined")).toBeVisible();
+  await expect(define.getByText("defined", { exact: true })).toBeVisible();
 
   await treeAction(page, "e2e_keep.py", /Rename/);
   await page.getByLabel("Path in the workspace").fill("notebooks/e2e_kept.py");
   await page.getByRole("button", { name: "Rename", exact: true }).click();
-  await page.waitForURL("**/notebooks/notebooks/e2e_kept.py");
+  await expect(page.getByRole("tab", { name: /e2e_kept/ })).toBeVisible();
+  await expect(page).toHaveURL(url);
 
   const use = await addCell(page, "Python");
   await setCode(use, "print(kept)");
   await runCell(use);
   await expect(cells(page).last().getByText("42")).toBeVisible();
+});
+
+test("a notebook's URL is its id: old path URLs redirect to it and unknown ids say so", async ({ page }) => {
+  await page.goto("/notebooks/notebooks/tpch_tour.py");
+  await page.waitForURL(fileUrl("notebooks"));
+  const url = page.url();
+  await expect(page.getByRole("tab", { name: /tpch_tour/ })).toHaveAttribute("aria-selected", "true");
+
+  await page.goto("/notebooks/zzzzzzzz");
+  await expect(page.getByText("There is no notebook at this link")).toBeVisible();
+
+  // the id keeps naming the notebook
+  await page.goto(url);
+  await expect(page.getByRole("tab", { name: /tpch_tour/ })).toHaveAttribute("aria-selected", "true");
 });

@@ -16,6 +16,7 @@ use parking_lot::Mutex;
 use rayon::prelude::*;
 
 use crate::error::Result;
+use crate::exec::metrics::NodeRef;
 use crate::exec::query::{PipelineProgress, QueryHandle};
 
 /// Target number of rows per morsel for in-memory sources.
@@ -99,6 +100,10 @@ pub trait Sink: Sync {
         false
     }
     fn finalize(&self, locals: Vec<Self::Local>) -> Result<Self::Output>;
+    /// The sink's name in a query's profile.
+    fn name(&self) -> String {
+        std::any::type_name::<Self>().rsplit("::").next().unwrap_or("").to_string()
+    }
 }
 
 pub fn profiling() -> bool {
@@ -114,7 +119,7 @@ pub fn run_pipeline<S: Sink>(pipeline: &Pipeline, sink: &S) -> Result<S::Output>
     if let Some(q) = &query {
         q.check()?;
     }
-    let sink_name = std::any::type_name::<S>().rsplit("::").next().unwrap_or("").to_string();
+    let sink_name = sink.name();
     let progress = query.as_ref().map(|q| {
         q.track(PipelineProgress::new(
             pipeline.source.describe(),
@@ -412,6 +417,8 @@ pub struct UnionSource {
     inputs: Vec<Pipeline>,
     offsets: Vec<usize>,
     schema: SchemaRef,
+    /// analyzed run: the union's own work (the inputs report on their own)
+    node: Option<NodeRef>,
 }
 
 impl UnionSource {
@@ -423,7 +430,12 @@ impl UnionSource {
             acc += p.num_morsels();
         }
         offsets.push(acc);
-        Self { inputs, offsets, schema }
+        Self { inputs, offsets, schema, node: None }
+    }
+
+    pub fn measured(mut self, node: Option<NodeRef>) -> Self {
+        self.node = node;
+        self
     }
 }
 
@@ -435,12 +447,16 @@ impl Source for UnionSource {
         let i = self.offsets.partition_point(|&o| o <= morsel) - 1;
         let schema = self.schema.clone();
         self.inputs[i].run_morsel(morsel - self.offsets[i], &mut |b| {
+            let start = self.node.as_ref().map(|_| std::time::Instant::now());
             // normalise field names/nullability to the union schema
             let b = RecordBatch::try_new_with_options(
                 schema.clone(),
                 b.columns().to_vec(),
                 &arrow::record_batch::RecordBatchOptions::new().with_row_count(Some(b.num_rows())),
             )?;
+            if let (Some(node), Some(start)) = (&self.node, start) {
+                node.record(start.elapsed(), b.num_rows() as u64, 1);
+            }
             emit(b)
         })
     }

@@ -3,6 +3,8 @@ packages:
   - packages/*
 allowBuilds:
   cpu-features: false
+  esbuild: true
+  sharp: true
   ssh2: false
 minimumReleaseAgeExclude:
   - '@mui/x-data-grid@9.15.0'

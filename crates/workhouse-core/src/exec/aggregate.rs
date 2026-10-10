@@ -23,12 +23,13 @@
 use std::sync::Arc;
 
 use arrow::array::*;
-use arrow::compute::{filter, take};
+use arrow::compute::{SortOptions, filter, take};
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use rayon::prelude::*;
 
 use crate::error::{Result, WhError};
+use crate::exec::acc_list::{ListAcc, ListSpec};
 use crate::exec::accumulators::{Accumulator, create_accumulator};
 use crate::exec::agg_spill::{AggSpill, arrays_bytes, group_bytes};
 use crate::exec::memory::{self, Reservation};
@@ -47,11 +48,37 @@ pub struct AggregateExpr {
     pub filter: Option<PhysExpr>,
     pub input_type: Option<DataType>,
     pub name: String,
+    /// `ORDER BY` inside the call: the keys are `args[1..]`
+    pub order: Vec<SortOptions>,
 }
 
 impl AggregateExpr {
     pub fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        if self.collects() {
+            return Ok(Box::new(ListAcc::new(self.list_spec())));
+        }
         create_accumulator(self.func, self.input_type.as_ref(), self.distinct, self.filter.is_some())
+    }
+
+    /// `array_agg` and friends: they keep rows and need the scan position of each.
+    pub fn collects(&self) -> bool {
+        matches!(self.func, AggFunc::ArrayAgg | AggFunc::CollectList | AggFunc::CollectSet)
+    }
+
+    fn list_spec(&self) -> ListSpec {
+        ListSpec {
+            elem: self.input_type.clone().unwrap_or(DataType::Null),
+            keys: self.args[1..].iter().map(|k| k.data_type()).zip(self.order.iter().copied()).collect(),
+            skip_nulls: self.func != AggFunc::ArrayAgg,
+            distinct: self.distinct || self.func == AggFunc::CollectSet,
+            null_if_empty: self.func == AggFunc::ArrayAgg,
+        }
+    }
+
+    /// Columns of one input row of this aggregate in a chunk: the arguments
+    /// and the scan position when the aggregate collects.
+    pub fn input_arity(&self) -> usize {
+        self.args.len() + usize::from(self.collects())
     }
 }
 
@@ -84,6 +111,8 @@ pub struct AggLocal {
     reservation: Reservation,
     table_bytes: usize,
     parts_bytes: usize,
+    /// scan position of the next row: (morsel, rows of it seen so far)
+    seq: (usize, u64),
 }
 
 impl AggLocal {
@@ -92,6 +121,17 @@ impl AggLocal {
             Some(k) => k.len(),
             None => 1,
         }
+    }
+
+    /// The scan position of the next `n` rows of `morsel`: the morsel in the
+    /// high bits, the rows of it already seen below.
+    fn next_seq(&mut self, morsel: usize, n: usize) -> u64 {
+        if self.seq.0 != morsel {
+            self.seq = (morsel, 0);
+        }
+        let at = ((morsel as u64) << 40) + self.seq.1;
+        self.seq.1 += n as u64;
+        at
     }
 }
 
@@ -137,12 +177,13 @@ impl AggregateSink {
             reservation: memory::pool().reservation(),
             table_bytes: 0,
             parts_bytes: 0,
+            seq: (usize::MAX, 0),
         })
     }
 
     /// Account the pre-aggregation table's growth; false: no room, switch to radix mode.
     fn account_table(&self, local: &mut AggLocal) -> bool {
-        let want = local.num_groups() * self.per_group;
+        let want = local.num_groups() * self.per_group + local.accs.iter().map(|a| a.state_bytes()).sum::<usize>();
         if want <= local.table_bytes {
             return true;
         }
@@ -182,11 +223,15 @@ impl AggregateSink {
 
     /// Evaluate group keys and aggregate inputs: `(keys, [(args, filter)])`.
     #[allow(clippy::type_complexity)]
-    fn evaluate(&self, batch: &RecordBatch) -> Result<(Vec<ArrayRef>, Vec<(Vec<ArrayRef>, Option<ArrayRef>)>)> {
+    fn evaluate(&self, batch: &RecordBatch, seq: u64) -> Result<(Vec<ArrayRef>, Vec<(Vec<ArrayRef>, Option<ArrayRef>)>)> {
         let keys = self.group_exprs.iter().map(|e| e.evaluate_array(batch)).collect::<Result<Vec<_>>>()?;
         let mut inputs = Vec::with_capacity(self.aggs.len());
         for a in &self.aggs {
-            let args = a.args.iter().map(|x| x.evaluate_array(batch)).collect::<Result<Vec<_>>>()?;
+            let mut args = a.args.iter().map(|x| x.evaluate_array(batch)).collect::<Result<Vec<_>>>()?;
+            if a.collects() {
+                let n = batch.num_rows() as u64;
+                args.push(Arc::new(UInt64Array::from_iter_values(seq..seq + n)));
+            }
             let f = match &a.filter {
                 Some(f) => Some(f.evaluate_array(batch)?),
                 None => None,
@@ -225,8 +270,8 @@ impl AggregateSink {
         let mut pos = k;
         let mut inputs = Vec::with_capacity(self.aggs.len());
         for a in &self.aggs {
-            let args = chunk[pos..pos + a.args.len()].to_vec();
-            pos += a.args.len();
+            let args = chunk[pos..pos + a.input_arity()].to_vec();
+            pos += a.input_arity();
             let f = if a.filter.is_some() {
                 pos += 1;
                 Some(chunk[pos - 1].clone())
@@ -340,7 +385,7 @@ impl Sink for AggregateSink {
         self.new_local()
     }
 
-    fn push(&self, local: &mut Result<AggLocal>, _morsel: usize, batch: RecordBatch) -> Result<()> {
+    fn push(&self, local: &mut Result<AggLocal>, morsel: usize, batch: RecordBatch) -> Result<()> {
         let local = match local {
             Ok(l) => l,
             Err(e) => return Err(WhError::Execution(e.to_string())),
@@ -350,7 +395,7 @@ impl Sink for AggregateSink {
             return Ok(());
         }
         local.rows += n;
-        let (keys, inputs) = self.evaluate(&batch)?;
+        let (keys, inputs) = self.evaluate(&batch, local.next_seq(morsel, n))?;
         if local.keys.is_none() {
             // global aggregation
             for (acc, (args, f)) in local.accs.iter_mut().zip(&inputs) {

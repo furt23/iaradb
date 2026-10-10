@@ -12,6 +12,8 @@ from typing import Any
 
 import pytest
 
+from workhouse.kernel.notebook import marimo_io
+from workhouse.kernel.notebook.model import Cell
 from workhouse.kernel.session import KernelSession
 
 
@@ -264,3 +266,29 @@ def test_renamed_notebook_keeps_its_state(session: KernelSession):
     view = call(session, "notebook.rename", {"path": "notebooks/sub/after.py"})
     assert view["path"] == "notebooks/sub/after.py" and view["states"]["v"]["status"] == "done"
     assert session.notebook.namespace()["kept"] == 42
+
+
+def test_tables_created_by_sql_reach_the_studio(session: KernelSession, workspace: Path):
+    rec = Recorder()
+    out = session.handlers()["sql.run"]({"query": "create table big_sales as select * from sales where amount > 100"}, rec)
+    assert out["result"]["page"]["rows"][0][0] == "create"
+    changes = [d for e, d in rec.events if e == "catalog.changed"]
+    assert changes == [{"name": "big_sales", "entry": '\n[tables.big_sales]\npath = "warehouse/big_sales"\n', "kind": "table"}]
+    assert (workspace / "warehouse" / "big_sales").is_dir()
+    # a notebook cell drops it: the run reports that too
+    session.notebook.create("notebooks/drop.py", persist=False)
+    rec = Recorder()
+    result = session.handlers()["notebook.run"]({"cells": [SETUP, sql("d", "drop table big_sales", "dropped")], "cell_ids": None}, rec)
+    assert result["ran"] == ["setup", "d"]
+    assert [d for e, d in rec.events if e == "catalog.changed"] == [{"name": "big_sales", "entry": None, "kind": "table"}]
+
+
+def test_a_notebook_runs_headless_as_opened(session: KernelSession, workspace: Path):
+    # what a job does: open the file's notebook, then run it without the editor's cells
+    nb = marimo_io.new_notebook(workspace / "notebooks" / "job.py")  # its setup cell defines ws
+    nb.cells.append(Cell("b", "sql", "select count(*) as n from sales", output="n"))
+    view = call(session, "notebook.open", {"path": "notebooks/job.py", "source": marimo_io.serialize(nb)})
+    rec = Recorder()
+    result = session.handlers()["notebook.run"]({"cells": None, "cell_ids": None}, rec)
+    assert result == {"ran": [c["id"] for c in view["cells"]], "interrupted": False}
+    assert rec.states(view["cells"][-1]["id"])[-1] == "done"

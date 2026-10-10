@@ -324,7 +324,7 @@ fn push_down_filters(plan: &LogicalPlan, preds: Vec<Expr>) -> Result<LogicalPlan
             wrap_filter(LogicalPlan::Scan(scan), preds)
         }
         LogicalPlan::Window(w) => push_through_window(w, preds),
-        LogicalPlan::Limit(_) | LogicalPlan::Values(_) | LogicalPlan::RecursiveQuery(_) => {
+        LogicalPlan::Limit(_) | LogicalPlan::Values(_) | LogicalPlan::RecursiveQuery(_) | LogicalPlan::Unnest(_) => {
             let p = map_inputs(plan, &mut |i| push_down_filters(i, vec![]))?;
             wrap_filter(p, preds)
         }
@@ -742,6 +742,7 @@ fn prune_columns(plan: &LogicalPlan, required: &BTreeSet<usize>) -> Result<Logic
             LogicalPlan::union(inputs)
         }
         LogicalPlan::Window(w) => prune_window(w, required),
+        LogicalPlan::Unnest(u) => prune_unnest(u, required),
         LogicalPlan::RecursiveQuery(r) => {
             // the recursive term reads every column of the work table
             let all: BTreeSet<usize> = (0..r.schema.len()).collect();
@@ -762,6 +763,25 @@ fn prune_columns(plan: &LogicalPlan, required: &BTreeSet<usize>) -> Result<Logic
             Ok(LogicalPlan::values(schema, batches))
         }
     }
+}
+
+/// An unnest keeps all its expressions (it multiplies rows even when its
+/// elements are not read); the input only needs the columns read above and by them.
+fn prune_unnest(u: &crate::logical::Unnest, required: &BTreeSet<usize>) -> Result<LogicalPlan> {
+    let n_in = u.input.schema().len();
+    let mut child_req: BTreeSet<usize> = required.iter().copied().filter(|&i| i < n_in).collect();
+    let refs: Vec<&Expr> = u.exprs.iter().collect();
+    child_req.extend(indices_of(&refs, u.input.schema())?);
+    let input = prune_columns(&u.input, &child_req)?;
+    let unnest = LogicalPlan::unnest(Arc::new(input), u.exprs.clone(), u.outputs.clone(), u.keep_empty)?;
+    let positions: Vec<usize> = child_req.iter().copied().collect();
+    let mut keep: BTreeSet<usize> = required
+        .iter()
+        .filter(|&&i| i < n_in)
+        .map(|i| positions.iter().position(|x| x == i).unwrap())
+        .collect();
+    keep.extend(required.iter().filter(|&&i| i >= n_in).map(|i| positions.len() + (i - n_in)));
+    project_columns(unnest, &keep)
 }
 
 /// Drop window expressions nobody reads (and the window itself if none is).

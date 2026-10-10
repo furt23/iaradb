@@ -16,6 +16,10 @@ use hashbrown::{HashMap, HashSet};
 use crate::error::{Result, WhError};
 use crate::expr::AggFunc;
 
+use super::acc_misc::*;
+use super::acc_quantile::{QuantileAcc, QuantileMode};
+use super::acc_stats::PairStatAcc;
+
 pub trait Accumulator: Send + Sync {
     /// Fold `values` (one array per argument) into the groups given by `gids`.
     fn update(&mut self, values: &[ArrayRef], gids: &[u32], num_groups: usize) -> Result<()>;
@@ -27,10 +31,16 @@ pub trait Accumulator: Send + Sync {
     /// Merge groups `src[i]` of `other` into groups `dst[i]` of `self`.
     fn merge(&mut self, other: &dyn Accumulator, src: &[u32], dst: &[u32], num_groups: usize) -> Result<()>;
     fn finish(&mut self, num_groups: usize) -> Result<ArrayRef>;
+    /// Bytes the state holds beyond a fixed amount per group (accumulators
+    /// that keep rows, like `array_agg`): the aggregation counts them against
+    /// the memory limit.
+    fn state_bytes(&self) -> usize {
+        0
+    }
     fn as_any(&self) -> &dyn Any;
 }
 
-fn downcast<'a, T: 'static>(other: &'a dyn Accumulator) -> Result<&'a T> {
+pub(crate) fn downcast<'a, T: 'static>(other: &'a dyn Accumulator) -> Result<&'a T> {
     other
         .as_any()
         .downcast_ref::<T>()
@@ -99,16 +109,120 @@ impl Accumulator for CountAcc {
 // SUM
 // ---------------------------------------------------------------------------
 
-pub struct SumAcc<I: ArrowPrimitiveType, O: ArrowPrimitiveType> {
-    sums: Vec<O::Native>,
+/// How a sum is kept. Integer sums are held in a wider type, so the order
+/// the rows (and the partial sums of the threads) arrive in cannot cause an
+/// overflow: the total either fits the output type or is an error.
+pub trait SumNative: ArrowNativeTypeOp {
+    type Wide: Copy + Send + Sync + 'static;
+    const ZERO_WIDE: Self::Wide;
+    fn widen(self) -> Self::Wide;
+    /// `a + b`; sets `over` when the wide type itself overflows (decimals).
+    fn add_wide(a: Self::Wide, b: Self::Wide, over: &mut bool) -> Self::Wide;
+    /// The sum as the output type; `None` when it does not fit.
+    fn narrow(w: Self::Wide) -> Option<Self>;
+}
+
+macro_rules! int_sum_native {
+    ($t:ty, $wide:ty) => {
+        impl SumNative for $t {
+            type Wide = $wide;
+            const ZERO_WIDE: $wide = 0;
+            #[inline(always)]
+            fn widen(self) -> $wide {
+                self as $wide
+            }
+            // 2^64 rows of 2^63 would be needed to overflow the wide type
+            #[inline(always)]
+            fn add_wide(a: $wide, b: $wide, _over: &mut bool) -> $wide {
+                a.wrapping_add(b)
+            }
+            #[inline(always)]
+            fn narrow(w: $wide) -> Option<$t> {
+                <$t>::try_from(w).ok()
+            }
+        }
+    };
+}
+int_sum_native!(i64, i128);
+int_sum_native!(u64, u128);
+
+/// Decimals have no wider type: overflow of the i128 is detected as it happens.
+impl SumNative for i128 {
+    type Wide = i128;
+    const ZERO_WIDE: i128 = 0;
+    #[inline(always)]
+    fn widen(self) -> i128 {
+        self
+    }
+    #[inline(always)]
+    fn add_wide(a: i128, b: i128, over: &mut bool) -> i128 {
+        let (r, o) = a.overflowing_add(b);
+        *over |= o;
+        r
+    }
+    #[inline(always)]
+    fn narrow(w: i128) -> Option<i128> {
+        Some(w)
+    }
+}
+
+impl SumNative for f64 {
+    type Wide = f64;
+    const ZERO_WIDE: f64 = 0.0;
+    #[inline(always)]
+    fn widen(self) -> f64 {
+        self
+    }
+    #[inline(always)]
+    fn add_wide(a: f64, b: f64, _over: &mut bool) -> f64 {
+        a + b
+    }
+    #[inline(always)]
+    fn narrow(w: f64) -> Option<f64> {
+        Some(w)
+    }
+}
+
+type Wide<O> = <<O as ArrowPrimitiveType>::Native as SumNative>::Wide;
+
+/// The error of a sum that does not fit its type.
+fn sum_overflow(out: &DataType) -> WhError {
+    let kind = if matches!(out, DataType::Decimal128(..)) { "decimal" } else { "integer" };
+    WhError::Execution(format!("{kind} overflow in sum(...): cast to DOUBLE or DECIMAL"))
+}
+
+pub struct SumAcc<I: ArrowPrimitiveType, O: ArrowPrimitiveType>
+where
+    O::Native: SumNative,
+{
+    sums: Vec<Wide<O>>,
     seen: Option<Vec<bool>>,
     out_type: DataType,
     _p: PhantomData<fn() -> I>,
 }
 
-impl<I: ArrowPrimitiveType, O: ArrowPrimitiveType> SumAcc<I, O> {
+impl<I: ArrowPrimitiveType, O: ArrowPrimitiveType> SumAcc<I, O>
+where
+    O::Native: SumNative,
+{
     pub fn new(out_type: DataType, track_seen: bool) -> Self {
         Self { sums: vec![], seen: if track_seen { Some(vec![]) } else { None }, out_type, _p: PhantomData }
+    }
+
+    fn zero() -> Wide<O> {
+        <O::Native as SumNative>::ZERO_WIDE
+    }
+
+    #[inline(always)]
+    fn add(a: Wide<O>, v: I::Native, over: &mut bool) -> Wide<O>
+    where
+        I::Native: Into<O::Native>,
+    {
+        <O::Native as SumNative>::add_wide(a, v.into().widen(), over)
+    }
+
+    fn check(&self, over: bool) -> Result<()> {
+        if over { Err(sum_overflow(&self.out_type)) } else { Ok(()) }
     }
 }
 
@@ -117,10 +231,12 @@ where
     I: ArrowPrimitiveType,
     O: ArrowPrimitiveType,
     I::Native: Into<O::Native>,
+    O::Native: SumNative,
 {
     fn update(&mut self, values: &[ArrayRef], gids: &[u32], num_groups: usize) -> Result<()> {
         let prev = self.sums.len();
-        self.sums.resize(num_groups, O::Native::ZERO);
+        let mut over = false;
+        self.sums.resize(num_groups, Self::zero());
         let arr = values[0].as_primitive::<I>();
         let vals = arr.values();
         match arr.nulls().filter(|n| n.null_count() > 0) {
@@ -129,7 +245,7 @@ where
                 for (&g, &v) in gids.iter().zip(vals.iter()) {
                     // SAFETY: group ids are < num_groups
                     let slot = unsafe { s.get_unchecked_mut(g as usize) };
-                    *slot = slot.add_wrapping(v.into());
+                    *slot = Self::add(*slot, v, &mut over);
                 }
                 if let Some(seen) = &mut self.seen {
                     seen.resize(num_groups, false);
@@ -144,52 +260,54 @@ where
                 for (i, (&g, &v)) in gids.iter().zip(vals.iter()).enumerate() {
                     if nulls.is_valid(i) {
                         let slot = &mut self.sums[g as usize];
-                        *slot = slot.add_wrapping(v.into());
+                        *slot = Self::add(*slot, v, &mut over);
                         seen[g as usize] = true;
                     }
                 }
             }
         }
-        Ok(())
+        self.check(over)
     }
 
     fn update_single(&mut self, values: &[ArrayRef], _num_rows: usize) -> Result<()> {
         if self.sums.is_empty() {
-            self.sums.push(O::Native::ZERO);
+            self.sums.push(Self::zero());
             self.seen = Some(vec![false]);
         }
         let arr = values[0].as_primitive::<I>();
         let mut acc = self.sums[0];
         let mut any = false;
+        let mut over = false;
         match arr.nulls().filter(|n| n.null_count() > 0) {
             None => {
                 // 4 independent accumulators let the compiler vectorise float sums too
                 let vals = arr.values();
-                let mut lanes = [O::Native::ZERO; 4];
+                let mut lanes = [Self::zero(); 4];
                 let chunks = vals.chunks_exact(4);
                 let rem = chunks.remainder();
                 for c in chunks {
                     for l in 0..4 {
-                        lanes[l] = lanes[l].add_wrapping(c[l].into());
+                        lanes[l] = Self::add(lanes[l], c[l], &mut over);
                     }
                 }
                 for &v in rem {
-                    acc = acc.add_wrapping(v.into());
+                    acc = Self::add(acc, v, &mut over);
                 }
                 for l in lanes {
-                    acc = acc.add_wrapping(l);
+                    acc = <O::Native as SumNative>::add_wide(acc, l, &mut over);
                 }
                 any = !vals.is_empty();
             }
             Some(nulls) => {
                 for (i, &v) in arr.values().iter().enumerate() {
                     if nulls.is_valid(i) {
-                        acc = acc.add_wrapping(v.into());
+                        acc = Self::add(acc, v, &mut over);
                         any = true;
                     }
                 }
             }
         }
+        self.check(over)?;
         self.sums[0] = acc;
         if any {
             self.seen.as_mut().unwrap()[0] = true;
@@ -200,15 +318,16 @@ where
     fn merge(&mut self, other: &dyn Accumulator, src: &[u32], dst: &[u32], num_groups: usize) -> Result<()> {
         let o = downcast::<Self>(other)?;
         let prev = self.sums.len();
-        self.sums.resize(num_groups, O::Native::ZERO);
+        let mut over = false;
+        self.sums.resize(num_groups, Self::zero());
         if o.seen.is_some() || self.seen.is_some() {
             let seen = self.seen.get_or_insert_with(|| vec![true; prev]);
             seen.resize(num_groups, false);
         }
         for (&s, &d) in src.iter().zip(dst) {
             let (s, d) = (s as usize, d as usize);
-            let v = o.sums.get(s).copied().unwrap_or(O::Native::ZERO);
-            self.sums[d] = self.sums[d].add_wrapping(v);
+            let v = o.sums.get(s).copied().unwrap_or(Self::zero());
+            self.sums[d] = <O::Native as SumNative>::add_wide(self.sums[d], v, &mut over);
             if let Some(seen) = &mut self.seen {
                 let os = match &o.seen {
                     Some(x) => x.get(s).copied().unwrap_or(false),
@@ -217,16 +336,23 @@ where
                 seen[d] |= os;
             }
         }
-        Ok(())
+        self.check(over)
     }
 
     fn finish(&mut self, num_groups: usize) -> Result<ArrayRef> {
-        self.sums.resize(num_groups, O::Native::ZERO);
-        let nulls = valid_mask(&self.seen, num_groups);
-        Ok(Arc::new(
-            PrimitiveArray::<O>::new(ScalarBuffer::from(std::mem::take(&mut self.sums)), nulls)
-                .with_data_type(self.out_type.clone()),
-        ))
+        // groups that never received a row (empty input) are NULL, not 0
+        let touched = self.sums.len();
+        self.sums.resize(num_groups, Self::zero());
+        let mut nulls = valid_mask(&self.seen, num_groups);
+        if self.seen.is_none() && touched < num_groups {
+            nulls = Some(NullBuffer::from((0..num_groups).map(|g| g < touched).collect::<Vec<_>>()));
+        }
+        let wide = std::mem::take(&mut self.sums);
+        let sums = wide
+            .into_iter()
+            .map(|w| <O::Native as SumNative>::narrow(w).ok_or_else(|| sum_overflow(&self.out_type)))
+            .collect::<Result<Vec<O::Native>>>()?;
+        Ok(Arc::new(PrimitiveArray::<O>::new(ScalarBuffer::from(sums), nulls).with_data_type(self.out_type.clone())))
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -424,7 +550,10 @@ pub struct MinMaxRowAcc {
 
 impl MinMaxRowAcc {
     pub fn try_new(dt: &DataType, min: bool) -> Result<Self> {
-        Ok(Self { conv: RowConverter::new(vec![SortField::new(dt.clone())])?, vals: vec![], min, dt: dt.clone() })
+        // NULL elements inside lists and structs sort last (DuckDB), so max(s) can be {a: NULL, ..}
+        let order = arrow::compute::SortOptions { descending: false, nulls_first: false };
+        let conv = RowConverter::new(vec![SortField::new_with_options(dt.clone(), order)])?;
+        Ok(Self { conv, vals: vec![], min, dt: dt.clone() })
     }
     fn offer(&mut self, g: usize, row: &[u8]) {
         let replace = match &self.vals[g] {
@@ -492,28 +621,71 @@ impl Accumulator for MinMaxRowAcc {
 // AVG
 // ---------------------------------------------------------------------------
 
-pub struct MeanAcc {
-    sums: Vec<f64>,
-    counts: Vec<i64>,
+/// A native value as the f64 an average adds (what casting the array to Float64 gives).
+pub trait ToF64: Copy {
+    fn to_f64(self) -> f64;
 }
 
-fn as_f64(a: &ArrayRef) -> Result<ArrayRef> {
+macro_rules! to_f64 {
+    ($($t:ty),*) => {$(
+        impl ToF64 for $t {
+            #[inline(always)]
+            fn to_f64(self) -> f64 {
+                self as f64
+            }
+        }
+    )*};
+}
+to_f64!(i8, i16, i32, i64, u8, u16, u32, u64, f32, f64);
+
+/// The average over an input of primitive type `I`, widened to f64 per
+/// element (no converted copy of each batch). `MeanAcc<Float64Type>` also
+/// serves the types without a direct impl (decimals...): their batches are
+/// cast to Float64 first.
+pub struct MeanAcc<I: ArrowPrimitiveType> {
+    sums: Vec<f64>,
+    counts: Vec<i64>,
+    _p: PhantomData<fn() -> I>,
+}
+
+impl<I: ArrowPrimitiveType> MeanAcc<I> {
+    pub fn new() -> Self {
+        Self { sums: vec![], counts: vec![], _p: PhantomData }
+    }
+}
+
+pub(crate) fn as_f64(a: &ArrayRef) -> Result<ArrayRef> {
     if a.data_type() == &DataType::Float64 { Ok(a.clone()) } else { Ok(cast(a, &DataType::Float64)?) }
 }
 
-impl Accumulator for MeanAcc {
+impl<I: ArrowPrimitiveType> MeanAcc<I>
+where
+    I::Native: ToF64,
+{
+    /// The input as an `I` array: a cast only for the Float64 catch-all (or a
+    /// batch that does not have the type the plan promised).
+    fn input(value: &ArrayRef) -> Result<ArrayRef> {
+        if value.data_type() == &I::DATA_TYPE { Ok(value.clone()) } else { Ok(cast(value, &I::DATA_TYPE)?) }
+    }
+}
+
+impl<I> Accumulator for MeanAcc<I>
+where
+    I: ArrowPrimitiveType,
+    I::Native: ToF64,
+{
     fn update(&mut self, values: &[ArrayRef], gids: &[u32], num_groups: usize) -> Result<()> {
         self.sums.resize(num_groups, 0.0);
         self.counts.resize(num_groups, 0);
-        let a = as_f64(&values[0])?;
-        let a = a.as_primitive::<Float64Type>();
+        let a = Self::input(&values[0])?;
+        let a = a.as_primitive::<I>();
         match a.nulls().filter(|n| n.null_count() > 0) {
             None => {
                 for (&g, &v) in gids.iter().zip(a.values().iter()) {
                     let g = g as usize;
                     // SAFETY: group ids are < num_groups
                     unsafe {
-                        *self.sums.get_unchecked_mut(g) += v;
+                        *self.sums.get_unchecked_mut(g) += v.to_f64();
                         *self.counts.get_unchecked_mut(g) += 1;
                     }
                 }
@@ -521,7 +693,7 @@ impl Accumulator for MeanAcc {
             Some(nulls) => {
                 for (i, (&g, &v)) in gids.iter().zip(a.values().iter()).enumerate() {
                     if nulls.is_valid(i) {
-                        self.sums[g as usize] += v;
+                        self.sums[g as usize] += v.to_f64();
                         self.counts[g as usize] += 1;
                     }
                 }
@@ -532,28 +704,28 @@ impl Accumulator for MeanAcc {
     fn update_single(&mut self, values: &[ArrayRef], _num_rows: usize) -> Result<()> {
         self.sums.resize(1, 0.0);
         self.counts.resize(1, 0);
-        let a = as_f64(&values[0])?;
-        let a = a.as_primitive::<Float64Type>();
+        let a = Self::input(&values[0])?;
+        let a = a.as_primitive::<I>();
         let valid = a.len() - a.null_count();
         let s = if a.null_count() == 0 {
             let mut lanes = [0.0f64; 4];
             let chunks = a.values().chunks_exact(4);
-            let rem: f64 = chunks.remainder().iter().sum();
+            let rem: f64 = chunks.remainder().iter().map(|v| v.to_f64()).sum();
             for c in chunks {
                 for l in 0..4 {
-                    lanes[l] += c[l];
+                    lanes[l] += c[l].to_f64();
                 }
             }
             lanes.iter().sum::<f64>() + rem
         } else {
-            a.iter().flatten().sum()
+            a.iter().flatten().map(|v| v.to_f64()).sum()
         };
         self.sums[0] += s;
         self.counts[0] += valid as i64;
         Ok(())
     }
     fn merge(&mut self, other: &dyn Accumulator, src: &[u32], dst: &[u32], num_groups: usize) -> Result<()> {
-        let o = downcast::<MeanAcc>(other)?;
+        let o = downcast::<Self>(other)?;
         self.sums.resize(num_groups, 0.0);
         self.counts.resize(num_groups, 0);
         for (&s, &d) in src.iter().zip(dst) {
@@ -879,6 +1051,7 @@ pub fn create_accumulator(
         return match func {
             AggFunc::Count => Ok(Box::new(CountDistinctAcc::try_new(&dt)?)),
             AggFunc::Min | AggFunc::Max => create_accumulator(func, input, false, has_filter),
+            AggFunc::Sum => Ok(Box::new(SumDistinctAcc::try_new(&dt)?)),
             f => Err(WhError::NotSupported(format!("{}(DISTINCT ..) is not supported", f.name()))),
         };
     }
@@ -933,7 +1106,18 @@ pub fn create_accumulator(
             Utf8 | LargeUtf8 | Utf8View => Box::new(MinMaxStrAcc::new(dt.clone(), func == AggFunc::Min)),
             t => Box::new(MinMaxRowAcc::try_new(t, func == AggFunc::Min)?),
         },
-        AggFunc::Mean => Box::new(MeanAcc { sums: vec![], counts: vec![] }),
+        AggFunc::Mean => match &dt {
+            Int8 => Box::new(MeanAcc::<Int8Type>::new()),
+            Int16 => Box::new(MeanAcc::<Int16Type>::new()),
+            Int32 => Box::new(MeanAcc::<Int32Type>::new()),
+            Int64 => Box::new(MeanAcc::<Int64Type>::new()),
+            UInt8 => Box::new(MeanAcc::<UInt8Type>::new()),
+            UInt16 => Box::new(MeanAcc::<UInt16Type>::new()),
+            UInt32 => Box::new(MeanAcc::<UInt32Type>::new()),
+            UInt64 => Box::new(MeanAcc::<UInt64Type>::new()),
+            Float32 => Box::new(MeanAcc::<Float32Type>::new()),
+            _ => Box::new(MeanAcc::<Float64Type>::new()),
+        },
         AggFunc::Median => Box::new(MedianAcc { vals: vec![] }),
         AggFunc::Std => Box::new(VarAcc::new(1.0, true)),
         AggFunc::StdPop => Box::new(VarAcc::new(0.0, true)),
@@ -941,5 +1125,28 @@ pub fn create_accumulator(
         AggFunc::VarPop => Box::new(VarAcc::new(0.0, false)),
         AggFunc::First => Box::new(FirstLastAcc::new(dt, false)),
         AggFunc::Last => Box::new(FirstLastAcc::new(dt, true)),
+        AggFunc::QuantileCont => Box::new(QuantileAcc::try_new(QuantileMode::Cont, &dt, Float64)?),
+        AggFunc::QuantileDisc => Box::new(QuantileAcc::try_new(QuantileMode::Disc, &dt, dt.clone())?),
+        // DuckDB's t-digest interpolates; integers are truncated back to their type
+        AggFunc::ApproxQuantile => {
+            let out = if dt.is_floating() { Float64 } else { dt.clone() };
+            Box::new(QuantileAcc::try_new(QuantileMode::Cont, &dt, out)?)
+        }
+        AggFunc::CountIf => Box::new(CountIfAcc::new()),
+        AggFunc::BoolAnd => Box::new(BoolAcc::<true>::new()),
+        AggFunc::BoolOr => Box::new(BoolAcc::<false>::new()),
+        AggFunc::MaxBy => Box::new(ArgExtremeAcc::new(dt, true)),
+        AggFunc::MinBy => Box::new(ArgExtremeAcc::new(dt, false)),
+        AggFunc::Product => Box::new(ProductAcc::new()),
+        AggFunc::Corr | AggFunc::CovarSamp | AggFunc::CovarPop | AggFunc::RegrSlope => Box::new(PairStatAcc::new(func)),
+        AggFunc::ArrayAgg | AggFunc::CollectList | AggFunc::CollectSet => {
+            return Err(WhError::Execution(format!("{} is built from its aggregate expression", func.name())));
+        }
     })
 }
+
+#[cfg(test)]
+mod sum_tests;
+
+#[cfg(test)]
+mod mean_tests;

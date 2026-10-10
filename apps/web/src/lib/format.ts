@@ -33,6 +33,15 @@ export function formatTime(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toLocaleString();
 }
 
+/** "just now", "5 min ago", "in 3 h": a time relative to `now` (ms). */
+export function formatRelative(ms: number, now = Date.now()): string {
+  const d = ms - now;
+  const a = Math.abs(d);
+  if (a < 45_000) return d < 0 ? "just now" : "in a moment";
+  const [n, unit] = a < 3600_000 ? [Math.round(a / 60_000), "min"] : a < 86_400_000 ? [Math.round(a / 3600_000), "h"] : [Math.round(a / 86_400_000), "d"];
+  return d < 0 ? `${n} ${unit} ago` : `in ${n} ${unit}`;
+}
+
 const NUMERIC = /^(u?int\d+|float\d*|double|halffloat|decimal)/;
 
 export function isNumericType(arrowType: string): boolean {

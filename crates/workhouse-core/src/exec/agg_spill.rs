@@ -59,7 +59,7 @@ pub fn group_bytes(group_types: &[DataType], aggs: &[AggregateExpr]) -> usize {
             t => t.primitive_width().unwrap_or(16),
         })
         .sum();
-    let states: usize = aggs.iter().map(|a| if a.distinct { 128 } else { 24 }).sum();
+    let states: usize = aggs.iter().map(|a| if a.distinct || a.collects() { 128 } else { 24 }).sum();
     keys + states + 16
 }
 

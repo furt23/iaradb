@@ -126,7 +126,8 @@ impl PhysExpr {
                     || otherwise.as_ref().is_some_and(|o| o.has_columns())
             }
             PhysExpr::InList { expr, .. } | PhysExpr::Like { expr, .. } => expr.has_columns(),
-            PhysExpr::Function { args, .. } => args.iter().any(|a| a.has_columns()),
+            // random() must not be folded into a constant
+            PhysExpr::Function { func, args, .. } => *func == ScalarFunc::Random || args.iter().any(|a| a.has_columns()),
         }
     }
 
@@ -245,6 +246,11 @@ fn eval_binary(left: &PhysExpr, op: Operator, right: &PhysExpr, batch: &RecordBa
         _ => {
             let r = right.evaluate(batch)?;
             let scalar = l.is_scalar() && r.is_scalar();
+            if op.is_comparison() && crate::nested::is_nested(l.data_type()) {
+                let m = if scalar { 1 } else { n };
+                let res = crate::physical::nested_cmp::compare(op, &l.into_array(m)?, &r.into_array(m)?)?;
+                return Ok(wrap(Arc::new(res), scalar));
+            }
             let res: ArrayRef = match op {
                 Operator::Eq => Arc::new(cmp::eq(&l, &r)?),
                 Operator::NotEq => Arc::new(cmp::neq(&l, &r)?),
@@ -335,7 +341,7 @@ pub fn cast_expr(e: PhysExpr, to: &DataType) -> Result<PhysExpr> {
     Ok(PhysExpr::Cast { expr: Box::new(e), to: to.clone(), safe: false })
 }
 
-fn to_utf8(e: PhysExpr) -> Result<PhysExpr> {
+pub(crate) fn to_utf8(e: PhysExpr) -> Result<PhysExpr> {
     cast_expr(e, &DataType::Utf8)
 }
 
@@ -441,6 +447,9 @@ fn compile_binary(left: &Expr, op: Operator, right: &Expr, schema: &PlanSchema) 
     if op.is_comparison() && lt == DataType::Null && rt == DataType::Null {
         return Ok(PhysExpr::Literal(Scalar::null_of(&DataType::Boolean)));
     }
+    if op == Operator::StringConcat && (crate::nested::is_list(&lt) || crate::nested::is_list(&rt)) {
+        return functions::lists::plan::concat_operator(l, r);
+    }
     let sig = binary_signature(op, &lt, &rt)?;
     if op == Operator::StringConcat {
         l = to_utf8(l)?;
@@ -512,6 +521,10 @@ fn compile_in_list(expr: &Expr, list: &[Expr], negated: bool, schema: &PlanSchem
 fn compile_function(func: ScalarFunc, args: &[Expr], schema: &PlanSchema) -> Result<PhysExpr> {
     use ScalarFunc::*;
     let mut a = args.iter().map(|e| create_physical_expr(e, schema)).collect::<Result<Vec<_>>>()?;
+    // len / reverse / contains / .. of a list are the list functions
+    if let Some(list_func) = a.first().and_then(|x| functions::lists::names::list_variant(func, &x.data_type())) {
+        return functions::lists::plan::compile(list_func, args, schema);
+    }
     let nargs = |lo: usize, hi: usize| -> Result<()> {
         if args.len() < lo || args.len() > hi {
             Err(WhError::Plan(format!("{} expects {lo}..{hi} arguments, got {}", func.name(), args.len())))
@@ -610,6 +623,7 @@ fn compile_function(func: ScalarFunc, args: &[Expr], schema: &PlanSchema) -> Res
                 return Err(WhError::NotSupported("date_trunc unit must be a constant".into()));
             }
         }
+        _ => return functions::plan::compile(func, args, schema),
     }
     let types: Vec<DataType> = a.iter().map(|x| x.data_type()).collect();
     let dt = func.return_type(&types)?;
@@ -654,3 +668,6 @@ pub fn evaluate_constant(e: &Expr) -> Result<Option<Scalar>> {
         Err(e) => Err(e),
     }
 }
+
+#[cfg(test)]
+mod null_as_false_tests;

@@ -1,6 +1,7 @@
 //! The parallel Parquet scan: one morsel per surviving row group (split into
 //! row ranges when there are too few for the threads), with the column
-//! chunks of remote files prefetched ahead of the workers.
+//! chunks of remote files prefetched ahead of the workers, several row
+//! groups of a file per fetch to keep the number of requests down.
 
 use std::sync::Arc;
 
@@ -17,7 +18,8 @@ use crate::error::Result;
 use crate::exec::pipeline::{Emit, Source};
 use crate::exec::query::QueryHandle;
 use crate::expr::Expr;
-use crate::io::object::prefetch::{self, FetchJob, Prefetcher};
+use crate::io::object::config;
+use crate::io::object::prefetch::{self, FetchGroups, Prefetcher};
 
 #[derive(Debug, Clone)]
 struct Morsel {
@@ -59,6 +61,10 @@ impl ParquetSource {
         if !remote && req.fetch.is_none() && !req.projection.is_empty() {
             morsels = split_for_parallelism(morsels);
         }
+        // a LIMIT reads the first row groups that hold enough rows, not one per worker
+        if let (true, Some(rows)) = (remote, req.fetch) {
+            morsels = enough_rows(morsels, rows);
+        }
         let mut src = ParquetSource {
             files: req.files.to_vec(),
             projection: req.projection,
@@ -88,12 +94,16 @@ impl ParquetSource {
         if window == 0 {
             return None;
         }
-        let jobs = self.morsels.iter().map(|m| {
+        // consecutive row groups of a file are fetched together (fewer requests);
+        // a LIMIT fetches them one by one
+        let target = if self.fetch.is_some() { 0 } else { config::fetch_target() };
+        let mut groups = FetchGroups::new(target);
+        for m in &self.morsels {
             let f = &self.files[m.file];
-            let ranges = chunk_ranges(&f.meta, m.row_group, &self.mask(f));
-            f.blob.object().map(|o| FetchJob { file: o.clone(), ranges })
-        });
-        Some(Prefetcher::new(jobs.collect::<Option<Vec<_>>>()?, window))
+            groups.push(m.file, f.blob.object()?, chunk_ranges(&f.meta, m.row_group, &self.mask(f)));
+        }
+        let prefetcher = Prefetcher::grouped(groups.finish(), window);
+        Some(if self.fetch.is_some() { prefetcher.with_lookahead(window) } else { prefetcher })
     }
 
     /// Emit row counts only (no columns): answered from metadata.
@@ -129,6 +139,21 @@ fn surviving_row_groups(files: &[Arc<ParquetFile>], schema: &SchemaRef, filters:
     per_file.into_iter().flatten().collect()
 }
 
+/// The first morsels that hold `rows` rows between them.
+fn enough_rows(mut morsels: Vec<Morsel>, rows: usize) -> Vec<Morsel> {
+    let mut have = 0;
+    let keep = if rows == 0 {
+        0
+    } else {
+        morsels.iter().position(|m| {
+            have += m.rows;
+            have >= rows
+        }).map_or(morsels.len(), |i| i + 1)
+    };
+    morsels.truncate(keep);
+    morsels
+}
+
 /// Split row groups into row ranges if there is not enough parallelism.
 fn split_for_parallelism(morsels: Vec<Morsel>) -> Vec<Morsel> {
     let target = rayon::current_num_threads() * 3;
@@ -153,6 +178,13 @@ fn split_for_parallelism(morsels: Vec<Morsel>) -> Vec<Morsel> {
         }
     }
     split
+}
+
+impl ParquetSource {
+    /// The file (index into the scanned files) a morsel reads.
+    pub fn morsel_file(&self, morsel: usize) -> usize {
+        self.morsels[morsel].file
+    }
 }
 
 impl Source for ParquetSource {
@@ -189,5 +221,24 @@ impl Source for ParquetSource {
             self.morsels.len(),
             self.projection.len()
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn morsels(rows: &[usize]) -> Vec<Morsel> {
+        rows.iter().enumerate().map(|(i, &rows)| Morsel { file: 0, row_group: i, range: None, rows }).collect()
+    }
+
+    #[test]
+    fn a_limit_keeps_the_first_row_groups_that_cover_it() {
+        let rows = |m: Vec<Morsel>| m.iter().map(|m| m.row_group).collect::<Vec<_>>();
+        assert_eq!(rows(enough_rows(morsels(&[100, 100, 100]), 10)), vec![0]);
+        assert_eq!(rows(enough_rows(morsels(&[100, 100, 100]), 100)), vec![0]);
+        assert_eq!(rows(enough_rows(morsels(&[100, 100, 100]), 101)), vec![0, 1]);
+        assert_eq!(rows(enough_rows(morsels(&[100, 100, 100]), 1000)), vec![0, 1, 2]);
+        assert!(enough_rows(morsels(&[100]), 0).is_empty());
     }
 }

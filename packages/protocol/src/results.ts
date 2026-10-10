@@ -28,6 +28,31 @@ export interface ResultMeta {
   page: ResultPage;
 }
 
+export type ChartKind = "bar" | "line" | "area" | "scatter" | "histogram";
+export type ChartAgg = "sum" | "avg" | "count" | "min" | "max" | "none";
+
+/** What to draw from a result (saved with the cell or query that made it). */
+export interface ChartSpec {
+  kind: ChartKind;
+  /** the category / axis column (the measured column of a histogram) */
+  x: string;
+  /** value columns (none when counting rows) */
+  y: string[];
+  agg: ChartAgg;
+  /** a column that splits the values into series */
+  group?: string | null;
+  /** histogram buckets */
+  bins?: number;
+}
+
+/** The points of a chart, aggregated or sampled by the kernel. */
+export interface ChartData {
+  columns: string[];
+  rows: CellValue[][];
+  /** more categories or points than were sent */
+  truncated: boolean;
+}
+
 export interface SortKey {
   column: string;
   descending?: boolean;
