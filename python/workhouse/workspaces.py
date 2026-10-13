@@ -7,7 +7,8 @@
 
     [tables.lineitem]
     path = "data/lineitem"     # relative to the workspace root: file, directory or glob
-    format = "parquet"         # parquet | csv | json (NDJSON or a JSON array; default: from the extension, else parquet)
+    format = "parquet"         # parquet | delta | csv | json (NDJSON or a JSON array; default: from the extension, else parquet;
+                               # a Parquet folder that holds a Delta log is read as Delta; tables created by CREATE TABLE are delta)
 
     [tables.trips]
     path = "raw/trips/*.csv"
@@ -23,8 +24,15 @@
     [schemas.sales]                        # a schema, declared before it has tables
     description = "Sales figures"
 
+    [schemas.tpch_sf10]                    # every data folder under the location is a table of the schema
+    location = "s3://my-bucket/tpch/sf10/"
+
     [storage."s3://my-bucket"]            # options for every URL under a prefix
     region = "us-east-1"
+
+A schema with a ``location`` has a table for each of its first-level folders
+holding data files (named after the folder; explicit ``[tables]`` win), and
+``CREATE TABLE`` in it writes a new folder there. These tables are not written to ``workhouse.toml``.
 
 Credentials never go in ``workhouse.toml`` (it is meant to be committed):
 they come from the environment or the machine's instance profile.
@@ -48,7 +56,7 @@ from pathlib import Path
 from typing import Any
 
 from workhouse.sqlwrite import WriteResult, is_schema_statement, is_write
-from workhouse.storage import is_remote, secret_keys
+from workhouse.storage import is_remote, list_files, secret_keys
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -113,7 +121,7 @@ class TableSpec:
             raise ValueError(f"table {name!r} in {CONFIG_NAME} has no 'path'")
         path = resolve_path(str(cfg["path"]), root)
         fmt = cfg.get("format") or _format_of(path)
-        if fmt not in ("parquet", "csv", "json"):
+        if fmt not in ("parquet", "delta", "csv", "json"):
             raise ValueError(f"table {name!r}: unsupported format {fmt!r}")
         return TableSpec(name, path, fmt, bool(cfg.get("has_header", True)), str(cfg.get("separator", ",")))
 
@@ -127,8 +135,11 @@ class TableSpec:
             ctx.register_csv(self.name, self.path, self.has_header, self.separator, lazy=True)
         elif self.format == "json":
             ctx.register_json(self.name, self.path, lazy=True)
+        elif self.format == "delta":
+            ctx.register_delta(self.name, self.path, lazy=True)
         else:
-            ctx.register_parquet(self.name, self.path, lazy=True)
+            # a folder is Parquet files or a Delta table: told apart once, when the table loads
+            ctx.register_table(self.name, self.path, lazy=True)
 
 
 def _format_of(path: str) -> str:
@@ -161,6 +172,10 @@ class Workspace:
     warehouse: str | None = None
     #: schemas declared in the catalog, besides ``main``: name -> description ("" if none)
     declared_schemas: dict[str, str] = field(default_factory=dict)
+    #: schemas with a ``location``: name -> folder or URL (resolved)
+    schema_locations: dict[str, str] = field(default_factory=dict)
+    #: tables found under the schema locations (not in ``tables``, never in ``workhouse.toml``)
+    discovered: list[TableSpec] = field(default_factory=list)
     #: told of every catalog change a statement made: ``{name, entry, kind}`` with
     #: the new ``workhouse.toml`` section (None: removed); kind is "table" or "schema"
     on_catalog_change: Callable[[dict[str, Any]], None] | None = field(default=None, repr=False, compare=False)
@@ -173,7 +188,7 @@ class Workspace:
     @property
     def schemas(self) -> list[str]:
         """Every schema, ``main`` first: the declared ones and those tables use."""
-        names = set(self.declared_schemas) | {schema_of(t.name) for t in self.tables}
+        names = set(self.declared_schemas) | {schema_of(t.name) for t in self.tables + self.discovered}
         return [MAIN, *sorted(names - {MAIN})]
 
     @property
@@ -190,22 +205,60 @@ class Workspace:
                 ctx.sql(f"create schema if not exists {schema}").collect()
             for t in self.tables:
                 t.register(ctx)
+            for schema, location in self.schema_locations.items():
+                ctx.set_schema_location(schema, location)
             self._session = ctx
+            self.refresh()
         return self._session
+
+    def _scan(self) -> None:
+        """Register the folders under each schema location as tables, except those
+        an explicit table names; ``discovered`` becomes what was found."""
+        explicit = {_key(t.name) for t in self.tables}
+        found: list[TableSpec] = []
+        for schema, location in self.schema_locations.items():
+            for table, path, fmt in discover_tables(location):
+                name = f"{schema}.{table}"
+                if _key(name) not in explicit:
+                    found.append(TableSpec(name, path, fmt))
+        ctx = self._session
+        keep = {_key(t.name) for t in found}
+        for old in self.discovered:
+            if _key(old.name) not in keep:
+                ctx.deregister(old.name)
+        known = {_key(t.name): t for t in self.discovered}
+        for t in found:
+            if known.get(_key(t.name)) != t:
+                t.register(ctx)
+        self.discovered = found
+
+    def refresh(self) -> bool:
+        """Re-scan the schema locations: new folders become tables and vanished
+        ones leave. True if the discovered tables changed."""
+        if self._session is None or not self.schema_locations:
+            return False
+        before = list(self.discovered)
+        try:
+            self._scan()
+        except Exception:  # noqa: BLE001 - an unreadable location must not stop a run
+            return False
+        return before != self.discovered
 
     @property
     def warehouse_path(self) -> str:
         """Where created tables go: a local folder (absolute) or a URL."""
         return resolve_path(self.warehouse or "warehouse", self.root)
 
-    def sql(self, query: str, **tables: Any) -> Any:
+    def sql(self, query: str, params: Any = None, **tables: Any) -> Any:
         """Run SQL over the catalog plus extra tables given as keyword arguments
         (DataFrames, LazyFrames, pyarrow / pandas / polars tables; other values
-        are ignored, so notebooks can pass every name a query mentions)."""
+        are ignored, so notebooks can pass every name a query mentions).
+        ``params`` (reserved, so not a table name) binds the placeholders: a
+        list or tuple for ``$1``, ``$2`` / ``?``, a dict for ``:name`` / ``$name``."""
         extra = {n: as_table(v) for n, v in tables.items() if is_table_like(v)}
         if is_write(query):
-            return self._write(query, extra)
-        return self._scratch(extra).sql(query)
+            return self._write(query, extra, params)
+        return self._scratch(extra).sql(query, params)
 
     def _scratch(self, extra: dict[str, Any]) -> Any:
         """The session, or a fork of it holding the given frames."""
@@ -216,29 +269,80 @@ class Workspace:
             ctx.register(name, obj)
         return ctx
 
-    def _write(self, query: str, extra: dict[str, Any]) -> Any:
+    def _write(self, query: str, extra: dict[str, Any], params: Any = None) -> Any:
         """Run a statement that writes or changes schemas; the tables and schemas
         it creates or drops join or leave the catalog (and the main session, when
         it ran on a fork)."""
+        self._refuse_drop(query)
         ctx = self.session if is_schema_statement(query) else self._scratch(extra)
-        frame = ctx.sql(query).collect()
+        frame = ctx.sql(query, params).collect()
         self._apply(WriteResult.of(frame), forked=ctx is not self.session)
         return frame.lazy()
 
+    def _refuse_drop(self, query: str) -> None:
+        """A discovered table is a folder: dropping it (or its schema) is refused."""
+        target = drop_target(query)
+        if target is None:
+            return
+        kind, name = target
+        if kind == "table":
+            spec = self._discovered_spec(name)
+            if spec is not None:
+                raise ValueError(
+                    f"{spec.name} is the folder {spec.path} under schema {schema_of(spec.name)}'s location: "
+                    "delete the folder to remove the table"
+                )
+        else:
+            schema = name.lower()
+            if schema in self.schema_locations and any(schema_of(t.name) == schema for t in self.discovered):
+                raise ValueError(
+                    f"schema {schema} has a location and its tables are folders under "
+                    f"{self.schema_locations[schema]}: delete the folders to remove them"
+                )
+
+    def _discovered_spec(self, name: str) -> TableSpec | None:
+        key = _key(name)
+        return next((t for t in self.discovered if _key(t.name) == key), None)
+
+    def _register_main(self, table: str, path: str, fmt: str | None) -> None:
+        """Register a table a statement made or changed on a fork in the main session."""
+        if fmt == "delta":
+            self.session.register_delta(table, path)
+        else:
+            self.session.register_parquet(table, path)
+
     def _apply(self, done: WriteResult, forked: bool) -> None:
-        if done.operation in ("create", "insert") and done.table and done.path:
+        op = done.operation
+        if op == "create" and done.table and schema_of(done.table) in self.schema_locations:
+            self._created_in_location(done.table, done.path, forked, done.format)
+        elif op in ("create", "insert", "insert overwrite", "truncate") and done.table and done.path:
             if forked:
-                self.session.register_parquet(done.table, done.path)
-            if done.operation == "create":
-                self._catalog_set(done.table, done.path)
-        elif done.operation == "drop" and done.table:
+                self._register_main(done.table, done.path, done.format)
+            if op == "create":
+                self._catalog_set(done.table, done.path, done.format)
+        elif op in ("delete", "update", "merge", "optimize", "restore", "alter") and done.table and done.path:
+            # a new Delta version (an ALTER may also change the columns): the main session must see it
+            if forked:
+                self._register_main(done.table, done.path, "delta")
+            if op == "alter":
+                self._emit(schema_of(done.table), None, "refresh")
+        elif op == "drop" and done.table:
             if forked:
                 self.session.deregister(done.table)
             self._catalog_drop(done.table)
-        elif done.operation == "create schema" and done.table:
+        elif op == "create schema" and done.table:
             self._schema_set(done.table)
-        elif done.operation == "drop schema" and done.table:
+        elif op == "drop schema" and done.table:
             self._schema_drop(done.table)
+
+    def _created_in_location(self, table: str, path: str | None, forked: bool, fmt: str | None = None) -> None:
+        """A table made in a location schema is discovered, not declared."""
+        if path:
+            if forked:
+                self._register_main(table, path, fmt)
+            spec = TableSpec(display_name(table), path, "delta" if fmt == "delta" else "parquet")
+            self.discovered = [t for t in self.discovered if _key(t.name) != _key(spec.name)] + [spec]
+        self._emit(schema_of(table), None, "refresh")
 
     def _relative(self, path: str) -> str:
         if is_remote(path):
@@ -248,11 +352,13 @@ class Workspace:
         except ValueError:  # another drive
             return Path(path).as_posix()
 
-    def _catalog_set(self, name: str, path: str) -> None:
+    def _catalog_set(self, name: str, path: str, fmt: str | None = None) -> None:
+        """A table a statement created: Delta ones are written with ``format = "delta"``."""
         name, rel = display_name(name), self._relative(path)
+        fmt = "delta" if fmt == "delta" else None
         self.tables = [t for t in self.tables if t.name != name]
-        self.tables.append(TableSpec.from_config(name, {"path": rel}, self.root))
-        self._emit(name, table_entry(name, rel))
+        self.tables.append(TableSpec.from_config(name, {"path": rel, "format": fmt}, self.root))
+        self._emit(name, table_entry(name, rel, fmt))
 
     def _catalog_drop(self, name: str) -> None:
         name = display_name(name)
@@ -290,7 +396,7 @@ class Workspace:
 
     def spec(self, name: str) -> TableSpec | None:
         key = _key(name)
-        return next((t for t in self.tables if _key(t.name) == key), None)
+        return next((t for t in self.tables + self.discovered if _key(t.name) == key), None)
 
 
 def _is_pandas(obj: Any) -> bool:
@@ -370,6 +476,74 @@ def _split_tables(tables: dict[str, Any]) -> tuple[list[tuple[str, dict[str, Any
     return found, declared
 
 
+def _locations(sections: dict[str, Any], root: Path) -> dict[str, str]:
+    """Schema -> resolved ``location`` from ``[schemas.<s>]``."""
+    out: dict[str, str] = {}
+    for name, section in sections.items():
+        loc = section.get("location") if isinstance(section, dict) else None
+        if not loc:
+            continue
+        schema = check_schema(name)
+        if schema == MAIN:
+            raise ValueError(f"schemas.{name} in {CONFIG_NAME}: main cannot have a location")
+        if not isinstance(loc, str):
+            raise ValueError(f"schemas.{name}.location in {CONFIG_NAME}: expected a folder or URL")
+        out[schema] = resolve_path(loc, root)
+    return out
+
+
+_DATA_EXTENSIONS = {"parquet": "parquet", "csv": "csv", "json": "json", "ndjson": "json", "jsonl": "json"}
+
+
+def discover_tables(location: str) -> list[tuple[str, str, str]]:
+    """``[(table, path, format)]`` for the first-level folders of ``location``
+    holding data files (at any depth, so Hive partitions stay in their table).
+    Delta if the folder has a ``_delta_log``, else Parquet unless a folder holds only CSV or only JSON files; folders that are
+    not identifiers or start with ``_`` or ``.`` are skipped."""
+    base = location.replace("\\", "/").rstrip("/") + "/"
+    formats: dict[str, set[str]] = {}
+    deltas: set[str] = set()
+    for ext, fmt in _DATA_EXTENSIONS.items():
+        try:
+            files = list_files(base, ext)
+        except Exception:  # noqa: BLE001 - no files of that kind
+            continue
+        for path, _ in files:
+            rel = path.replace("\\", "/")
+            if not rel.startswith(base):
+                continue
+            folder, sep, rest = rel[len(base):].partition("/")
+            if sep and folder and rest.startswith("_delta_log/"):
+                deltas.add(folder)
+            elif sep and folder:
+                formats.setdefault(folder, set()).add(fmt)
+    found = []
+    for folder in sorted(set(formats) | deltas):
+        if folder[0] in "_." or not _PART_RE.fullmatch(folder):
+            continue
+        kinds = formats.get(folder, set())
+        if folder in deltas:
+            fmt = "delta"
+        else:
+            fmt = "parquet" if "parquet" in kinds else (next(iter(kinds)) if len(kinds) == 1 else None)
+        if fmt:
+            found.append((folder.lower(), base + folder + "/", fmt))
+    return found
+
+
+_LEAD_RE = re.compile(r"(?:\s|--[^\n]*(?:\n|$)|/\*.*?\*/)*", re.DOTALL)
+_NAME = r'(?:"[^"]+"|\w+)'
+_DROP_RE = re.compile(rf"drop\s+(table|schema)\s+(?:if\s+exists\s+)?({_NAME}(?:\s*\.\s*{_NAME})?)", re.IGNORECASE)
+
+
+def drop_target(query: str) -> tuple[str, str] | None:
+    """``("table" | "schema", name)`` of a ``DROP`` statement, else None."""
+    m = _DROP_RE.match(query, _LEAD_RE.match(query).end())
+    if m is None:
+        return None
+    return m.group(1).lower(), re.sub(r'\s|"', "", m.group(2))
+
+
 def _declared(empty: list[str], sections: dict[str, Any]) -> dict[str, str]:
     """Schemas by name -> description: from ``[schemas.<s>]`` and from empty table sections."""
     declared = {name: "" for name in empty}
@@ -399,6 +573,7 @@ def parse_config(text: str, root: Path) -> Workspace:
     _check_unique(tables)
     warehouse = section.get("warehouse")
     declared = _declared(empty, cfg.get("schemas") or {})
+    locations = _locations(cfg.get("schemas") or {}, root)
     return Workspace(
         root,
         name,
@@ -406,6 +581,7 @@ def parse_config(text: str, root: Path) -> Workspace:
         _storage_sections(cfg),
         str(warehouse) if warehouse else None,
         declared_schemas=declared,
+        schema_locations=locations,
     )
 
 

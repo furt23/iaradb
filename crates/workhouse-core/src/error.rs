@@ -23,6 +23,9 @@ pub enum WhError {
     Execution(String),
     #[error("Not supported: {0}")]
     NotSupported(String),
+    /// A transaction conflicts with a commit another writer made meanwhile (Delta tables).
+    #[error("Concurrent modification: {0}")]
+    ConcurrentModification(String),
     #[error("Query cancelled")]
     Cancelled,
 }

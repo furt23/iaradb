@@ -27,8 +27,9 @@ import { GetParameterCommand, SSMClient } from "@aws-sdk/client-ssm";
 import { GetCallerIdentityCommand, STSClient } from "@aws-sdk/client-sts";
 
 import type { AwsSettings } from "../awsSettings";
-import { ROLE, SECURITY_GROUP, TAG_CLUSTER, TAG_COMPONENT, type CloudApi, type InstanceStatus, type LaunchSpec } from "./api";
+import { TAG_CLUSTER, TAG_COMPONENT, type CloudApi, type InstanceStatus, type LaunchSpec } from "./api";
 import { rolePolicy, TRUST_POLICY } from "./policies";
+import { roleName, securityGroupName, teamId, teamTags } from "./team";
 
 const AMI_PARAM = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64";
 
@@ -47,7 +48,10 @@ async function retry<T>(fn: () => Promise<T>, retryOn: string[], attempts = 12, 
   }
 }
 
-const sharedTags: Tag[] = [{ Key: TAG_COMPONENT, Value: "clusters" }];
+/** Tags of the shared resources of this Studio's team (security group, role); throws on an invalid `WORKHOUSE_TEAM`. */
+function sharedTags(team: string | null): Tag[] {
+  return [{ Key: TAG_COMPONENT, Value: "clusters" }, ...teamTags(team)];
+}
 
 /** The cluster cloud on AWS (EC2, IAM, S3, SSM). */
 export class AwsCloud implements CloudApi {
@@ -106,18 +110,20 @@ export class AwsCloud implements CloudApi {
   }
 
   async ensureNetwork(cidrs: string[]): Promise<string> {
+    const team = teamId();
+    const name = securityGroupName(team);
     const vpc = await this.defaultVpc();
     const found = await this.ec2.send(
-      new DescribeSecurityGroupsCommand({ Filters: [{ Name: "group-name", Values: [SECURITY_GROUP] }, { Name: "vpc-id", Values: [vpc] }] }),
+      new DescribeSecurityGroupsCommand({ Filters: [{ Name: "group-name", Values: [name] }, { Name: "vpc-id", Values: [vpc] }] }),
     );
     let group = found.SecurityGroups?.[0];
     if (!group) {
       const made = await this.ec2.send(
         new CreateSecurityGroupCommand({
-          GroupName: SECURITY_GROUP,
+          GroupName: name,
           Description: "Workhouse clusters: SSH from the Studio only",
           VpcId: vpc,
-          TagSpecifications: [{ ResourceType: "security-group", Tags: sharedTags }],
+          TagSpecifications: [{ ResourceType: "security-group", Tags: sharedTags(team) }],
         }),
       );
       group = { GroupId: made.GroupId, IpPermissions: [] };
@@ -135,28 +141,30 @@ export class AwsCloud implements CloudApi {
   }
 
   async ensureRole(dataBuckets: string[]): Promise<string> {
+    const team = teamId();
+    const role = roleName(team);
     const artifacts = await this.artifactsBucket();
-    const tags = sharedTags.map((t) => ({ Key: t.Key!, Value: t.Value! }));
+    const tags = sharedTags(team).map((t) => ({ Key: t.Key!, Value: t.Value! }));
     let created = false;
     try {
-      await this.iam.send(new GetRoleCommand({ RoleName: ROLE }));
+      await this.iam.send(new GetRoleCommand({ RoleName: role }));
     } catch (e) {
       if (errorName(e) !== "NoSuchEntityException") throw e;
-      await this.iam.send(new CreateRoleCommand({ RoleName: ROLE, Path: "/workhouse/", AssumeRolePolicyDocument: JSON.stringify(TRUST_POLICY), Tags: tags }));
+      await this.iam.send(new CreateRoleCommand({ RoleName: role, Path: "/workhouse/", AssumeRolePolicyDocument: JSON.stringify(TRUST_POLICY), Tags: tags }));
       created = true;
     }
-    await this.iam.send(new PutRolePolicyCommand({ RoleName: ROLE, PolicyName: "data-access", PolicyDocument: JSON.stringify(rolePolicy(artifacts, dataBuckets)) }));
+    await this.iam.send(new PutRolePolicyCommand({ RoleName: role, PolicyName: "data-access", PolicyDocument: JSON.stringify(rolePolicy(artifacts, dataBuckets)) }));
     try {
-      await this.iam.send(new GetInstanceProfileCommand({ InstanceProfileName: ROLE }));
+      await this.iam.send(new GetInstanceProfileCommand({ InstanceProfileName: role }));
     } catch (e) {
       if (errorName(e) !== "NoSuchEntityException") throw e;
-      await this.iam.send(new CreateInstanceProfileCommand({ InstanceProfileName: ROLE, Path: "/workhouse/", Tags: tags }));
-      await this.iam.send(new AddRoleToInstanceProfileCommand({ InstanceProfileName: ROLE, RoleName: ROLE }));
+      await this.iam.send(new CreateInstanceProfileCommand({ InstanceProfileName: role, Path: "/workhouse/", Tags: tags }));
+      await this.iam.send(new AddRoleToInstanceProfileCommand({ InstanceProfileName: role, RoleName: role }));
       created = true;
     }
     // IAM is eventually consistent: EC2 may not see a new profile for a few seconds
     if (created) await new Promise((r) => setTimeout(r, 10_000));
-    return ROLE;
+    return role;
   }
 
   async launch(spec: LaunchSpec): Promise<string> {
@@ -165,6 +173,7 @@ export class AwsCloud implements CloudApi {
       { Key: "Name", Value: `workhouse-${spec.clusterName}` },
       { Key: TAG_CLUSTER, Value: spec.clusterId },
       { Key: TAG_COMPONENT, Value: "cluster" },
+      ...teamTags(teamId()),
     ];
     const run = () =>
       this.ec2.send(

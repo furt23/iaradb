@@ -1,0 +1,64 @@
+# Workhouse on one host: the docs site and one Studio per team, reached through a Cloudflare Tunnel.
+#
+# No port needs to be public. cloudflared makes an outbound connection to Cloudflare, and the
+# public hostnames (the ingress rules in docker/cloudflared/config.yml) forward to services on
+# this compose network:
+#   docs.workhouse.dev           -> http://docs:8080
+#   studio-<team>.workhouse.dev  -> http://studio-<team>:3870
+#
+# Adding a team: copy the studio-default service and its two volumes, rename them studio-<team>
+# (and the volumes to studio-<team>-workspace and studio-<team>-data), copy docker/studio-default.env
+# to docker/<team>.env with that team's Auth0 settings and APP_BASE_URL, point the service at it,
+# add the hostname to config.yml and route it (cloudflared tunnel route dns workhouse <hostname>),
+# then: docker compose up -d studio-<team> && docker compose restart cloudflared
+#
+# Local checks (127.0.0.1 only): docs at http://127.0.0.1:4321, the Studio at http://127.0.0.1:3870.
+# The Studio port clashes with `pnpm dev`, so stop one of them before the other.
+
+name: workhouse
+
+services:
+  docs:
+    build:
+      context: .
+      dockerfile: docker/docs.Dockerfile
+    image: workhouse-docs:local
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:4321:8080"
+
+  studio-default:
+    build:
+      context: .
+      dockerfile: docker/studio.Dockerfile
+    image: workhouse-studio:local
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    env_file:
+      - path: docker/studio-default.env
+        required: false   # without it the Studio starts, answers 503 until sign-in is configured
+    volumes:
+      - studio-default-workspace:/workspace
+      - studio-default-data:/data
+    ports:
+      - "127.0.0.1:3870:3870"
+    # Memory for the Studio and its Python kernels. Tune to the host (6g is a starting point).
+    mem_limit: 6g
+
+  cloudflared:
+    image: cloudflare/cloudflared:2026.9.1
+    restart: unless-stopped
+    # tunnel made with the cloudflared CLI: hostnames are in docker/cloudflared/config.yml
+    command: tunnel --no-autoupdate --config /etc/cloudflared/config.yml run
+    volumes:
+      - ./docker/cloudflared:/etc/cloudflared:ro
+    depends_on:
+      - docs
+      - studio-default
+
+volumes:
+  studio-default-workspace:
+  studio-default-data:

@@ -4,6 +4,7 @@ import DeleteOutline from "@mui/icons-material/DeleteOutlineOutlined";
 import EditOutlined from "@mui/icons-material/EditOutlined";
 import PlayArrowRounded from "@mui/icons-material/PlayArrowRounded";
 import StopCircleOutlined from "@mui/icons-material/StopCircleOutlined";
+import TuneRounded from "@mui/icons-material/TuneRounded";
 import Box from "@mui/material/Box";
 import IconButton from "@mui/material/IconButton";
 import Switch from "@mui/material/Switch";
@@ -22,6 +23,7 @@ import { RunStatusChip } from "./RunStatusChip";
 
 export interface JobActions {
   run(job: JobView): void;
+  runWith(job: JobView): void;
   cancel(job: JobView): void;
   edit(job: JobView): void;
   remove(job: JobView): void;
@@ -39,7 +41,7 @@ export function JobRow({ job, actions }: { job: JobView; actions: JobActions }) 
           {job.name}
         </Typography>
         <Typography variant="mono" component="div" noWrap sx={{ fontSize: 11.5, color: "text.secondary" }}>
-          {job.target}
+          {job.tasks.length > 1 ? `${job.tasks.length} tasks` : job.tasks[0].target}
         </Typography>
       </TableCell>
       <TableCell>
@@ -78,11 +80,18 @@ export function JobRow({ job, actions }: { job: JobView; actions: JobActions }) 
             </IconButton>
           </Tooltip>
         ) : (
-          <Tooltip title="Run now">
-            <IconButton aria-label={`run ${job.name}`} onClick={() => actions.run(job)}>
-              <PlayArrowRounded fontSize="small" color="secondary" />
-            </IconButton>
-          </Tooltip>
+          <>
+            <Tooltip title="Run with parameters…">
+              <IconButton aria-label={`run ${job.name} with parameters`} onClick={() => actions.runWith(job)}>
+                <TuneRounded fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="Run now">
+              <IconButton aria-label={`run ${job.name}`} onClick={() => actions.run(job)}>
+                <PlayArrowRounded fontSize="small" color="secondary" />
+              </IconButton>
+            </Tooltip>
+          </>
         )}
         <Tooltip title="Edit">
           <IconButton aria-label={`edit ${job.name}`} onClick={() => actions.edit(job)}>

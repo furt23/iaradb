@@ -26,6 +26,8 @@ from typing import Any, Mapping
 
 from workhouse._workhouse import StorageError
 from workhouse._workhouse import clear_object_stores as _clear
+from workhouse._workhouse import delta_history as _delta_history
+from workhouse._workhouse import delta_info as _delta_info
 from workhouse._workhouse import list_files as _list_files
 from workhouse._workhouse import set_storage_options as _set_options
 from workhouse._workhouse import storage_requests as _requests
@@ -34,6 +36,8 @@ __all__ = [
     "StorageError",
     "set_storage_options",
     "list_files",
+    "delta_info",
+    "delta_history",
     "clear_object_stores",
     "storage_requests",
     "is_remote",
@@ -43,6 +47,18 @@ __all__ = [
 StorageOptions = Mapping[str, Any]
 
 _SECRET_PARTS = ("secret", "token", "password", "key_id", "access_key", "sse_customer_key")
+
+
+def delta_info(path: str, storage_options: StorageOptions | None = None) -> dict[str, Any]:
+    """What the log of the Delta table at ``path`` says: ``version``, ``num_files``,
+    ``size_bytes``, ``partition_columns``, ``created_at`` / ``last_modified`` (ms), ``description``."""
+    return _delta_info(str(path), normalize(storage_options))
+
+
+def delta_history(path: str, storage_options: StorageOptions | None = None, limit: int | None = None) -> list[dict[str, Any]]:
+    """The commits of the Delta table at ``path``, newest first: ``version``, ``timestamp`` (ms),
+    ``operation``, ``operation_parameters``, ``operation_metrics`` (text values), ``engine_info``."""
+    return _delta_history(str(path), normalize(storage_options), limit)
 
 
 def is_remote(path: str) -> bool:

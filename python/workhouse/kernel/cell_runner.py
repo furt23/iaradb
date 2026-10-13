@@ -7,8 +7,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from workhouse import widgets
 from workhouse.kernel.history import History
-from workhouse.kernel.notebook.analysis import WORKSPACE_VAR
+from workhouse.kernel.notebook.analysis import WORKSPACE_VAR, sql_placeholders
 from workhouse.kernel.notebook.graph import CellDeps
 from workhouse.kernel.notebook.model import Cell
 from workhouse.kernel.runtime.capture import capture
@@ -44,22 +45,28 @@ class CellRunner:
         self.interruptor = interruptor
 
     # -- SQL -----------------------------------------------------------------
-    def query(self, ws: Workspace, sql: str, tables: dict[str, Any], label: str, source: str) -> tuple[dict[str, Any], Any]:
+    def query(
+        self, ws: Workspace, sql: str, tables: dict[str, Any], label: str, source: str, params: dict[str, Any] | None = None
+    ) -> tuple[dict[str, Any], Any]:
         """Run a query with its profile and plan: ``(table output, DataFrame)``."""
         t0 = time.perf_counter()
+        # params go in only when given, so a query without them runs as ever
+        bound = {"params": params} if params else {}
         try:
-            output, df = run_query(self.results, ws.sql(sql, **tables), label)
+            output, df = run_query(self.results, ws.sql(sql, **bound, **tables), label)
         except BaseException as e:
-            self.history.record(sql, source, (time.perf_counter() - t0) * 1000, None, f"{type(e).__name__}: {e}")
+            self.history.record(sql, source, (time.perf_counter() - t0) * 1000, None, f"{type(e).__name__}: {e}", params)
             raise
-        self.history.record(sql, source, output["profile"]["elapsed_ms"], df.height)
+        self.history.record(sql, source, output["profile"]["elapsed_ms"], df.height, params=params)
         return output, df
 
     def _sql(self, cell: Cell, deps: CellDeps, inputs: dict[str, Any], source: str) -> tuple[dict[str, Any] | None, dict[str, Any]]:
         ws = inputs.get(WORKSPACE_VAR)
         ws = ws if isinstance(ws, Workspace) else self.ws
         tables = {r: inputs[r] for r in deps.refs if r != WORKSPACE_VAR and r in inputs}
-        output, df = self.query(ws, cell.code, tables, cell.output or "result", source)
+        # ``:name`` placeholders take the notebook's widget values
+        params = widgets.active().params(sql_placeholders(cell.code)) or None
+        output, df = self.query(ws, cell.code, tables, cell.output or "result", source, params)
         return output, ({cell.output: df} if cell.output else {})
 
     # -- Python --------------------------------------------------------------

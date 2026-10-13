@@ -2,6 +2,7 @@
 
 import Add from "@mui/icons-material/Add";
 import CreateNewFolderOutlined from "@mui/icons-material/CreateNewFolderOutlined";
+import FolderSync from "@mui/icons-material/Sync";
 import Refresh from "@mui/icons-material/Refresh";
 import Search from "@mui/icons-material/Search";
 import Box from "@mui/material/Box";
@@ -17,7 +18,7 @@ import { useGuard } from "@/features/shell/notify";
 import { SidePanelHeader } from "@/features/shell/SidePanelHeader";
 import { unwrap } from "@/lib/action";
 import type { CatalogSchema, CatalogTable } from "@/lib/catalogToml";
-import { syncCatalog } from "@/server/actions/catalog";
+import { refreshCatalog, syncCatalog } from "@/server/actions/catalog";
 
 import { AddTableDialog } from "./AddTableDialog";
 import { CatalogTree } from "./CatalogTree";
@@ -58,6 +59,13 @@ export function CatalogPanel({ tables, schemas = [], error }: { tables: CatalogT
       router.refresh();
     });
 
+  const refresh = () =>
+    guard(async () => {
+      unwrap(await refreshCatalog());
+      invalidate();
+      router.refresh();
+    });
+
   const shown = tables.filter((t) => matches(t, filter));
   // while filtering, a schema without a matching table is hidden
   const groups = schemaGroups(schemas, shown).filter((g) => !filter.trim() || g.tables.length > 0);
@@ -76,6 +84,11 @@ export function CatalogPanel({ tables, schemas = [], error }: { tables: CatalogT
             <Tooltip title="New schema…">
               <IconButton onClick={() => setCreating(true)} aria-label="new schema">
                 <CreateNewFolderOutlined fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="Refresh schema locations">
+              <IconButton onClick={refresh} aria-label="refresh schema locations">
+                <FolderSync fontSize="small" />
               </IconButton>
             </Tooltip>
             <Tooltip title="Reload workhouse.toml">

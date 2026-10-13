@@ -18,12 +18,18 @@ export interface CatalogTable extends Omit<TableRef, "format"> {
   format: TableRef["format"] | "json";
   schema: string;
   table: string;
+  /** found in a schema's `location`, not declared in `[tables]` */
+  discovered?: boolean;
 }
 
 /** A schema: declared with `[schemas.<name>]`, or used by a table. */
 export interface CatalogSchema {
   name: string;
   description: string | null;
+  /** an `s3://` URL or a folder: each of its subfolders is a table */
+  location?: string;
+  /** why listing the location failed (set by the server) */
+  discoveryError?: string;
 }
 
 export interface TableName {
@@ -67,7 +73,7 @@ function formatOfPath(path: string): CatalogTable["format"] {
 }
 
 function catalogTable(name: TableName, path: string, format: unknown): CatalogTable {
-  const fmt = format === "csv" || format === "parquet" || format === "json" ? format : formatOfPath(path);
+  const fmt = format === "csv" || format === "parquet" || format === "delta" || format === "json" ? format : formatOfPath(path);
   return { name: displayName(name), schema: name.schema, table: name.table, path, format: fmt };
 }
 
@@ -114,13 +120,15 @@ export function bySchemaOrder(a: string, b: string): number {
 export function schemasOf(text: string): CatalogSchema[] {
   const cfg = parse(text);
   const declared = isRecord(cfg.schemas) ? cfg.schemas : {};
-  const found = new Map<string, string | null>([[MAIN_SCHEMA, null]]);
+  const found = new Map<string, CatalogSchema>([[MAIN_SCHEMA, { name: MAIN_SCHEMA, description: null }]]);
   for (const [name, spec] of Object.entries(declared)) {
     const description = isRecord(spec) && typeof spec.description === "string" ? spec.description : null;
-    found.set(name.toLowerCase(), description);
+    const schema: CatalogSchema = { name: name.toLowerCase(), description };
+    if (isRecord(spec) && typeof spec.location === "string" && spec.location.trim()) schema.location = spec.location.trim();
+    found.set(schema.name, schema);
   }
-  for (const t of tablesOf(cfg)) if (!found.has(t.schema)) found.set(t.schema, null);
-  return [...found.keys()].sort(bySchemaOrder).map((name) => ({ name, description: found.get(name) ?? null }));
+  for (const t of tablesOf(cfg)) if (!found.has(t.schema)) found.set(t.schema, { name: t.schema, description: null });
+  return [...found.keys()].sort(bySchemaOrder).map((name) => found.get(name)!);
 }
 
 const HEADER = /^\s*\[\[?\s*([^\]]+?)\s*\]\]?\s*(#.*)?$/;
@@ -177,11 +185,12 @@ export function tableEntry(name: string, path: string, format?: string): string 
   return `${lines.join("\n")}\n`;
 }
 
-/** The `[schemas.<name>]` section of a schema, with its description when it has one. */
-export function schemaEntry(name: string, description?: string | null): string {
+/** The `[schemas.<name>]` section of a schema, with its description and location when it has them. */
+export function schemaEntry(name: string, description?: string | null, location?: string | null): string {
   if (!isIdentifier(name)) throw new Error(`invalid schema name ${name}`);
-  const text = description ? `description = ${JSON.stringify(description)}\n` : "";
-  return `\n[schemas.${name.toLowerCase()}]\n${text}`;
+  const desc = description ? `description = ${JSON.stringify(description)}\n` : "";
+  const loc = location ? `location = ${JSON.stringify(location)}\n` : "";
+  return `\n[schemas.${name.toLowerCase()}]\n${desc}${loc}`;
 }
 
 /** A table name for a dataset path: its last part, without extension, as an identifier. */
@@ -191,4 +200,11 @@ export function suggestTableName(path: string): string {
   const base = (parts.pop() ?? "").replace(/\.(parquet|csv|tsv|txt|json|ndjson|jsonl)$/i, "");
   const id = base.toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
   return /^[0-9]/.test(id) ? `t_${id}` : id;
+}
+
+/** A schema location: an `s3://` URL or a folder, without `..` segments. */
+export function validLocation(location: string): boolean {
+  const l = location.trim();
+  if (!l) return false;
+  return !l.split(/[\/]/).includes("..");
 }

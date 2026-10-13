@@ -6,11 +6,11 @@ import TableChartOutlined from "@mui/icons-material/TableChartOutlined";
 import TerminalOutlined from "@mui/icons-material/TerminalOutlined";
 import Divider from "@mui/material/Divider";
 import Menu from "@mui/material/Menu";
-import type { TableRef } from "@workhouse/protocol";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { useNotify } from "@/features/shell/notify";
+import type { CatalogTable } from "@/lib/catalogToml";
 
 import { ActionItem } from "./ActionItem";
 import { sampleQuery, sqlHref, tableHref } from "./links";
@@ -18,18 +18,18 @@ import { RemoveTableDialog } from "./RemoveTableDialog";
 import type { MenuAnchor } from "./TreeRow";
 
 export interface TableMenuTarget {
-  table: TableRef;
+  table: CatalogTable;
   anchor: MenuAnchor;
 }
 
 /** Actions on a catalog table: open, query, copy its name, remove it from the catalog. */
 export function TableMenu({ target, onClose }: { target: TableMenuTarget | null; onClose(): void }) {
-  const [removing, setRemoving] = useState<TableRef | null>(null);
+  const [removing, setRemoving] = useState<CatalogTable | null>(null);
   const router = useRouter();
   const notify = useNotify();
   const anchor = target?.anchor;
   const point = anchor && "x" in anchor ? anchor : null;
-  const run = (fn: (t: TableRef) => void | Promise<void>) => () => {
+  const run = (fn: (t: CatalogTable) => void | Promise<void>) => () => {
     if (!target) return;
     onClose();
     void fn(target.table);
@@ -55,7 +55,12 @@ export function TableMenu({ target, onClose }: { target: TableMenuTarget | null;
           })}
         />
         <Divider />
-        <ActionItem icon={<DeleteOutline fontSize="small" />} label="Remove from catalog…" onClick={run((t) => setRemoving(t))} danger />
+        <ActionItem icon={<DeleteOutline fontSize="small" />} label="Remove from catalog…"
+          onClick={run((t) => setRemoving(t))}
+          danger
+          disabled={!!target?.table.discovered}
+          hint={target?.table.discovered ? "Discovered from the schema's location: delete the folder to remove the table" : undefined}
+        />
       </Menu>
       <RemoveTableDialog table={removing} onClose={() => setRemoving(null)} />
     </>

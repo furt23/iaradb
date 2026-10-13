@@ -61,7 +61,10 @@ export function CatalogTree({ groups, active }: { groups: SchemaGroup[]; active:
               onToggle={() => toggleSchema(g.schema)}
               onMenu={(e, anchor) => openMenu(e, (a) => setSchemaMenu({ schema: g.schema, tables: g.tables.length, anchor: a }), anchor)}
             />
-            {expanded && g.tables.length === 0 && (
+            {expanded && g.discoveryError && (
+              <Typography sx={{ pl: 4 + TABLE_INDENT, pr: 1, py: 0.25, fontSize: 12, color: "error.main" }}>{g.discoveryError}</Typography>
+            )}
+            {expanded && g.tables.length === 0 && !g.discoveryError && (
               <Typography sx={{ pl: 4 + TABLE_INDENT, py: 0.25, fontSize: 12, color: "text.disabled" }}>No tables yet</Typography>
             )}
             {expanded && g.tables.length > 0 && (

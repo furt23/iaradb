@@ -22,7 +22,7 @@ struct Entry {
     /// listed size (bytes)
     size: u64,
     /// where to open it (`None`: a file that is open already)
-    object: Option<ObjectFile>,
+    source: Option<DataFile>,
     file: OnceLock<Arc<ParquetFile>>,
 }
 
@@ -30,6 +30,9 @@ pub struct TableFiles {
     entries: Vec<Entry>,
     /// the first file, whose schema the others must match
     first: Arc<ParquetFile>,
+    /// files may differ from each other (a Delta table: the scan projects
+    /// each onto the table's columns), so they are not compared
+    conform: bool,
 }
 
 impl std::fmt::Debug for TableFiles {
@@ -64,11 +67,28 @@ impl TableFiles {
             .map(|(i, o)| Entry {
                 name: o.url.to_string(),
                 size: o.size,
-                object: Some(o),
+                source: Some(DataFile::Object(o)),
                 file: if i == 0 { OnceLock::from(first.clone()) } else { OnceLock::new() },
             })
             .collect();
-        Ok(Self { entries, first })
+        Ok(Self { entries, first, conform: false })
+    }
+
+    /// The `listed` files (with their sizes), only the first opened now: a file whose footer
+    /// no scan needs is never read. The files need not share a schema.
+    pub fn listed(listed: Vec<(DataFile, u64)>) -> Result<Self> {
+        let first = file::open_files(vec![listed[0].0.clone()])?.remove(0);
+        let entries = listed
+            .into_iter()
+            .enumerate()
+            .map(|(i, (f, size))| Entry {
+                name: f.name(),
+                size,
+                source: Some(f),
+                file: if i == 0 { OnceLock::from(first.clone()) } else { OnceLock::new() },
+            })
+            .collect();
+        Ok(Self { entries, first, conform: true })
     }
 
     /// Files opened already, in order; they must share one schema.
@@ -77,8 +97,8 @@ impl TableFiles {
         for f in &files[1..] {
             check_schema(&first, f)?;
         }
-        let entries = files.into_iter().map(|f| Entry { name: f.name.clone(), size: f.blob.len(), object: None, file: OnceLock::from(f) }).collect();
-        Ok(Self { entries, first })
+        let entries = files.into_iter().map(|f| Entry { name: f.name.clone(), size: f.blob.len(), source: None, file: OnceLock::from(f) }).collect();
+        Ok(Self { entries, first, conform: false })
     }
 
     pub fn len(&self) -> usize {
@@ -112,10 +132,12 @@ impl TableFiles {
     pub fn select(&self, keep: &[bool]) -> Result<Vec<Arc<ParquetFile>>> {
         let missing: Vec<usize> = (0..self.entries.len()).filter(|&i| keep[i] && self.entries[i].file.get().is_none()).collect();
         if !missing.is_empty() {
-            let objects = missing.iter().map(|&i| self.entries[i].object.clone().expect("a file that is not open has an object"));
-            let opened = file::open_files(objects.map(DataFile::Object).collect())?;
+            let sources = missing.iter().map(|&i| self.entries[i].source.clone().expect("a file that is not open has a source"));
+            let opened = file::open_files(sources.collect())?;
             for (&i, f) in missing.iter().zip(opened) {
-                check_schema(&self.first, &f)?;
+                if !self.conform {
+                    check_schema(&self.first, &f)?;
+                }
                 let _ = self.entries[i].file.set(f);
             }
         }

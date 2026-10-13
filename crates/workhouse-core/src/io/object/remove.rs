@@ -1,5 +1,5 @@
-//! Folders of objects: whether one holds anything, and deleting it (a table
-//! being replaced).
+//! Folders of objects: whether one holds anything, what is in it, and
+//! deleting it or some of its objects (a table being replaced).
 
 use futures::TryStreamExt;
 use object_store::ObjectStoreExt;
@@ -42,4 +42,31 @@ pub fn remove_under(url: &ObjectUrl, options: &StorageOptions) -> Result<usize> 
     // even half done: some objects may be gone
     list_cache::invalidate(&url.root(), &url.key);
     deleted
+}
+
+/// Every object under the folder `url`, as URLs.
+pub fn list_under(url: &ObjectUrl, options: &StorageOptions) -> Result<Vec<ObjectUrl>> {
+    let store = registry::store(url, options)?;
+    let prefix = prefix(url);
+    let metas: Vec<_> = block_on(async move { store.list(prefix.as_ref()).try_collect::<Vec<_>>().await.map_err(|e| storage_err(e, &url.to_string())) })?;
+    let mut urls: Vec<ObjectUrl> = metas.iter().map(|m| url.with_key(m.location.as_ref())).collect();
+    urls.sort_by(|a, b| a.key.cmp(&b.key));
+    Ok(urls)
+}
+
+/// Delete these objects (one that is already gone is no error).
+pub fn remove_objects(urls: &[ObjectUrl], options: &StorageOptions) -> Result<()> {
+    for url in urls {
+        let store = registry::store(url, options)?;
+        let path = super::object_path(&url.key);
+        let deleted = block_on(async move {
+            match store.delete(&path).await {
+                Err(object_store::Error::NotFound { .. }) => Ok(()),
+                other => other.map_err(|e| storage_err(e, &url.to_string())),
+            }
+        });
+        list_cache::invalidate(&url.root(), &url.key);
+        deleted?;
+    }
+    Ok(())
 }

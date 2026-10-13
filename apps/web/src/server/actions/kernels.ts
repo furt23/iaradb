@@ -2,6 +2,7 @@
 
 import type { ChartData, ChartSpec, ResultPage, SortKey } from "@workhouse/protocol";
 
+import { requireUser } from "../auth/session";
 import { parseKernelKey } from "../kernel/keys";
 import { kernels, type KernelStatus } from "../kernel/manager";
 import { attempt, type ActionResult } from "../result";
@@ -14,29 +15,45 @@ export async function fetchResultPage(
   limit: number,
   sort?: SortKey[],
 ): Promise<ActionResult<ResultPage>> {
-  return attempt(() => kernels.get(parseKernelKey(kernelKey)).request("result.page", { result_id: resultId, offset, limit, sort }));
+  return attempt(async () => {
+    await requireUser();
+    return kernels.get(parseKernelKey(kernelKey)).request("result.page", { result_id: resultId, offset, limit, sort });
+  });
 }
 
 /** The points of a chart over a result, aggregated in its kernel. */
 export async function fetchResultChart(kernelKey: string, resultId: string, spec: ChartSpec): Promise<ActionResult<ChartData>> {
-  return attempt(() => kernels.get(parseKernelKey(kernelKey)).request("result.chart", { result_id: resultId, spec }));
+  return attempt(async () => {
+    await requireUser();
+    return kernels.get(parseKernelKey(kernelKey)).request("result.chart", { result_id: resultId, spec });
+  });
 }
 
 export async function exportResult(kernelKey: string, resultId: string, format: "csv" | "parquet", name?: string): Promise<ActionResult<{ path: string }>> {
-  return attempt(() => kernels.get(parseKernelKey(kernelKey)).request("result.export", { result_id: resultId, format, name }));
+  return attempt(async () => {
+    await requireUser();
+    return kernels.get(parseKernelKey(kernelKey)).request("result.export", { result_id: resultId, format, name });
+  });
 }
 
 export async function interruptKernel(kernelKey: string): Promise<ActionResult<{ interrupted: boolean }>> {
-  return attempt(() => kernels.get(parseKernelKey(kernelKey)).request("interrupt", {}));
+  return attempt(async () => {
+    await requireUser();
+    return kernels.get(parseKernelKey(kernelKey)).request("interrupt", {});
+  });
 }
 
 export async function restartKernel(kernelKey: string): Promise<ActionResult<null>> {
   return attempt(async () => {
+    await requireUser();
     kernels.restart(parseKernelKey(kernelKey));
     return null;
   });
 }
 
 export async function kernelStatus(): Promise<ActionResult<KernelStatus[]>> {
-  return attempt(async () => kernels.status());
+  return attempt(async () => {
+    await requireUser();
+    return kernels.status();
+  });
 }

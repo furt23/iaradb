@@ -18,7 +18,14 @@ import { RailBrand } from "./RailBrand";
 import { RailToggle } from "./RailToggle";
 import { SECTIONS, sectionOf, type SectionId } from "./sections";
 import { useShell } from "./ShellProvider";
+import { SignOutButton } from "./SignOutButton";
 import { ThemeToggle } from "./ThemeToggle";
+
+/** The signed-in user, or null when sign-in is off. */
+export interface RailAccount {
+  email: string;
+  admin: boolean;
+}
 
 const ICONS: Record<SectionId, ReactNode> = {
   workspace: <FolderOutlined />,
@@ -39,9 +46,10 @@ const GROUP_ENDS: SectionId[] = ["sql", "compute"];
 /**
  * The navigation rail: quick open, the sections and the theme. Expanded it
  * shows their names; collapsed, icons with tooltips. Clicking the current
- * section shows or hides its side panel (Ctrl/Cmd+B).
+ * section shows or hides its side panel (Ctrl/Cmd+B). With sign-in on, the
+ * account's sign-out button sits at the bottom.
  */
-export function NavRail() {
+export function NavRail({ account }: { account: RailAccount | null }) {
   const current = sectionOf(usePathname());
   const { panelOpen, togglePanel, setQuickOpen, railExpanded, toggleRail } = useShell();
   const narrow = useMediaQuery(NARROW);
@@ -105,6 +113,7 @@ export function NavRail() {
       <Box sx={{ flex: 1 }} />
       <Box sx={{ display: "flex", flexDirection: expanded ? "row" : "column", alignItems: "center", justifyContent: "space-between", gap: 0.5 }}>
         <ThemeToggle />
+        {account && <SignOutButton email={account.email} />}
         {!narrow && (
           <RailToggle
             expanded={expanded}

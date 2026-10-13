@@ -5,6 +5,7 @@ import Box from "@mui/material/Box";
 import InitColorSchemeScript from "@mui/material/InitColorSchemeScript";
 import { AppRouterCacheProvider } from "@mui/material-nextjs/v16-appRouter";
 import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { ComputeProvider } from "@/features/compute/ComputeProvider";
@@ -20,6 +21,8 @@ import { WorkspacePanel } from "@/features/shell/WorkspacePanel";
 import { idsOfTree } from "@/features/workbench/fileIdRegistry";
 import { Workbench } from "@/features/workbench/Workbench";
 import { WorkbenchProvider } from "@/features/workbench/WorkbenchProvider";
+import { authMode } from "@/server/auth/access";
+import { currentUser } from "@/server/auth/session";
 import { catalogSchemas, catalogTables } from "@/server/workspace/catalog";
 import { listTree, type FileNode } from "@/server/workspace/files";
 import { workspaceName } from "@/server/workspace/sources";
@@ -37,6 +40,10 @@ function workbenchFiles(nodes: FileNode[]): string[] {
 }
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
+  // the proxy already sent visitors without a session to sign in; this keeps the workspace hidden if it did not
+  const user = await currentUser();
+  if (!user) redirect("/auth/login");
+  const account = authMode() === "auth0" ? { email: user.email, admin: user.admin } : null;
   // read from the Studio's files: no kernel (nor cluster) is needed to draw the shell
   // (the catalog and file list are read on every render: router.refresh() updates them)
   const [tree, name, catalog, schemas] = await Promise.all([
@@ -60,7 +67,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
                   <WorkbenchProvider ids={idsOfTree(tree)}>
                     <DataProvider>
                       <Box sx={{ display: "flex", height: "100vh", bgcolor: "background.default" }}>
-                        <NavRail />
+                        <NavRail account={account} />
                         <SidePanel
                           panels={{
                             files: <WorkspacePanel name={name} tree={tree} />,

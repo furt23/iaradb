@@ -34,10 +34,60 @@ class Analysis:
     error: str | None = None
     #: names private to the cell (``_x``), never shared
     private: frozenset[str] = field(default=frozenset())
+    #: widgets the cell reads or defines (``"*"``: any, when a name is not literal); it re-runs when one changes
+    widgets: frozenset[str] = frozenset()
+    #: widgets the cell defines
+    widget_defs: frozenset[str] = frozenset()
+
+
+#: ``wh.widgets.<kind>(...)`` calls that define a widget
+WIDGET_KINDS = frozenset({"text", "number", "dropdown", "multiselect", "checkbox", "date"})
+#: widgets are tracked as dependencies on this synthetic name (``__widget_<name>``)
+WIDGET_PREFIX = "__widget_"
+ANY_WIDGET = "*"
+#: a ``:name`` placeholder in SQL (not a ``::`` cast)
+_PLACEHOLDER = re.compile(r"(?<![:\w]):([A-Za-z_][A-Za-z0-9_]*)")
 
 
 def is_private(name: str) -> bool:
     return name.startswith("_")
+
+
+def widget_dependency(name: str) -> str:
+    return WIDGET_PREFIX + name
+
+
+def _is_widgets(node: ast.expr) -> bool:
+    """``widgets`` or ``<anything>.widgets`` (``wh.widgets``)."""
+    return (isinstance(node, ast.Name) and node.id == "widgets") or (isinstance(node, ast.Attribute) and node.attr == "widgets")
+
+
+def widget_calls(tree: ast.AST) -> tuple[set[str], set[str]]:
+    """``(defined, read)`` widget names of ``wh.widgets.<kind>("x", ...)`` and
+    ``wh.widgets.get("x")`` calls; a name that is not a literal (and
+    ``params()``) stands for any widget (``"*"``)."""
+    defined: set[str] = set()
+    read: set[str] = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and _is_widgets(node.func.value)):
+            continue
+        attr = node.func.attr
+        if attr == "params":
+            read.add(ANY_WIDGET)
+        elif attr == "get" or attr in WIDGET_KINDS:
+            arg = node.args[0] if node.args else next((k.value for k in node.keywords if k.arg == "name"), None)
+            name = arg.value if isinstance(arg, ast.Constant) and isinstance(arg.value, str) else ANY_WIDGET
+            (read if attr == "get" else defined).add(name)
+    return defined, read
+
+
+def sql_placeholders(query: str) -> list[str]:
+    """The ``:name`` placeholders of a query (outside literals and comments), in order of appearance, once each."""
+    text = re.sub(r"'(?:[^']|'')*'", " ", query)
+    text = re.sub(r'"[^"]*"', " ", text)
+    text = re.sub(r"--[^\n]*", " ", text)
+    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
+    return list(dict.fromkeys(_PLACEHOLDER.findall(text)))
 
 
 def analyze_python(code: str) -> Analysis:
@@ -49,7 +99,10 @@ def analyze_python(code: str) -> Analysis:
     refs = {n for n in scope.free() - scope.bound if n not in _BUILTINS and not is_private(n)}
     defs = {n for n in scope.bound if not is_private(n)}
     private = {n for n in scope.bound if is_private(n)}
-    return Analysis(frozenset(defs), frozenset(refs), error=None, private=frozenset(private))
+    wdefs, wreads = widget_calls(tree)
+    return Analysis(
+        frozenset(defs), frozenset(refs), error=None, private=frozenset(private), widgets=frozenset(wdefs | wreads), widget_defs=frozenset(wdefs)
+    )
 
 
 def sql_identifiers(query: str) -> set[str]:
@@ -75,5 +128,10 @@ def analyze(cell: Cell) -> Analysis:
         if output and (not output.isidentifier() or is_private(output)):
             return Analysis(error=f"invalid result name {output!r}")
         defs = frozenset({output} if output else ())
-        return Analysis(defs=defs, refs=frozenset({WORKSPACE_VAR}), sql_idents=frozenset(sql_identifiers(cell.code)))
+        return Analysis(
+            defs=defs,
+            refs=frozenset({WORKSPACE_VAR}),
+            sql_idents=frozenset(sql_identifiers(cell.code)),
+            widgets=frozenset(sql_placeholders(cell.code)),
+        )
     return analyze_python(cell.code)

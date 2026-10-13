@@ -39,5 +39,5 @@ export interface CloudApi {
 
 export const TAG_COMPONENT = "workhouse:component";
 export const TAG_CLUSTER = "workhouse:cluster";
-export const SECURITY_GROUP = "workhouse-clusters";
-export const ROLE = "workhouse-cluster";
+/** set on everything created for a team (when `WORKHOUSE_TEAM` is set); names: see ./team.ts */
+export const TAG_TEAM = "workhouse:team";

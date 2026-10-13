@@ -2,9 +2,11 @@
 
 import PlayArrowRounded from "@mui/icons-material/PlayArrowRounded";
 import StopCircleOutlined from "@mui/icons-material/StopCircleOutlined";
+import TuneRounded from "@mui/icons-material/TuneRounded";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Paper from "@mui/material/Paper";
+import Stack from "@mui/material/Stack";
 import Table from "@mui/material/Table";
 import TableBody from "@mui/material/TableBody";
 import TableCell from "@mui/material/TableCell";
@@ -12,7 +14,7 @@ import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import Typography from "@mui/material/Typography";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 
 import { fileHref } from "@/features/workbench/WorkbenchProvider";
 import { PageBody, PageHeader } from "@/features/shell/PageHeader";
@@ -20,53 +22,21 @@ import { useGuard } from "@/features/shell/notify";
 import { unwrap } from "@/lib/action";
 import { describeCron } from "@/lib/cron";
 import { formatDuration, formatRelative } from "@/lib/format";
-import { isFinished, JOB_CLUSTER, type JobRun } from "@/lib/jobs";
-import { cancelJobRun, jobDetail, runJobNow, runLog } from "@/server/actions/jobs";
+import { isFinished, JOB_CLUSTER, type Params } from "@/lib/jobs";
+import { cancelJobRun, jobDetail, runJobNow, type JobView } from "@/server/actions/jobs";
 
+import { RunLog } from "./RunLog";
+import { RunParamsDialog } from "./RunParamsDialog";
 import { RunStatusChip } from "./RunStatusChip";
+import { RunTasks } from "./RunTasks";
 import { usePolling } from "./usePolling";
-
-function RunLog({ run }: { run: JobRun }) {
-  const [log, setLog] = useState("");
-  const live = !isFinished(run.status);
-  const load = useCallback(async () => {
-    const r = await runLog(run.job, run.id);
-    if (r.ok) setLog(r.data);
-  }, [run.job, run.id]);
-  // the log grows while the run goes on
-  useEffect(() => {
-    void load();
-    if (!live) return;
-    const timer = setInterval(() => void load(), 2000);
-    return () => clearInterval(timer);
-  }, [load, live, run.status]);
-  return (
-    <Paper variant="outlined" sx={{ mt: 2 }}>
-      <Box sx={{ px: 2, py: 1, borderBottom: 1, borderColor: "divider", display: "flex", gap: 1, alignItems: "center" }}>
-        <Typography sx={{ fontWeight: 650, fontSize: 13 }}>Run {run.id}</Typography>
-        <RunStatusChip status={run.status} />
-        {run.error && (
-          <Typography noWrap sx={{ fontSize: 12.5, color: "error.main" }} title={run.error}>
-            {run.error}
-          </Typography>
-        )}
-      </Box>
-      <Typography
-        variant="mono"
-        component="pre"
-        aria-label="run log"
-        sx={{ m: 0, p: 2, fontSize: 12, whiteSpace: "pre-wrap", maxHeight: 420, overflow: "auto", color: "text.secondary" }}
-      >
-        {log || "(no output yet)"}
-      </Typography>
-    </Paper>
-  );
-}
 
 /** A job's runs, newest first, and the log of the one picked. */
 export function JobDetail({ id }: { id: string }) {
   const { data, error, reload } = usePolling(() => jobDetail(id), (d) => d.runs.some((r) => !isFinished(r.status)));
   const [picked, setPicked] = useState<string | null>(null);
+  /** the job whose "run with parameters" dialog is open */
+  const [withParams, setWithParams] = useState<JobView | null>(null);
   const guard = useGuard();
   if (error && !data) return <Typography sx={{ p: 4, color: "error.main" }}>{error}</Typography>;
   if (!data) return null;
@@ -79,13 +49,16 @@ export function JobDetail({ id }: { id: string }) {
       await reload();
     });
 
+  const start = (params?: Params) => act(async () => setPicked(unwrap(await runJobNow(job.id, params)).id));
+  const many = job.tasks.length > 1;
+
   return (
     <Box sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       <PageHeader
         title={job.name}
         subtitle={
           <>
-            <Link href={fileHref(job.target)}>{job.target}</Link> · {job.schedule ? describeCron(job.schedule) : "by hand"}
+            {many ? `${job.tasks.length} tasks` : <Link href={fileHref(job.tasks[0].target)}>{job.tasks[0].target}</Link>} · {job.schedule ? describeCron(job.schedule) : "by hand"}
             {job.nextRun && job.enabled ? ` · next ${formatRelative(job.nextRun)}` : ""} ·{" "}
             {job.cluster === JOB_CLUSTER ? `a ${job.instanceType ?? "default"} cluster per run` : `on ${job.cluster}`}
           </>
@@ -96,9 +69,14 @@ export function JobDetail({ id }: { id: string }) {
               Cancel run
             </Button>
           ) : (
-            <Button variant="contained" color="secondary" startIcon={<PlayArrowRounded />} onClick={() => act(async () => setPicked(unwrap(await runJobNow(job.id)).id))}>
-              Run now
-            </Button>
+            <Stack direction="row" spacing={1}>
+              <Button startIcon={<TuneRounded />} onClick={() => setWithParams(job)}>
+                Run with parameters…
+              </Button>
+              <Button variant="contained" color="secondary" startIcon={<PlayArrowRounded />} onClick={() => start()}>
+                Run now
+              </Button>
+            </Stack>
           )
         }
       />
@@ -140,8 +118,17 @@ export function JobDetail({ id }: { id: string }) {
             </Table>
           </Paper>
         )}
+        {shown && (shown.tasks?.length ?? 0) > 1 && <RunTasks key={`tasks-${shown.id}`} job={job} run={shown} />}
         {shown && <RunLog key={shown.id} run={shown} />}
       </PageBody>
+      <RunParamsDialog
+        job={withParams}
+        onClose={() => setWithParams(null)}
+        onRun={(params) => {
+          setWithParams(null);
+          start(params);
+        }}
+      />
     </Box>
   );
 }

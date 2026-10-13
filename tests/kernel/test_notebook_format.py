@@ -152,7 +152,7 @@ def test_sql_cell_passes_referenced_frames(tmp_path: Path):
     nb = marimo_io.new_notebook(tmp_path / "nb.py")
     nb.cells += [cell("recent = ws.table('sales').limit(10)", cid="p"), cell("select count(*) from recent", "sql", "n", cid="s")]
     src = marimo_io.serialize(nb)
-    assert "def _(recent, ws):\n    n = ws.sql(" in src
+    assert "def _(recent):\n    n = ws.sql(" in src  # ws is global: it comes from the setup cell
     assert "        recent=recent,\n    ).collect()\n    return (n,)" in src
 
 
@@ -258,7 +258,7 @@ def test_a_file_without_ids_gets_them_on_save(tmp_path: Path):
     nb = marimo_io.parse(SAMPLE, path)
     assert "id=" not in SAMPLE
     saved = marimo_io.serialize(nb)
-    for c in nb.cells:
+    for c in nb.cells[1:]:  # the first one is the template cell: now the setup cell
         assert f'@app.cell(id="{c.id}"' in saved
     # the ids are now in the file: reading it again gives the same ones
     assert [c.id for c in marimo_io.parse(saved, path).cells] == [c.id for c in nb.cells]
@@ -293,3 +293,78 @@ def test_notebook_with_ids_and_options_still_runs(workspace: Path):
     assert '@app.cell(id="m1", hide_code=True)' in nb.path.read_text(encoding="utf-8")
     r = subprocess.run([sys.executable, str(nb.path)], cwd=workspace, capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stderr
+
+
+# ---------------------------------------------------------------------------
+# the setup cell
+# ---------------------------------------------------------------------------
+
+OLD_TEMPLATE = """import marimo
+
+__generated_with = "0.16.0"
+app = marimo.App(width="medium")
+
+
+@app.cell(id="abc12345")
+def _():
+    import marimo as mo
+    import workhouse as wh
+
+    ws = wh.workspace()
+    return mo, wh, ws
+
+
+@app.cell
+def _(ws):
+    df = ws.sql("select 1 as a").collect()
+    return (df,)
+
+
+if __name__ == "__main__":
+    app.run()
+"""
+
+
+def test_new_notebook_starts_with_a_setup_cell(tmp_path: Path):
+    nb = marimo_io.new_notebook(tmp_path / "nb.py")
+    assert [(c.id, c.setup, c.name) for c in nb.cells] == [("setup", True, "setup")]
+    assert nb.cells[0].code == marimo_io.TEMPLATE_CELL
+    src = marimo_io.serialize(nb)
+    assert "with app.setup:\n    import marimo as mo\n    import workhouse as wh\n\n    ws = wh.workspace()\n" in src
+    assert "@app.cell" not in src
+
+
+def test_setup_names_are_not_cell_parameters(tmp_path: Path):
+    nb = marimo_io.new_notebook(tmp_path / "nb.py")
+    nb.cells += [cell("df = ws.table('sales').collect()", cid="p"), cell("# hi", "markdown", cid="m"), cell("select 1", "sql", "one", cid="s")]
+    src = marimo_io.serialize(nb)
+    assert "def _():\n    df = ws.table" in src and "def _():\n    mo.md(" in src and "def _():\n    one = ws.sql(" in src
+    again = marimo_io.parse(src, tmp_path / "nb.py")
+    assert [(c.id, c.kind, c.setup) for c in again.cells] == [(c.id, c.kind, c.setup) for c in nb.cells]
+    assert marimo_io.serialize(again) == src
+
+
+def test_an_old_template_cell_becomes_the_setup_cell(tmp_path: Path):
+    nb = marimo_io.parse(OLD_TEMPLATE, tmp_path / "nb.py")
+    assert nb.cells[0].id == "setup" and nb.cells[0].setup and len(nb.cells) == 2
+    src = marimo_io.serialize(nb)
+    assert "with app.setup:" in src and "def _():\n    df = ws.sql(" in src
+
+
+def test_the_template_matches_modulo_blank_lines_and_indentation(tmp_path: Path):
+    nb = marimo_io.new_notebook(tmp_path / "nb.py")
+    nb.cells = [Cell("x", "python", "\n  import marimo as mo\nimport workhouse as wh\nws = wh.workspace()\n\n")]
+    assert marimo_io.migrate_template(nb).cells[0].setup
+
+
+def test_other_first_cells_are_left_alone(tmp_path: Path):
+    changed = OLD_TEMPLATE.replace("ws = wh.workspace()", "ws = wh.workspace('x')")
+    nb = marimo_io.parse(changed, tmp_path / "nb.py")
+    assert not any(c.setup for c in nb.cells) and nb.cells[0].id == "abc12345"
+    # the template in second place is not migrated
+    nb = marimo_io.parse(OLD_TEMPLATE, tmp_path / "nb.py")
+    nb.cells = [Cell("a", "python", "x = 1"), Cell("b", "python", marimo_io.TEMPLATE_CELL)]
+    assert not any(c.setup for c in marimo_io.migrate_template(nb).cells)
+    # a notebook that already has a setup cell keeps its own
+    again = marimo_io.parse(marimo_io.serialize(marimo_io.new_notebook(tmp_path / "n.py")), tmp_path / "n.py")
+    assert [c.id for c in again.cells] == ["setup"]

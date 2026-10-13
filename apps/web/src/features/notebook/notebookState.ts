@@ -1,6 +1,6 @@
 /** Notebook editor state: cells being edited plus what the kernel reports (pure). */
 
-import type { Cell, CellKind, CellState, CellStateEvent, CellStreamEvent, NotebookView, ProgressEvent, QueryProfile } from "@workhouse/protocol";
+import type { Cell, CellKind, CellState, CellStateEvent, CellStreamEvent, NotebookView, ProgressEvent, QueryProfile, WidgetValue, WidgetsState } from "@workhouse/protocol";
 
 /** The run in progress: what the kernel queued and what already finished. */
 export interface RunProgress {
@@ -34,10 +34,15 @@ export interface NotebookState {
   running: boolean;
   current: RunProgress | null;
   lastRun: RunSummary | null;
+  /** the widgets the cells defined (`wh.widgets.*`) and their values */
+  widgets: WidgetsState;
 }
+
+export const NO_WIDGETS: WidgetsState = { definitions: [], values: {} };
 
 export type NotebookAction =
   | { type: "edit"; id: string; patch: Partial<Pick<Cell, "code" | "kind" | "output" | "config">> }
+  /** `index`: position among the visible cells (the setup cell is not one) */
   | { type: "add"; index: number; cell: Cell }
   | { type: "remove"; id: string }
   | { type: "move"; id: string; delta: -1 | 1 }
@@ -52,7 +57,11 @@ export type NotebookAction =
   | { type: "clearOutputs"; cells: string[] | null }
   | { type: "cell.state"; data: CellStateEvent }
   | { type: "cell.stream"; data: CellStreamEvent }
-  | { type: "progress"; data: ProgressEvent };
+  | { type: "progress"; data: ProgressEvent }
+  /** the kernel's widgets differ from the ones shown */
+  | { type: "widgets.changed"; data: WidgetsState }
+  /** a widget was edited: shown at once, before the kernel confirms it */
+  | { type: "widget.value"; name: string; value: WidgetValue };
 
 export const IDLE: CellState = { status: "idle", stale: false, output: null, streams: [], elapsed_ms: null };
 
@@ -64,7 +73,35 @@ export function initialState(view: NotebookView): NotebookState {
     const s = view.states[c.id];
     if (s && (s.status === "done" || s.status === "error")) runCode[c.id] = s.stale ? STALE_MARK : c.code;
   }
-  return { path: view.path, cells: view.cells, states: view.states, runCode, progress: {}, dirty: false, running: false, current: null, lastRun: null };
+  return { path: view.path, cells: view.cells, states: view.states, runCode, progress: {}, dirty: false, running: false, current: null, lastRun: null, widgets: view.widgets ?? NO_WIDGETS };
+}
+
+/** The cells the notebook shows: the setup cell (`with app.setup:`) is edited from the Kernel menu instead. */
+export function visibleCells(cells: Cell[]): Cell[] {
+  return cells.some((c) => c.setup) ? cells.filter((c) => !c.setup) : cells;
+}
+
+export function setupCell(cells: Cell[]): Cell | undefined {
+  return cells.find((c) => c.setup);
+}
+
+/** First line of the error the setup cell's last run ended with (null: it did not fail). */
+export function setupError(state: NotebookState): string | null {
+  const cell = setupCell(state.cells);
+  const s = cell && state.states[cell.id];
+  if (!s || s.status !== "error" || isStale(state, cell)) return null;
+  const out = s.output;
+  const text = out && out.type === "error" ? `${out.ename}: ${out.evalue}` : "it did not run";
+  return text.split("\n", 1)[0].trim() || "it did not run";
+}
+
+/** Index in `cells` of the visible position `index`: after the visible cell before it, or before the first visible cell. */
+export function fullIndex(cells: Cell[], index: number): number {
+  const visible = visibleCells(cells);
+  if (visible.length === cells.length) return Math.max(0, Math.min(index, cells.length));
+  if (index <= 0) return visible.length ? cells.indexOf(visible[0]) : cells.length;
+  if (index >= visible.length) return cells.length;
+  return cells.indexOf(visible[index - 1]) + 1;
 }
 
 /** Sum of every cell's last run time (what the cells show). */
@@ -140,21 +177,27 @@ export function notebookReducer(state: NotebookState, action: NotebookAction): N
       return updateCell(state, action.id, action.patch);
     case "add": {
       const cells = [...state.cells];
-      cells.splice(action.index, 0, action.cell);
+      cells.splice(fullIndex(cells, action.index), 0, action.cell);
       return { ...state, cells, dirty: true };
     }
     case "remove":
+      if (state.cells.find((c) => c.id === action.id)?.setup) return state;
       return { ...state, cells: state.cells.filter((c) => c.id !== action.id), dirty: true };
     case "move": {
+      // the neighbour is the next visible cell: the setup cell never takes part
+      const visible = visibleCells(state.cells);
+      const vi = visible.findIndex((c) => c.id === action.id);
+      const other = visible[vi + action.delta];
+      if (vi < 0 || !other) return state;
       const i = state.cells.findIndex((c) => c.id === action.id);
-      const j = i + action.delta;
-      if (i < 0 || j < 0 || j >= state.cells.length) return state;
+      const j = state.cells.indexOf(other);
       const cells = [...state.cells];
       [cells[i], cells[j]] = [cells[j], cells[i]];
       return { ...state, cells, dirty: true };
     }
     case "reorder": {
-      const cells = reorder(state.cells, action.id, action.over);
+      const involved = state.cells.filter((c) => c.id === action.id || c.id === action.over);
+      const cells = involved.some((c) => c.setup) ? state.cells : reorder(state.cells, action.id, action.over);
       return cells === state.cells ? state : { ...state, cells, dirty: true };
     }
     case "saved":
@@ -216,6 +259,11 @@ export function notebookReducer(state: NotebookState, action: NotebookAction): N
       const id = action.data.cell_id;
       return id ? { ...state, progress: { ...state.progress, [id]: action.data.queries } } : state;
     }
+    case "widgets.changed":
+      return { ...state, widgets: action.data };
+    case "widget.value":
+      if (!state.widgets.definitions.some((d) => d.name === action.name)) return state;
+      return { ...state, widgets: { ...state.widgets, values: { ...state.widgets.values, [action.name]: action.value } } };
   }
 }
 

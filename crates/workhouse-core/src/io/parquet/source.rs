@@ -11,6 +11,7 @@ use parquet::arrow::ProjectionMask;
 use rayon::prelude::*;
 
 use super::batch_size;
+use super::conform::FileColumns;
 use super::decode::{Part, chunk_ranges, decode};
 use super::file::ParquetFile;
 use super::prune::keep_row_groups;
@@ -40,6 +41,8 @@ pub struct ParquetSource {
     row_groups_kept: usize,
     prefetch: Option<Prefetcher>,
     cancel: Option<Arc<QueryHandle>>,
+    /// per file, how its columns make up the scan's (files that differ from the table)
+    columns: Option<Vec<FileColumns>>,
 }
 
 pub struct ScanRequest<'a> {
@@ -48,6 +51,8 @@ pub struct ScanRequest<'a> {
     pub projection: Vec<usize>,
     pub filters: &'a [Expr],
     pub fetch: Option<usize>,
+    /// the files' columns are matched to the table's by name
+    pub conform: bool,
 }
 
 impl ParquetSource {
@@ -75,15 +80,23 @@ impl ParquetSource {
             row_groups_kept,
             prefetch: None,
             cancel: crate::exec::query::current(),
+            columns: None,
         };
+        if req.conform {
+            src.columns = Some(src.files.iter().map(|f| FileColumns::new(f, req.table_schema, &src.projection)).collect());
+        }
         if remote && !src.projection.is_empty() {
             src.prefetch = src.prefetcher();
         }
         Ok(src)
     }
 
-    fn mask(&self, file: &ParquetFile) -> ProjectionMask {
-        ProjectionMask::roots(file.meta.parquet_schema(), self.projection.iter().copied())
+    fn mask(&self, file: usize) -> ProjectionMask {
+        let schema = self.files[file].meta.parquet_schema();
+        match &self.columns {
+            Some(c) => ProjectionMask::roots(schema, c[file].read.iter().copied()),
+            None => ProjectionMask::roots(schema, self.projection.iter().copied()),
+        }
     }
 
     fn prefetcher(&self) -> Option<Prefetcher> {
@@ -100,7 +113,7 @@ impl ParquetSource {
         let mut groups = FetchGroups::new(target);
         for m in &self.morsels {
             let f = &self.files[m.file];
-            groups.push(m.file, f.blob.object()?, chunk_ranges(&f.meta, m.row_group, &self.mask(f)));
+            groups.push(m.file, f.blob.object()?, chunk_ranges(&f.meta, m.row_group, &self.mask(m.file)));
         }
         let prefetcher = Prefetcher::grouped(groups.finish(), window);
         Some(if self.fetch.is_some() { prefetcher.with_lookahead(window) } else { prefetcher })
@@ -198,14 +211,19 @@ impl Source for ParquetSource {
             return self.emit_counts(self.fetch.map_or(m.rows, |f| m.rows.min(f)), emit);
         }
         let f = &self.files[m.file];
-        let mask = self.mask(f);
+        let mask = self.mask(m.file);
         let cancel = self.cancel.as_deref();
         let input = match &self.prefetch {
             Some(p) => p.take(morsel, cancel)?.chunks,
             None => f.blob.read(&chunk_ranges(&f.meta, m.row_group, &mask), cancel)?,
         };
-        let part = Part { meta: &f.meta, row_group: m.row_group, rows: m.range, limit: self.fetch, schema: &self.schema };
-        decode(input, mask, &part, emit)
+        let Some(columns) = &self.columns else {
+            let part = Part { meta: &f.meta, row_group: m.row_group, rows: m.range, limit: self.fetch, schema: &self.schema };
+            return decode(input, mask, &part, emit);
+        };
+        let c = &columns[m.file];
+        let part = Part { meta: &f.meta, row_group: m.row_group, rows: m.range, limit: self.fetch, schema: &c.decoded };
+        decode(input, mask, &part, &mut |b| emit(c.adapt(b, &self.schema)?))
     }
 
     fn schema(&self) -> SchemaRef {

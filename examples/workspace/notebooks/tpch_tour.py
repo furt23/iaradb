@@ -4,17 +4,15 @@ __generated_with = "workhouse"
 app = marimo.App(width="medium")
 
 
-@app.cell(id="xowwlks9")
-def _():
+with app.setup:
     import marimo as mo
     import workhouse as wh
 
     ws = wh.workspace()
-    return mo, wh, ws
 
 
 @app.cell(id="j5f636sc")
-def _(mo):
+def _():
     mo.md(
         r"""
         # A tour of Workhouse
@@ -28,7 +26,7 @@ def _(mo):
 
 
 @app.cell(id="a88k7q9r")
-def _(ws):
+def _():
     revenue_by_nation = ws.sql(
         r"""
         select
@@ -48,7 +46,7 @@ def _(ws):
 
 
 @app.cell(id="g2esyroi")
-def _(ws):
+def _():
     from workhouse import col
 
     # the DataFrame API: a lazy query, shown with its profile and plan
@@ -64,7 +62,7 @@ def _(ws):
 
 
 @app.cell(id="04pwngd3")
-def _(big_orders, ws):
+def _(big_orders):
     priorities = ws.sql(
         r"""
         -- DataFrames from other cells are tables here

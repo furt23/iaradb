@@ -42,17 +42,19 @@ def run_profiled(lf: Any) -> dict[str, Any]:
     return {"plan": lf.explain_tree(), "profile": profile, "rows": rows, "requests": profile.get("requests")}
 
 
-def analyze_query(ws: Workspace, query: str, history: History, interruptor: Interruptor) -> dict[str, Any]:
+def analyze_query(
+    ws: Workspace, query: str, history: History, interruptor: Interruptor, params: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Run a query with profiling; errors propagate as the query's own."""
     t0 = time.perf_counter()
     try:
         with interruptor.interruptible():
-            lf = ws.sql(query)
+            lf = ws.sql(query, params=params) if params else ws.sql(query)
             run = run_profiled(lf)
     except BaseException as e:
-        history.record(query, SOURCE, (time.perf_counter() - t0) * 1000, None, f"{type(e).__name__}: {e}")
+        history.record(query, SOURCE, (time.perf_counter() - t0) * 1000, None, f"{type(e).__name__}: {e}", params)
         raise
-    history.record(query, SOURCE, run["profile"]["elapsed_ms"], run["rows"])
+    history.record(query, SOURCE, run["profile"]["elapsed_ms"], run["rows"], params=params)
     out: dict[str, Any] = {
         "query": query,
         "at": int(time.time() * 1000),

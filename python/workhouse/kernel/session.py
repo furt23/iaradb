@@ -18,6 +18,7 @@ from workhouse.kernel.assist.service import AssistService
 from workhouse.kernel.cell_runner import CellRunner, Emit
 from workhouse.kernel.history import History
 from workhouse.kernel.notebook_service import NotebookService, resolve_in
+from workhouse.kernel.params import bind_params
 from workhouse.kernel.runtime.interrupt import Interruptor
 from workhouse.kernel.runtime.charts import chart_data
 from workhouse.kernel.runtime.results import ResultStore
@@ -28,7 +29,7 @@ Handler = Callable[[dict[str, Any], Emit], Any]
 #: methods that run user code or mutate the notebook: executed one at a time
 #: on the worker thread (everything else answers immediately)
 QUEUED = frozenset(
-    {"workspace.configure", "notebook.open", "notebook.create", "notebook.run", "sql.run", "sql.analyze", "catalog.preview", "catalog.add"}
+    {"workspace.configure", "notebook.open", "notebook.create", "notebook.run", "widgets.set", "sql.run", "sql.analyze", "catalog.preview", "catalog.add"}
 )
 #: code assistance: answered on their own thread, newest request per
 #: (method, cell) first (an older pending one is answered with null)
@@ -77,6 +78,7 @@ class KernelSession:
         """Take a new catalog (the same object stays shared by every service)."""
         self.ws.name, self.ws.tables, self.ws.storage, self.ws._session = fresh.name, fresh.tables, fresh.storage, None
         self.ws.warehouse, self.ws.declared_schemas = fresh.warehouse, fresh.declared_schemas
+        self.ws.schema_locations, self.ws.discovered = fresh.schema_locations, []
         return self.info()
 
     def report_catalog(self, emit: Emit) -> None:
@@ -119,8 +121,19 @@ class KernelSession:
         return {"data": base64.b64encode(data).decode("ascii"), "size": size, "eof": offset + len(data) >= size}
 
     def run_notebook(self, p: dict[str, Any], emit: Emit) -> dict[str, Any]:
+        self.ws.refresh()
         try:
             return self.notebook.run(p.get("cells"), p.get("cell_ids"), emit)
+        finally:
+            self.report_catalog(emit)
+
+    def set_widget(self, p: dict[str, Any], emit: Emit) -> dict[str, Any]:
+        nb = self.notebook.notebook
+        if p.get("notebook") is not None and nb is not None and resolve_in(self.ws.root, p["notebook"]) != nb.path:
+            raise ValueError(f"{p['notebook']!r} is not the open notebook")
+        self.ws.refresh()
+        try:
+            return self.notebook.set_widget(p["name"], p.get("value"), p.get("cells"), emit)
         finally:
             self.report_catalog(emit)
 
@@ -129,15 +142,19 @@ class KernelSession:
         from workhouse.kernel.runtime.progress import watch
 
         query = p["query"]
+        self.ws.refresh()
         try:
             with watch(lambda q: emit("progress", {"queries": q})), self.interruptor.interruptible():
-                output, _ = self.runner.query(self.ws, query, {}, "query", p.get("source", "sql editor"))
+                output, _ = self.runner.query(self.ws, query, {}, "query", p.get("source", "sql editor"), bind_params(p))
         finally:
             self.report_catalog(emit)
         return output
 
-    def sql_explain(self, query: str) -> dict[str, Any]:
-        lf = self.ws.sql(query)
+    def sql_explain(self, p: dict[str, Any] | str) -> dict[str, Any]:
+        """The plan of a query: a request (with ``params``) or the query text."""
+        req = {"query": p} if isinstance(p, str) else p
+        params = bind_params(req)
+        lf = self.ws.sql(req["query"], params=params) if params else self.ws.sql(req["query"])
         return {"plan": lf.explain_tree(), "text": lf.explain()}
 
     def preview(self, name: str, limit: int) -> dict[str, Any]:
@@ -151,12 +168,13 @@ class KernelSession:
             "workspace.info": lambda p, e: self.info(),
             "workspace.reload": lambda p, e: self.reload(),
             "workspace.configure": lambda p, e: self.configure(p.get("toml")),
-            "notebook.open": lambda p, e: nb.open(p["path"], p.get("source")),
+            "notebook.open": lambda p, e: nb.open(p["path"], p.get("source"), p.get("widgets")),
             "notebook.create": lambda p, e: nb.create(p["path"], bool(p.get("persist", True))),
             "notebook.view": lambda p, e: nb.view(),
             "notebook.rename": lambda p, e: nb.rename(p["path"]),
             "notebook.save": lambda p, e: nb.save(p.get("cells"), bool(p.get("persist", True))),
             "notebook.run": self.run_notebook,
+            "widgets.set": self.set_widget,
             "notebook.variables": lambda p, e: nb.variables(),
             "notebook.clear": lambda p, e: nb.clear(p["path"], p.get("cells")),
             "assist.complete": lambda p, e: self.assist.complete(p),
@@ -169,11 +187,12 @@ class KernelSession:
             "file.read": lambda p, e: self.read_file(p),
             "catalog.list": lambda p, e: catalog.list_tables(self.ws),
             "catalog.table": lambda p, e: catalog.table_info(self.ws, p["name"]),
+            "catalog.history": lambda p, e: catalog.history(self.ws, p["table"], int(p.get("limit", 50))),
             "catalog.schema": lambda p, e: catalog.schemas(self.ws),
             "catalog.preview": lambda p, e: self.preview(p["name"], int(p.get("limit", 100))),
             "catalog.add": lambda p, e: self.add_table(p),
             "sql.run": self.sql_run,
-            "sql.explain": lambda p, e: self.sql_explain(p["query"]),
-            "sql.analyze": lambda p, e: analyze_query(self.ws, p["query"], self.history, self.interruptor),
+            "sql.explain": lambda p, e: self.sql_explain(p),
+            "sql.analyze": lambda p, e: analyze_query(self.ws, p["query"], self.history, self.interruptor, bind_params(p)),
             "history.list": lambda p, e: self.history.recent(int(p.get("limit", 200))),
         }

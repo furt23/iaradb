@@ -273,7 +273,7 @@ def test_tables_created_by_sql_reach_the_studio(session: KernelSession, workspac
     out = session.handlers()["sql.run"]({"query": "create table big_sales as select * from sales where amount > 100"}, rec)
     assert out["result"]["page"]["rows"][0][0] == "create"
     changes = [d for e, d in rec.events if e == "catalog.changed"]
-    assert changes == [{"name": "big_sales", "entry": '\n[tables.big_sales]\npath = "warehouse/big_sales"\n', "kind": "table"}]
+    assert changes == [{"name": "big_sales", "entry": '\n[tables.big_sales]\npath = "warehouse/big_sales"\nformat = "delta"\n', "kind": "table"}]
     assert (workspace / "warehouse" / "big_sales").is_dir()
     # a notebook cell drops it: the run reports that too
     session.notebook.create("notebooks/drop.py", persist=False)
@@ -292,3 +292,38 @@ def test_a_notebook_runs_headless_as_opened(session: KernelSession, workspace: P
     result = session.handlers()["notebook.run"]({"cells": None, "cell_ids": None}, rec)
     assert result == {"ran": [c["id"] for c in view["cells"]], "interrupted": False}
     assert rec.states(view["cells"][-1]["id"])[-1] == "done"
+
+
+def test_the_setup_cell_runs_first_and_its_names_reach_every_cell(session: KernelSession, workspace: Path):
+    nb = marimo_io.new_notebook(workspace / "notebooks" / "hidden.py")
+    view = call(session, "notebook.open", {"path": "notebooks/hidden.py", "source": marimo_io.serialize(nb)})
+    assert [c["id"] for c in view["cells"]] == ["setup"] and view["cells"][0]["setup"]
+    cells = [
+        view["cells"][0],
+        py("p", "n = ws.table('sales').collect().height"),
+        sql("s", "select count(*) as k from sales", "k"),
+        py("m", "mo.md('x')"),
+        py("plain", "x = 1"),
+    ]
+    everyone = {"setup", "p", "s", "m", "plain"}
+    # running a single cell brings the setup cell along, even one that reads none of its names
+    result, rec = run(session, cells, ["plain"])
+    assert result["ran"][0] == "setup" and "plain" in result["ran"]
+    assert rec.states("plain")[-1] == "done"
+    # running everything: setup first, then the rest, all done
+    result, rec = run(session, cells, None)
+    assert result["ran"][0] == "setup" and set(result["ran"]) == everyone
+    assert all(rec.states(c)[-1] == "done" for c in everyone)
+    assert session.notebook.namespace()["n"] == 1000
+    # editing the setup code reruns everything that depends on it
+    edited = [{**cells[0], "code": cells[0]["code"] + "\nextra = 1"}, *cells[1:]]
+    result, _ = run(session, edited, ["setup"])
+    assert result["ran"][0] == "setup" and set(result["ran"]) == everyone - {"plain"}
+
+
+def test_a_failing_setup_cell_blocks_the_others(session: KernelSession):
+    session.notebook.create("notebooks/bad.py", persist=False)
+    cells = [{**py("setup", "import nothing_here"), "setup": True}, py("a", "x = 1")]
+    result, rec = run(session, cells, ["a"])
+    assert result["ran"] == ["setup"]
+    assert rec.states("setup")[-1] == "error" and rec.states("a")[-1] == "error"

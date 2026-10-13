@@ -32,6 +32,7 @@ export function ClusterRow({ cluster: c, now, actions, cloud }: { cluster: Clust
   const stopped = c.state === "terminated" || c.state === "error";
   const details = [machineSummary(c)];
   if (c.kind === "ec2") details.push(`terminates after ${c.autoTerminateMinutes} min idle`);
+  if (c.owner) details.push(`by ${c.owner}`);
   if (c.kind === "ec2" && c.state === "running") {
     details.push(`up ${formatMinutes(minutesSince(c.startedAt, now) ?? 0)}`, `idle ${formatMinutes(minutesSince(c.lastActivity, now) ?? 0)}`);
   }
@@ -80,18 +81,22 @@ export function ClusterRow({ cluster: c, now, actions, cloud }: { cluster: Clust
               <ContentCopyOutlined fontSize="small" />
             </IconButton>
           </Tooltip>
-          <Tooltip title="Edit">
-            <IconButton onClick={() => actions.edit(c)} aria-label={`edit ${c.name}`}>
-              <EditOutlined fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title={stopped ? "Delete" : "Terminate it first"}>
-            <span>
-              <IconButton onClick={() => actions.remove(c)} disabled={!stopped} aria-label={`delete ${c.name}`}>
-                <DeleteOutline fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
+          {c.canManage && (
+            <>
+              <Tooltip title="Edit">
+                <IconButton onClick={() => actions.edit(c)} aria-label={`edit ${c.name}`}>
+                  <EditOutlined fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title={stopped ? "Delete" : "Terminate it first"}>
+                <span>
+                  <IconButton onClick={() => actions.remove(c)} disabled={!stopped} aria-label={`delete ${c.name}`}>
+                    <DeleteOutline fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </>
+          )}
         </Box>
       )}
     </Paper>

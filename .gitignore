@@ -22,3 +22,10 @@ bench_ec2.json
 .aws
 # internal test briefs and reports
 test-briefs/
+docs-gap/
+.env*
+# Docker settings with secrets (the examples are committed)
+docker/*.env
+!docker/*.env.example
+docker/cloudflared/*
+!docker/cloudflared/config.yml.example

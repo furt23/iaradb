@@ -19,6 +19,9 @@ chrono.workspace = true
 parking_lot.workspace = true
 memchr = "2"
 regex = "1"
+# Delta Lake transaction log (JSON actions, schema strings, file statistics)
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
 # remote storage (object_store; the "s3" feature adds Amazon S3)
 object_store = { version = "0.14", default-features = false, features = ["tokio"] }
 # the ObjectStore trait is declared with it (the request-counting wrapper implements it)

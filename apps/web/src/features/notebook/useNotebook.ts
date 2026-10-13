@@ -1,6 +1,6 @@
 "use client";
 
-import type { Cell, CellKind, NotebookView, RunStreamEvent } from "@workhouse/protocol";
+import type { Cell, CellKind, NotebookView, RunRequest, RunStreamEvent, WidgetValue } from "@workhouse/protocol";
 import { useCallback, useEffect, useReducer, useRef } from "react";
 
 import { useCatalogRefresh } from "@/features/data/useCatalogRefresh";
@@ -48,16 +48,16 @@ export function useNotebook(view: NotebookView, onRunFinished?: () => void) {
     [],
   );
 
-  const run = useCallback(
-    async (cellIds: string[] | null) => {
-      const cells = cellsRef.current;
-      dispatch({ type: "run", cells, at: Date.now() });
+  /** Send a run request and follow the kernel's events until it ends. */
+  const execute = useCallback(
+    async (request: Extract<RunRequest, { kind: "notebook" | "widget" }>) => {
+      dispatch({ type: "run", cells: request.cells, at: Date.now() });
       let catalogChanged = false;
       try {
-        await streamEvents("/api/run", { kind: "notebook", path: state.path, cells, cellIds }, (e) => {
+        await streamEvents("/api/run", request, (e) => {
           const ev = e as RunStreamEvent;
           if (ev.event === "catalog.changed") catalogChanged = true;
-          else if (ev.event === "cell.state" || ev.event === "cell.stream" || ev.event === "progress") {
+          else if (ev.event === "cell.state" || ev.event === "cell.stream" || ev.event === "progress" || ev.event === "widgets.changed") {
             dispatch({ type: ev.event, data: ev.data } as Parameters<typeof dispatch>[0]);
           } else if (ev.event === "failed") {
             notify(ev.data.message, "error");
@@ -72,7 +72,20 @@ export function useNotebook(view: NotebookView, onRunFinished?: () => void) {
       }
       void save();
     },
-    [state.path, notify, onRunFinished, save, refreshCatalog],
+    [notify, onRunFinished, save, refreshCatalog],
+  );
+
+  const run = useCallback((cellIds: string[] | null) => execute({ kind: "notebook", path: state.path, cells: cellsRef.current, cellIds }), [execute, state.path]);
+
+  /** A widget got a value: the cells that read it run. Changes go to the kernel one after the other. */
+  const widgetQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const setWidget = useCallback(
+    (name: string, value: WidgetValue) => {
+      dispatch({ type: "widget.value", name, value });
+      const send = () => execute({ kind: "widget", path: state.path, cells: cellsRef.current, name, value });
+      widgetQueue.current = widgetQueue.current.then(send, send);
+    },
+    [execute, state.path],
   );
 
   const interrupt = useCallback(async () => {
@@ -129,6 +142,7 @@ export function useNotebook(view: NotebookView, onRunFinished?: () => void) {
     kernelKey,
     save,
     run,
+    setWidget,
     interrupt,
     restart,
     restartAndClear,

@@ -7,12 +7,12 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, BooleanArray, Date32Array, Int64Array, StringViewArray};
+use arrow::array::{Array, ArrayRef, BooleanArray, Date32Array, Int64Array, StringArray, StringViewArray};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use arrow::util::display::array_value_to_string;
 
-use crate::error::Result;
+use crate::error::{Result, WhError};
 use crate::expr::{Expr, split_conjunction};
 use crate::io::ColumnStats;
 use crate::physical::expr::create_physical_expr;
@@ -28,6 +28,22 @@ pub struct Partitions {
 }
 
 impl Partitions {
+    /// Partition columns from values the table's log gives: `schema` names
+    /// and types them, `per_file[i][j]` is the text of column `j` in file `i`
+    /// (`None`: null). Values are cast to the column type.
+    pub fn from_values(schema: SchemaRef, per_file: &[Vec<Option<String>>]) -> Result<Partitions> {
+        let opts = arrow::compute::CastOptions { safe: false, ..Default::default() };
+        let mut columns = Vec::with_capacity(schema.fields().len());
+        for (j, field) in schema.fields().iter().enumerate() {
+            let text: StringArray = per_file.iter().map(|row| row[j].as_deref()).collect();
+            let typed = arrow::compute::cast_with_options(&text, field.data_type(), &opts)
+                .map_err(|e| WhError::Execution(format!("partition column '{}' has a value that is not a {}: {e}", field.name(), field.data_type())))?;
+            columns.push(typed);
+        }
+        let opts = RecordBatchOptions::new().with_row_count(Some(per_file.len()));
+        Ok(Partitions { values: RecordBatch::try_new_with_options(schema, columns, &opts)? })
+    }
+
     pub fn schema(&self) -> SchemaRef {
         self.values.schema()
     }
@@ -225,6 +241,26 @@ mod tests {
         assert_eq!(p.keep(&[col("year").eq(lit(Scalar::int64(2024)))]), vec![false, true, true, true]);
         // nulls never pass a comparison; other columns' filters keep everything
         assert_eq!(p.keep(&[col("region").eq(lit(Scalar::utf8("north"))).and(col("amount").gt(lit(Scalar::int64(1))))]), vec![true, true, false, false]);
+    }
+
+    #[test]
+    fn values_from_a_log_are_cast_to_the_column_types() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("n", DataType::Int32, true),
+            Field::new("d", DataType::Date32, true),
+            Field::new("s", DataType::Utf8View, true),
+            Field::new("b", DataType::Boolean, true),
+        ]));
+        let row = |n: Option<&str>, d: Option<&str>, s: Option<&str>, b: Option<&str>| [n, d, s, b].map(|v| v.map(String::from)).to_vec();
+        let rows = vec![row(Some("7"), Some("2024-05-01"), Some("a b"), Some("true")), row(None, None, None, None)];
+        let p = Partitions::from_values(schema.clone(), &rows).unwrap();
+        assert_eq!(p.values.num_rows(), 2);
+        assert_eq!(p.values.schema(), schema);
+        assert_eq!(array_value_to_string(p.values.column(1), 0).unwrap(), "2024-05-01");
+        assert!(p.values.columns().iter().all(|c| c.is_null(1)));
+        assert_eq!(p.keep(&[col("n").eq(lit(Scalar::int64(7)))]), vec![true, false]);
+        let bad = vec![row(Some("x"), None, None, None)];
+        assert!(Partitions::from_values(schema, &bad).is_err());
     }
 
     #[test]

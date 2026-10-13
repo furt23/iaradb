@@ -10,7 +10,7 @@ use parking_lot::Mutex;
 
 use crate::error::Result;
 use crate::io::options::StorageOptions;
-use crate::io::output::Output;
+use crate::io::output::{Output, WrittenFile};
 use crate::session::LazyFrame;
 
 /// How CSV is written (COPY's HEADER, DELIMITER, QUOTE, ESCAPE, NULL).
@@ -33,6 +33,8 @@ impl Default for CsvWriteOptions {
 /// A CSV file being written.
 pub struct CsvSink {
     writer: Writer<Output>,
+    path: String,
+    rows: u64,
 }
 
 impl CsvSink {
@@ -45,15 +47,19 @@ impl CsvSink {
         if let Some(n) = &o.null {
             b = b.with_null(n.clone());
         }
-        Ok(Self { writer: b.build(Output::create(path, storage)?) })
+        Ok(Self { writer: b.build(Output::create(path, storage)?), path: path.to_string(), rows: 0 })
     }
 
     pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
-        Ok(self.writer.write(&without_views(batch)?)?)
+        self.writer.write(&without_views(batch)?)?;
+        self.rows += batch.num_rows() as u64;
+        Ok(())
     }
 
-    pub fn finish(self) -> Result<()> {
-        self.writer.into_inner().finish()
+    /// Flush and move the file into place; returns it as written.
+    pub fn finish(self) -> Result<WrittenFile> {
+        let size = self.writer.into_inner().finish()?;
+        Ok(WrittenFile { path: self.path, size, rows: self.rows, partition_values: vec![], metadata: None })
     }
 }
 
@@ -66,7 +72,7 @@ pub fn write_csv_with(path: &str, batches: &[RecordBatch], has_header: bool, del
     for b in batches {
         sink.write(b)?;
     }
-    sink.finish()
+    sink.finish().map(|_| ())
 }
 
 /// The CSV writer does not take Utf8View columns: cast them to Utf8.

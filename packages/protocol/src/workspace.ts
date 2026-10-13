@@ -4,7 +4,7 @@ export interface TableRef {
   name: string;
   /** relative to the workspace root when inside it */
   path: string;
-  format: "parquet" | "csv" | "json";
+  format: "parquet" | "delta" | "csv" | "json";
 }
 
 export interface ColumnStats {
@@ -17,11 +17,27 @@ export interface ColumnStats {
 }
 
 export interface TableInfo extends TableRef {
-  columns: { name: string; type: string }[];
+  /** `nullable: false` is NOT NULL, when the table's schema says */
+  columns: { name: string; type: string; nullable?: boolean }[];
   num_rows: number;
   files: number;
   bytes: number;
+  /** Delta tables: the version, partition columns and COMMENT of the log */
+  version?: number | null;
+  partitions?: string[];
+  description?: string | null;
   stats: ColumnStats[];
+}
+
+/** One commit of a Delta table (`catalog.history`), newest first; metric and parameter values are text. */
+export interface DeltaCommit {
+  version: number;
+  /** milliseconds since the epoch */
+  timestamp: number;
+  operation: string | null;
+  operation_parameters: Record<string, string>;
+  operation_metrics: Record<string, string>;
+  engine_info: string | null;
 }
 
 export interface KernelInfo {
@@ -46,4 +62,6 @@ export interface HistoryEntry {
   elapsed_ms: number;
   rows: number | null;
   error: string | null;
+  /** the parameter values of a parameterized query */
+  params?: Record<string, unknown>;
 }

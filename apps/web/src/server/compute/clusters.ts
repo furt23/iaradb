@@ -59,6 +59,8 @@ export interface NewCluster {
   autoTerminateMinutes?: number;
   volumeGb?: number;
   job?: string;
+  /** email of the member creating it */
+  owner?: string;
 }
 
 /** The reason a user's Terminate gives (the phase the UI shows while it goes on). */
@@ -206,8 +208,8 @@ export class ClusterService {
     return rec;
   }
 
-  /** A new cluster with the machine and limits of `id` (not started). */
-  clone(id: string): ClusterRecord {
+  /** A new cluster with the machine and limits of `id` (not started), owned by `owner`. */
+  clone(id: string, owner?: string): ClusterRecord {
     const src = this.d.store.cluster(id);
     if (!src) throw new ClusterError("UnknownCluster", `unknown cluster ${id}`);
     const taken = this.d.store.read().clusters.map((c) => c.name);
@@ -216,6 +218,7 @@ export class ClusterService {
       instanceType: src.instanceType,
       autoTerminateMinutes: src.autoTerminateMinutes,
       volumeGb: src.volumeGb,
+      owner,
     });
     this.log(copy.id, "cloned", `copy of ${src.name}`);
     return copy;
@@ -236,6 +239,7 @@ export class ClusterService {
       createdAt: this.now(),
       runtime: { state: "terminated" },
       ...(input.job ? { job: input.job } : {}),
+      ...(input.owner ? { owner: input.owner } : {}),
     };
     this.d.store.update((s) => void s.clusters.push(record));
     return record;
@@ -490,7 +494,7 @@ export class ClusterService {
     for (const [nb, id] of Object.entries(s.attachments)) byCluster.set(id, [...(byCluster.get(id) ?? []), nb]);
     const out: ClusterView[] = [];
     if (this.d.localCompute) {
-      out.push({ id: LOCAL_CLUSTER, name: "Local", kind: "local", state: "running", notebooks: byCluster.get(LOCAL_CLUSTER) ?? [], isDefault: def === LOCAL_CLUSTER });
+      out.push({ id: LOCAL_CLUSTER, name: "Local", kind: "local", state: "running", notebooks: byCluster.get(LOCAL_CLUSTER) ?? [], isDefault: def === LOCAL_CLUSTER, canManage: false });
     }
     for (const c of s.clusters) {
       out.push({
@@ -508,6 +512,8 @@ export class ClusterService {
         publicIp: c.runtime.publicIp,
         notebooks: byCluster.get(c.id) ?? [],
         isDefault: def === c.id,
+        canManage: false,
+        ...(c.owner ? { owner: c.owner } : {}),
         ...(c.job ? { job: c.job } : {}),
       });
     }

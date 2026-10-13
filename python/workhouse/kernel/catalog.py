@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from workhouse.storage import list_files
+from workhouse.storage import delta_history, delta_info, list_files
 from workhouse.workspaces import TableSpec, Workspace
 
 
@@ -28,14 +28,14 @@ def spec_view(ws: Workspace, spec: TableSpec) -> dict[str, Any]:
 
 
 def list_tables(ws: Workspace) -> list[dict[str, Any]]:
-    return [spec_view(ws, t) for t in ws.tables]
+    return [spec_view(ws, t) for t in ws.tables + ws.discovered]
 
 
 def schemas(ws: Workspace) -> dict[str, list[dict[str, str]]]:
     """Columns of every catalog table (for editor completion); unreadable
     tables are left out."""
     out: dict[str, list[dict[str, str]]] = {}
-    for t in ws.tables:
+    for t in ws.tables + ws.discovered:
         try:
             out[t.name] = [{"name": n, "type": ty} for n, ty in ws.table(t.name).schema.items()]
         except Exception:  # noqa: BLE001 - a broken table must not hide the others
@@ -46,6 +46,8 @@ def schemas(ws: Workspace) -> dict[str, list[dict[str, str]]]:
 def files(spec: TableSpec) -> list[tuple[str, int]]:
     """``(path_or_url, size)`` of the table's files (none if unreadable)."""
     try:
+        if spec.format == "delta":
+            return list_files(spec.path, "parquet")
         return list_files(spec.path, spec.format)
     except Exception:  # noqa: BLE001 - shown as a table without files
         return []
@@ -93,5 +95,31 @@ def table_info(ws: Workspace, name: str) -> dict[str, Any]:
     info["num_rows"] = ws.sql(f"select count(*) from {spec.name}").collect().item()
     info["files"] = len(listed)
     info["bytes"] = sum(size for _, size in listed)
+    if spec.format == "delta":
+        # the log says which files are current (the folder also holds the removed ones)
+        try:
+            d = delta_info(spec.path)
+            info.update(
+                files=d["num_files"],
+                bytes=d["size_bytes"],
+                version=d["version"],
+                partitions=d["partition_columns"],
+                description=d["description"],
+            )
+            not_null = set(d.get("not_null_columns", []))
+            for c in info["columns"]:
+                c["nullable"] = c["name"] not in not_null
+        except Exception:  # noqa: BLE001 - shown as a table without log details
+            info.update(version=None, partitions=[])
     info["stats"] = column_stats(ws, spec, types)
     return info
+
+
+def history(ws: Workspace, name: str, limit: int = 50) -> list[dict[str, Any]]:
+    """The commits of a Delta table, newest first (``limit`` of them)."""
+    spec = ws.spec(name)
+    if spec is None:
+        raise KeyError(f"table {name!r} is not in the catalog")
+    if spec.format != "delta":
+        raise ValueError(f"table {name!r} is not a Delta table: it has no history")
+    return delta_history(spec.path, limit=max(1, limit))

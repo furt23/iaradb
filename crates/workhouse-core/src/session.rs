@@ -20,8 +20,12 @@ use crate::logical::{JoinType, LogicalPlan};
 use crate::optimizer::optimize;
 use crate::physical::planner::{PhysicalPlan, PlanNode, create_physical_plan, execute, execute_stream};
 use crate::schema::{Column, PlanSchema, PlanSchemaRef};
+use crate::sql::Params;
 
+mod tables;
 mod unnest;
+
+pub use tables::TableListing;
 
 #[derive(Clone, Debug)]
 pub enum TableEntry {
@@ -58,6 +62,11 @@ impl DeferredTable {
 
     pub fn is_loaded(&self) -> bool {
         self.loaded.lock().is_some()
+    }
+
+    /// The kind of the table, if it is loaded.
+    pub(crate) fn loaded_kind(&self) -> Option<&'static str> {
+        self.loaded.lock().as_ref().map(|t| t.kind())
     }
 }
 
@@ -115,6 +124,8 @@ pub struct SessionState {
     catalog: RwLock<Catalog>,
     /// where `CREATE TABLE ... AS` writes tables (none: they stay in memory)
     warehouse: RwLock<Option<(String, StorageOptions)>>,
+    /// per-schema folders (lowercase schema name): tables created in the schema are written under them
+    schema_locations: RwLock<HashMap<String, (String, StorageOptions)>>,
 }
 
 #[derive(Clone, Default)]
@@ -133,7 +144,14 @@ impl SessionContext {
     pub fn fork(&self) -> Self {
         let catalog = self.state.catalog.read().clone();
         let warehouse = self.state.warehouse.read().clone();
-        Self { state: Arc::new(SessionState { catalog: RwLock::new(catalog), warehouse: RwLock::new(warehouse) }) }
+        let schema_locations = self.state.schema_locations.read().clone();
+        Self {
+            state: Arc::new(SessionState {
+                catalog: RwLock::new(catalog),
+                warehouse: RwLock::new(warehouse),
+                schema_locations: RwLock::new(schema_locations),
+            }),
+        }
     }
 
     /// The folder (or object prefix) where `CREATE TABLE name AS ...` writes
@@ -144,6 +162,21 @@ impl SessionContext {
 
     pub fn warehouse(&self) -> Option<(String, StorageOptions)> {
         self.state.warehouse.read().clone()
+    }
+
+    /// The folder (or object prefix) where `CREATE TABLE schema.name AS ...`
+    /// writes `name/`, instead of the warehouse; `None` removes it.
+    pub fn set_schema_location(&self, schema: &str, path: Option<&str>, storage: &StorageOptions) {
+        let key = schema.to_lowercase();
+        let mut map = self.state.schema_locations.write();
+        match path {
+            Some(p) => map.insert(key, (p.to_string(), storage.clone())),
+            None => map.remove(&key),
+        };
+    }
+
+    pub fn schema_location(&self, schema: &str) -> Option<(String, StorageOptions)> {
+        self.state.schema_locations.read().get(&schema.to_lowercase()).cloned()
     }
 
     /// Whether a table or view of that name is registered (without loading
@@ -165,7 +198,19 @@ impl SessionContext {
 
     /// A name registers in its schema; a bare one, in `main`.
     fn insert(&self, name: &str, slot: Slot) {
-        self.state.catalog.write().insert(&exact(name), slot);
+        let name = exact(name);
+        let mut catalog = self.state.catalog.write();
+        // a Delta table replaced by its newer self: plans on the old one follow
+        if let (Some(Slot::Entry(TableEntry::Table(old))), Slot::Entry(TableEntry::Table(new))) = (catalog.tables.get(&name.key()), &slot) {
+            if let Some(d) = old.as_delta() {
+                d.set_successor(new.clone());
+            }
+        } else if let (Some(Slot::Deferred(old)), Slot::Entry(TableEntry::Table(new))) = (catalog.tables.get(&name.key()), &slot) {
+            if let Some(old) = old.loaded.lock().as_ref().and_then(|o| o.as_delta().map(|_| o.clone())) {
+                old.as_delta().expect("delta").set_successor(new.clone());
+            }
+        }
+        catalog.insert(&name, slot);
     }
 
     pub fn register_table(&self, name: &str, provider: Arc<dyn TableProvider>) {
@@ -334,6 +379,17 @@ impl SessionContext {
         self.scan_provider(path, Arc::new(ParquetTable::try_new_with(path, storage)?))
     }
 
+    /// A Delta table, at a version or its newest.
+    pub fn read_delta(&self, path: &str, storage: &StorageOptions, version: Option<crate::delta::VersionSpec>) -> Result<LazyFrame> {
+        self.scan_provider(path, Arc::new(crate::delta::DeltaTable::open(path, storage, version)?))
+    }
+
+    /// Register a Delta table under `name` (opened on first use when `lazy`).
+    pub fn register_delta(&self, name: &str, path: &str, storage: &StorageOptions, version: Option<crate::delta::VersionSpec>, lazy: bool) -> Result<()> {
+        let (path, storage) = (path.to_string(), storage.clone());
+        self.register_loader(name, lazy, move || Ok(Arc::new(crate::delta::DeltaTable::open(&path, &storage, version)?)))
+    }
+
     pub fn read_csv(&self, path: &str, options: CsvOptions) -> Result<LazyFrame> {
         self.read_csv_with(path, options, &StorageOptions::default())
     }
@@ -368,12 +424,18 @@ impl SessionContext {
     /// changes the catalog (`CREATE SCHEMA`, `DROP SCHEMA`, `USE`), run now,
     /// returning what it did.
     pub fn sql(&self, query: &str) -> Result<LazyFrame> {
+        self.sql_with(query, &Params::None)
+    }
+
+    /// [`sql`](Self::sql) with values for the placeholders of the statement:
+    /// `$1`, `$2`, `?` (positional) or `:name`, `$name` (named).
+    pub fn sql_with(&self, query: &str, params: &Params) -> Result<LazyFrame> {
         match crate::sql::command::parse_command(query)? {
             crate::sql::command::Command::Query => {
-                let plan = crate::sql::plan_sql(self, query)?;
+                let plan = crate::sql::plan_sql(self, query, params)?;
                 Ok(LazyFrame::new(Arc::new(plan), self.clone()))
             }
-            command => crate::sql::write::run(self, command),
+            command => crate::sql::write::run(self, command, params),
         }
     }
 }
@@ -707,21 +769,17 @@ impl LazyFrame {
     /// produced: one file, or a Hive-partitioned folder with `partition_by`;
     /// returns the number of rows written.
     pub fn sink_parquet(&self, path: &str, opts: &crate::io::parquet::ParquetOptions, storage: &crate::io::StorageOptions) -> Result<usize> {
-        use crate::io::parquet::DatasetSink;
-        let sink = parking_lot::Mutex::new(None::<DatasetSink>);
-        let rows = std::sync::atomic::AtomicUsize::new(0);
-        self.stream(
-            &mut |schema| {
-                *sink.lock() = Some(DatasetSink::create(path, schema.clone(), opts, storage)?);
-                Ok(())
-            },
-            &mut |b| {
-                rows.fetch_add(b.num_rows(), std::sync::atomic::Ordering::Relaxed);
-                sink.lock().as_mut().expect("writer").write(&b)
-            },
-        )?;
-        sink.into_inner().expect("writer").finish()?;
-        Ok(rows.into_inner())
+        Ok(self.sink_parquet_files(path, opts, storage)?.iter().map(|f| f.rows as usize).sum())
+    }
+
+    /// [`LazyFrame::sink_parquet`], returning the files written (with their footers).
+    pub fn sink_parquet_files(
+        &self,
+        path: &str,
+        opts: &crate::io::parquet::ParquetOptions,
+        storage: &crate::io::StorageOptions,
+    ) -> Result<Vec<crate::io::output::WrittenFile>> {
+        crate::io::parquet::sink_parquet_files(self, path, opts, storage)
     }
 
     /// Write the result to CSV as it is produced; returns the number of rows written.

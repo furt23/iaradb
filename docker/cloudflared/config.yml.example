@@ -1,0 +1,12 @@
+# Copy to config.yml (gitignored) in this folder, next to the tunnel's <TUNNEL_ID>.json.
+# Made with: cloudflared tunnel login; cloudflared tunnel create workhouse
+tunnel: <TUNNEL_ID>
+credentials-file: /etc/cloudflared/<TUNNEL_ID>.json
+
+ingress:
+  - hostname: docs.workhouse.dev
+    service: http://docs:8080
+  - hostname: studio-default.workhouse.dev
+    service: http://studio-default:3870
+  # everything else
+  - service: http_status:404

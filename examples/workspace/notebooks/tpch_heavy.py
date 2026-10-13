@@ -4,18 +4,16 @@ __generated_with = "workhouse"
 app = marimo.App(width="medium")
 
 
-@app.cell(id="yrrzqqhu", hide_code=False)
-def _():
+with app.setup:
     import marimo as mo
     import workhouse as wh
     from workhouse import col
 
     ws = wh.workspace()
-    return col, mo, wh, ws
 
 
 @app.cell(id="8mg7lx2b")
-def _(mo):
+def _():
     mo.md(
         r"""
         # Heavy tour: TPC-H SF10
@@ -28,7 +26,7 @@ def _(mo):
 
 
 @app.cell(id="3t7ucmfl")
-def _(ws):
+def _():
     pricing = ws.sql(
         r"""
         -- full scan + aggregation over 60M rows (TPC-H Q1)
@@ -47,7 +45,7 @@ def _(ws):
 
 
 @app.cell(id="ux6f7jeq")
-def _(ws):
+def _():
     revenue_by_year = ws.sql(
         r"""
         -- four-way join: revenue per nation and year
@@ -65,7 +63,7 @@ def _(ws):
 
 
 @app.cell(id="trzlzq22")
-def _(revenue_by_year, ws):
+def _(revenue_by_year):
     growth = ws.sql(
         r"""
         -- window functions over the joined result: growth and rank per nation
@@ -81,7 +79,7 @@ def _(revenue_by_year, ws):
 
 
 @app.cell(id="fsxw3ewt")
-def _(ws):
+def _():
     top_customers = ws.sql(
         r"""
         -- 1.5M customers ranked by spend, top 3 per nation (QUALIFY)
@@ -98,7 +96,7 @@ def _(ws):
 
 
 @app.cell(id="2iknh540")
-def _(col, ws):
+def _():
     # DataFrame API: monthly shipped volume with a 3-month rolling mean, per ship mode
     monthly = (
         ws.table("lineitem_sf10")
@@ -114,7 +112,7 @@ def _(col, ws):
 
 
 @app.cell(id="bw26jyg5")
-def _(ws):
+def _():
     lines_per_order = ws.sql(
         r"""
         -- high-cardinality aggregation: 15M order keys, then a histogram

@@ -13,18 +13,20 @@ use arrow::util::display::{ArrayFormatter, FormatOptions};
 
 use crate::error::{Result, WhError};
 use crate::io::options::StorageOptions;
-use crate::io::output::Output;
+use crate::io::output::{Output, WrittenFile};
 
 /// Bytes buffered before they go to the output.
 const FLUSH: usize = 1 << 20;
 
 pub struct JsonSink {
     out: Output,
+    path: String,
+    rows: u64,
 }
 
 impl JsonSink {
     pub fn create(path: &str, storage: &StorageOptions) -> Result<Self> {
-        Ok(Self { out: Output::create(path, storage)? })
+        Ok(Self { out: Output::create(path, storage)?, path: path.to_string(), rows: 0 })
     }
 
     pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
@@ -47,11 +49,15 @@ impl JsonSink {
                 buf.clear();
             }
         }
-        Ok(self.out.write_all(buf.as_bytes())?)
+        self.out.write_all(buf.as_bytes())?;
+        self.rows += batch.num_rows() as u64;
+        Ok(())
     }
 
-    pub fn finish(self) -> Result<()> {
-        self.out.finish()
+    /// Flush and move the file into place; returns it as written.
+    pub fn finish(self) -> Result<WrittenFile> {
+        let size = self.out.finish()?;
+        Ok(WrittenFile { path: self.path, size, rows: self.rows, partition_values: vec![], metadata: None })
     }
 }
 
@@ -64,7 +70,7 @@ pub fn write_json_with(path: &str, batches: &[RecordBatch], storage: &StorageOpt
     for b in batches {
         sink.write(b)?;
     }
-    sink.finish()
+    sink.finish().map(|_| ())
 }
 
 enum Kind<'a> {

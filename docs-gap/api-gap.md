@@ -1,5 +1,25 @@
 # Workhouse API gap vs PySpark and Polars
 
+> **Re-check (2026-10-11).** The tables below predate commit `8eb0499`. Verified status of what is still open:
+> - Frame:
+>   - pivot/unpivot, join_asof, join_where;
+>   - frame `cast`, hstack, top_k/bottom_k, transpose, null_count/n_unique;
+>   - is_duplicated/is_unique, random_split/sample_by, crosstab;
+>   - eager `rename`/`drop`, `__getitem__` with list or slice, to_numpy/iter_rows.
+> - Expr:
+>   - value_counts, mode, replace/replace_strict;
+>   - cum_prod, pct_change, ewm, rolling_median/quantile, cut/qcut;
+>   - hash/md5/sha2, bitwise, cbrt/log1p/hypot, is_finite;
+>   - nvl2/zeroifnull/nanvl/try_divide, string_agg, skew/kurtosis;
+>   - explode_outer/posexplode, str.extract_all/split_exact/strip_prefix/levenshtein;
+>   - dt.total_*, time zone functions, list.eval/filter and set operations, map type.
+> - Python UDFs (map_elements, map_batches, SQL UDF): none.
+> - Dtype classes, selectors, group_by_dynamic, write modes, scan_parquet options, Arrow IPC, compressed CSV, GCS/Azure/HTTP, databases.
+> - Present now (despite the tables below): frame ops (fill_null/nan, drop_nulls, unique subset, sample, with_row_index, describe, union_by_name, explode/unnest), regex, padding/split, dates and formats, trig, corr/covar, quantiles, collect_list/set, max_by/min_by, count_if, bool_and/or, product, list/struct/JSON namespaces, NDJSON IO, CSV options.
+> - Corrections:
+>   - DISTINCT ON was NotSupported (being fixed in the 2026-10-11 round);
+>   - LATERAL covers UNNEST only.
+>
 > **Status (2026-10-10).**
 > - Done: P1 items 1–7 (frame ops), 8–9 (JSON and CSV options), 10–15 and 19 (scalars, regex, dates), 17–18 (aggregates), and the list work (P1 16 and 20: `array_agg`, `collect_list`/`collect_set`, `explode`/`unnest`; the `split` item; the list namespace). Also `ROLLUP`/`CUBE`/`GROUPING SETS`, trig, `now()` and `random()`.
 > - Next: structs and nested JSON.

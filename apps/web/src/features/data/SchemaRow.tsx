@@ -27,7 +27,7 @@ export function SchemaRow({
       <ButtonBase
         aria-expanded={open}
         onClick={onToggle}
-        title={group.description ?? undefined}
+        title={[group.description, group.location].filter(Boolean).join(" · ") || undefined}
         sx={{ flex: 1, minWidth: 0, justifyContent: "flex-start", gap: 0.75, py: 0.6, pr: 3.5, pl: 0.5 }}
       >
         {open ? <ExpandMore sx={{ fontSize: 16, color: "text.disabled" }} /> : <ChevronRight sx={{ fontSize: 16, color: "text.disabled" }} />}

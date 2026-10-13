@@ -48,6 +48,7 @@ function machineRows(c: ClusterView, createdAt: number | null, now: number): Row
     ["Public IP", c.publicIp ?? "—"],
     ["Notebooks attached", String(c.notebooks.length)],
     ["Default", c.isDefault ? "yes" : "no"],
+    ...(c.owner ? [["Created by", c.owner] as Row] : []),
     ["Created", createdAt ? `${new Date(createdAt).toLocaleString()} (${formatRelative(createdAt, now)})` : "—"],
     ...(c.error ? [["Error", <Box component="span" key="error" sx={{ color: "error.main" }}>{c.error}</Box>] as Row] : []),
   ];

@@ -28,3 +28,8 @@ profile = "release"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "deltalake>=1.6.6",
+]
