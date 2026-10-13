@@ -2667,6 +2667,8 @@ dependencies = [
  "regex",
  "reqwest",
  "rustls",
+ "serde",
+ "serde_json",
  "sqlparser",
  "thiserror",
  "tokio",

@@ -18,9 +18,12 @@ from __future__ import annotations
 import ast
 import textwrap
 
-from workhouse.kernel.notebook.analysis import WORKSPACE_VAR
+from workhouse.kernel.notebook.analysis import WORKSPACE_VAR, sql_placeholders
 
 INDENT = "    "
+#: keyword of a SQL cell's call that binds ``:name`` placeholders to the notebook's widgets
+PARAMS_KEYWORD = "params"
+PARAMS_VALUE = "wh.widgets.params()"
 
 
 def _triple_quoted(text: str) -> str:
@@ -35,6 +38,8 @@ def _triple_quoted(text: str) -> str:
 def sql_source(output: str | None, query: str, tables: list[str]) -> str:
     target = output or "_df"
     lines = [f"{target} = {WORKSPACE_VAR}.sql(", textwrap.indent(_triple_quoted(query), INDENT) + ","]
+    if sql_placeholders(query):
+        lines.append(f"{INDENT}{PARAMS_KEYWORD}={PARAMS_VALUE},")
     lines += [f"{INDENT}{t}={t}," for t in tables]
     lines.append(").collect()")
     return "\n".join(lines)
@@ -42,6 +47,10 @@ def sql_source(output: str | None, query: str, tables: list[str]) -> str:
 
 def markdown_source(text: str) -> str:
     return "mo.md(\n" + textwrap.indent(_triple_quoted(text), INDENT) + "\n)"
+
+
+def _is_widget_params(node: ast.AST) -> bool:
+    return isinstance(node, ast.Call) and not node.args and not node.keywords and ast.unparse(node) == PARAMS_VALUE
 
 
 def _string_constant(node: ast.AST) -> str | None:
@@ -77,7 +86,7 @@ def detect_sql(code: str) -> tuple[str, str | None] | None:
     inner = call.func.value
     if not _is_attr_call(inner, WORKSPACE_VAR, "sql") or len(inner.args) != 1:
         return None
-    if not all(isinstance(k.value, ast.Name) and k.arg == k.value.id for k in inner.keywords):
+    if not all((isinstance(k.value, ast.Name) and k.arg == k.value.id) or (k.arg == PARAMS_KEYWORD and _is_widget_params(k.value)) for k in inner.keywords):
         return None
     query = _string_constant(inner.args[0])
     if query is None:

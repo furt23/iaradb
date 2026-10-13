@@ -12,6 +12,7 @@
 //! ```
 
 pub mod catalog_names;
+pub mod delta;
 pub mod error;
 pub mod exec;
 pub mod expr;
@@ -33,6 +34,7 @@ pub use expr::{Expr, SortExpr, col, lit};
 pub use logical::{JoinType, LogicalPlan};
 pub use scalar::Scalar;
 pub use session::{LazyFrame, SessionContext};
+pub use sql::Params;
 
 /// Configure the size of the global worker pool (must be called before the
 /// first query runs).

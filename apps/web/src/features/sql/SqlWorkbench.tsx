@@ -4,10 +4,13 @@ import SaveOutlined from "@mui/icons-material/SaveOutlined";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Paper from "@mui/material/Paper";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { CodeEditor } from "@/features/editor/CodeEditor";
 import { NewQueryDialog } from "@/features/queries/NewQueryDialog";
+import { ParamBar } from "@/features/queries/ParamBar";
+import { joinQuery, type ParamSpecs } from "@/features/queries/queryHeader";
+import { detectParams, mergeSpecs, type ParamRaw, resolveParams } from "@/features/queries/queryParams";
 import { PageHeader } from "@/features/shell/PageHeader";
 
 import { SqlResult } from "./SqlResult";
@@ -19,7 +22,11 @@ export function SqlWorkbench({ initialQuery, schema }: { initialQuery: string; s
   const [query, setQuery] = useState(initialQuery);
   const [saving, setSaving] = useState(false);
   const runner = useSqlRunner();
-  const run = () => !runner.running && query.trim() && runner.run(query);
+  const [saved, setSaved] = useState<ParamSpecs>({});
+  const [values, setValues] = useState<Record<string, ParamRaw>>({});
+  const specs = useMemo(() => mergeSpecs(detectParams(query), saved), [query, saved]);
+  const { query: paramValues, missing } = resolveParams(specs, values);
+  const run = () => !runner.running && query.trim() && missing.length === 0 && runner.run(query, paramValues);
   return (
     <Box sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       <PageHeader
@@ -30,10 +37,11 @@ export function SqlWorkbench({ initialQuery, schema }: { initialQuery: string; s
             <Button startIcon={<SaveOutlined />} onClick={() => setSaving(true)} sx={{ color: "text.secondary" }}>
               Save as…
             </Button>
-            <SqlRunButtons runner={runner} onRun={run} query={query} />
+            <SqlRunButtons runner={runner} onRun={run} query={query} values={paramValues} blocked={missing.length > 0} />
           </>
         }
       />
+      <ParamBar specs={specs} values={values} onValues={setValues} onSpecs={(next) => setSaved({ ...saved, ...next })} onRun={run} />
       <Box sx={{ p: 2, display: "flex", flexDirection: "column", gap: 2, flex: 1, minHeight: 0, overflow: "auto" }}>
         <Paper variant="outlined" sx={{ overflow: "hidden", flexShrink: 0 }}>
           <CodeEditor value={query} onChange={setQuery} language="sql" schema={schema} onRun={run} onRunInPlace={run} onSave={() => setSaving(true)} minHeight={160} maxHeight={360} autoFocus />
@@ -42,7 +50,7 @@ export function SqlWorkbench({ initialQuery, schema }: { initialQuery: string; s
           <SqlResult runner={runner} />
         </Paper>
       </Box>
-      <NewQueryDialog open={saving} text={query} onClose={() => setSaving(false)} />
+      <NewQueryDialog open={saving} text={joinQuery({ chart: null, params: specs, body: query })} onClose={() => setSaving(false)} />
     </Box>
   );
 }

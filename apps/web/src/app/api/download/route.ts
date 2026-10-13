@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 
+import { authErrorResponse, requireUser } from "@/server/auth/session";
 import type { KernelClient } from "@/server/kernel/client";
 import { normalizeRelative, parseKernelKey } from "@/server/kernel/keys";
 import { kernels } from "@/server/kernel/manager";
@@ -34,6 +35,13 @@ function remoteFile(kernel: KernelClient, rel: string): ReadableStream<Uint8Arra
 
 /** Downloads of exported results (only files under `exports/`), from the kernel that wrote them. */
 export async function GET(req: Request): Promise<Response> {
+  try {
+    await requireUser();
+  } catch (e) {
+    const res = authErrorResponse(e);
+    if (res) return res;
+    throw e;
+  }
   const params = new URL(req.url).searchParams;
   let body: ReadableStream<Uint8Array>;
   let rel: string;

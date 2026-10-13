@@ -1,5 +1,6 @@
-"""SQL statements that write (``COPY``, ``CREATE TABLE ... AS``, ``INSERT``,
-``DROP TABLE``) or change the session's schemas (``CREATE SCHEMA``, ``DROP
+"""SQL statements that write (``COPY``, ``CREATE TABLE``, ``INSERT [OVERWRITE]``,
+``TRUNCATE``, ``DROP TABLE``, views, and the Delta ``UPDATE`` / ``DELETE`` / ``MERGE`` /
+``OPTIMIZE`` / ``VACUUM`` / ``RESTORE`` / ``ALTER`` / ``COMMENT ON``; ``DESCRIBE HISTORY`` / ``DETAIL`` are reads) or change the session's schemas (``CREATE SCHEMA``, ``DROP
 SCHEMA``, ``USE``) as a workspace sees them: the tables they create or drop
 join or leave its catalog, and the schemas they declare or drop are recorded
 in it."""
@@ -11,8 +12,8 @@ from dataclasses import dataclass
 from typing import Any
 
 _LEADING = r"(?:\s|--[^\n]*(?:\n|$)|/\*.*?\*/)*"
-_WRITE = re.compile(_LEADING + r"(copy|create|insert|drop|use)\b", re.IGNORECASE | re.DOTALL)
-_SCHEMA = re.compile(_LEADING + r"(use\b|create\s+schema\b|drop\s+schema\b)", re.IGNORECASE | re.DOTALL)
+_WRITE = re.compile(_LEADING + r"(copy|create|insert|drop|use|truncate|update|delete|merge|optimize|vacuum|restore|alter|comment)\b", re.IGNORECASE | re.DOTALL)
+_SCHEMA = re.compile(_LEADING + r"(use\b|create\s+schema\b|drop\s+schema\b|create\s+(?:or\s+replace\s+)?(?:temp(?:orary)?\s+)?view\b|drop\s+view\b)", re.IGNORECASE | re.DOTALL)
 
 
 def is_write(query: str) -> bool:
@@ -21,7 +22,7 @@ def is_write(query: str) -> bool:
 
 
 def is_schema_statement(query: str) -> bool:
-    """``USE``, ``CREATE SCHEMA`` or ``DROP SCHEMA``: they act on the session
+    """``USE``, ``CREATE SCHEMA``, ``DROP SCHEMA`` or a view statement: they act on the session
     itself, so they run on the workspace's session and never on a fork."""
     return _SCHEMA.match(query) is not None
 
@@ -34,8 +35,15 @@ class WriteResult:
     table: str | None
     path: str | None
     rows: int
+    #: ``delta``, ``parquet``, ``memory``; ``view`` / ``temp view`` for views
+    format: str | None = None
+    #: the Delta version the table is at after the statement
+    version: int | None = None
 
     @staticmethod
     def of(frame: Any) -> WriteResult:
         row = frame.to_arrow().to_pylist()[0]
-        return WriteResult(row["operation"], row["table"], row["path"], int(row["rows"]))
+        version = row.get("version")
+        return WriteResult(
+            row["operation"], row["table"], row["path"], int(row["rows"]), row.get("format"), None if version is None else int(version)
+        )

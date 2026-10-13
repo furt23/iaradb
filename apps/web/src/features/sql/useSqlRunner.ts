@@ -1,6 +1,6 @@
 "use client";
 
-import type { CellOutput, PlanNode, QueryProfile, RunStreamEvent } from "@workhouse/protocol";
+import type { CellOutput, PlanNode, QueryParams, QueryProfile, RunStreamEvent } from "@workhouse/protocol";
 import { useCallback, useState } from "react";
 
 import { useCatalogRefresh } from "@/features/data/useCatalogRefresh";
@@ -18,12 +18,12 @@ export function useSqlRunner() {
   const [progress, setProgress] = useState<QueryProfile[]>([]);
   const refreshCatalog = useCatalogRefresh();
 
-  const run = useCallback(async (query: string) => {
+  const run = useCallback(async (query: string, values: QueryParams = {}) => {
     setRunning(true);
     setProgress([]);
     let catalogChanged = false;
     try {
-      await streamEvents("/api/run", { kind: "sql", query }, (e) => {
+      await streamEvents("/api/run", { kind: "sql", query, ...values }, (e) => {
         const ev = e as RunStreamEvent;
         if (ev.event === "catalog.changed") catalogChanged = true;
         else if (ev.event === "progress") setProgress(ev.data.queries);
@@ -39,9 +39,9 @@ export function useSqlRunner() {
     }
   }, [refreshCatalog]);
 
-  const explain = useCallback(async (query: string) => {
+  const explain = useCallback(async (query: string, values: QueryParams = {}) => {
     try {
-      const r = unwrap(await explainSql(query));
+      const r = unwrap(await explainSql(query, values));
       setView({ kind: "explain", plan: r.plan, text: r.text });
     } catch (e) {
       setView({ kind: "error", message: (e as Error).message });

@@ -7,7 +7,7 @@ import CircularProgress from "@mui/material/CircularProgress";
 import Paper from "@mui/material/Paper";
 import Typography from "@mui/material/Typography";
 import type { ChartSpec } from "@workhouse/protocol";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CodeEditor } from "@/features/editor/CodeEditor";
 import { ErrorState } from "@/features/shell/PageHeader";
@@ -19,7 +19,9 @@ import { baseName, parentOf } from "@/lib/paths";
 import { openQuery, saveQuery } from "@/server/actions/queries";
 
 import { drafts, isEdited, release, retain } from "./drafts";
-import { joinQuery, splitQuery } from "./queryHeader";
+import { ParamBar } from "./ParamBar";
+import { joinQuery, type ParamSpecs, splitQuery } from "./queryHeader";
+import { detectParams, mergeSpecs, type ParamRaw, resolveParams } from "./queryParams";
 
 const AUTOSAVE_MS = 800;
 
@@ -51,6 +53,8 @@ export function SqlFileTab({ path, shown, schema }: { path: string; shown: boole
   });
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const runner = useSqlRunner();
+  // what each parameter is set to in this tab: not part of the file
+  const [values, setValues] = useState<Record<string, ParamRaw>>({});
 
   // the file's text, the first time the tab is shown
   useEffect(() => {
@@ -90,7 +94,10 @@ export function SqlFileTab({ path, shown, schema }: { path: string; shown: boole
   }, [path, save]);
 
   // the editor shows the query; the file also holds its chart, in a first-line comment
-  const { chart, body } = splitQuery(text ?? "");
+  const parts = splitQuery(text ?? "");
+  const { chart, body } = parts;
+  const specs = useMemo(() => mergeSpecs(detectParams(body), parts.params), [body, parts.params]);
+  const { query: paramValues, missing } = resolveParams(specs, values);
 
   const change = (full: string) => {
     const draft = drafts.get(path);
@@ -101,13 +108,15 @@ export function SqlFileTab({ path, shown, schema }: { path: string; shown: boole
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => void save(), AUTOSAVE_MS);
   };
-  const edit = (value: string) => change(joinQuery(chart, value));
-  const saveChart = (spec: ChartSpec) => change(joinQuery(spec, body));
+  const edit = (value: string) => change(joinQuery({ ...parts, body: value }));
+  const saveChart = (spec: ChartSpec) => change(joinQuery({ ...parts, chart: spec }));
+  // the header keeps the specs of the placeholders the query has
+  const saveSpecs = (next: ParamSpecs) => change(joinQuery({ ...parts, params: next }));
 
   const run = () => {
-    if (!body.trim() || runner.running) return;
+    if (!body.trim() || runner.running || missing.length > 0) return;
     void save();
-    void runner.run(body);
+    void runner.run(body, paramValues);
   };
 
   if (failure) return <ErrorState title={`Could not open ${path}`} message={failure} />;
@@ -139,8 +148,9 @@ export function SqlFileTab({ path, shown, schema }: { path: string; shown: boole
           </Button>
         )}
         <FileActionsMenu path={path} kind="sql" />
-        <SqlRunButtons runner={runner} onRun={run} query={body} source={path} />
+        <SqlRunButtons runner={runner} onRun={run} query={body} source={path} values={paramValues} blocked={missing.length > 0} />
       </Box>
+      <ParamBar specs={specs} values={values} onValues={setValues} onSpecs={saveSpecs} onRun={run} />
       <Box sx={{ p: 2, display: "flex", flexDirection: "column", gap: 2, flex: 1, minHeight: 0, overflow: "auto" }}>
         <Paper variant="outlined" sx={{ overflow: "hidden", flexShrink: 0 }}>
           <CodeEditor value={body} onChange={edit} language="sql" schema={schema} onRun={run} onRunInPlace={run} onSave={() => void save()} minHeight={160} maxHeight={420} />

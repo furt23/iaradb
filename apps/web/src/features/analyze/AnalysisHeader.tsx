@@ -29,7 +29,7 @@ export function AnalysisHeader({ analysis }: { analysis: StoredAnalysis }) {
           <Button startIcon={<CodeRounded />} onClick={() => router.push(`/sql?q=${encodeURIComponent(analysis.query)}`)} sx={{ color: "text.secondary" }}>
             Open in SQL editor
           </Button>
-          <Button variant="outlined" startIcon={<ReplayRounded />} onClick={() => analyze(analysis.query, analysis.source)} disabled={pending}>
+          <Button variant="outlined" startIcon={<ReplayRounded />} onClick={() => analyze(analysis.query, analysis.source, { params: analysis.params, param_types: analysis.param_types })} disabled={pending}>
             Run again
           </Button>
         </>

@@ -34,6 +34,11 @@ impl ObjectWriter {
     }
 
     pub fn finish(mut self) -> Result<()> {
+        self.commit()
+    }
+
+    /// [`ObjectWriter::finish`] without consuming the writer.
+    pub fn commit(&mut self) -> Result<()> {
         let upload = self.upload.take().expect("upload already finished");
         block_on(upload.finish()).map_err(|e| storage_err(e, &self.url))?;
         list_cache::invalidate(&self.written.root(), &self.written.key);

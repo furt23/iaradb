@@ -1,152 +1,84 @@
-# Engine Architecture & Internals
+# Architecture
 
-Workhouse is a vectorized, parallel query execution engine written in Rust on top of Apache Arrow. It is designed to maximize the throughput of modern multi-core machines through morsel-driven pipelined execution, out-of-core streaming, and hardware-conscious memory layouts.
+How a query runs, and where the code lives.
 
----
-
-## Codebase Layout
+## Layout
 
 ```
-python/workhouse        Python API (Expr, LazyFrame, DataFrame, SessionContext, sql, workspace)
-  kernel/               Studio kernel: protocol, marimo notebooks, dependency graph, cell runner
-crates/workhouse-python PyO3 bindings: Arrow C stream export, GIL released while executing
+python/workhouse        Python API: Expr, LazyFrame, DataFrame, SessionContext, sql, workspace
+  kernel/               Studio kernel: protocol, notebooks, dependency graph, cell runner
+  cloud/                publish the engine to S3, list and remove AWS resources
+crates/workhouse-python PyO3 bindings (Arrow C stream export; the GIL is released while a query runs)
 crates/workhouse-core
-  sql/                  SQL -> logical plan (sqlparser), subquery decorrelation, join ordering,
-                        window clauses, recursive CTEs
-  logical.rs, expr.rs   logical plan and expressions; window.rs: window expressions
+  sql/                  SQL to logical plan (sqlparser): subqueries, join ordering, windows, recursive CTEs
+  logical.rs, expr.rs   logical plan and expressions
   optimizer.rs          rule-based rewrites
-  physical/             physical planning, cardinality estimation, expression evaluation
-  exec/                 pipelines, filter/project, hash join, hash aggregation, sort, window/, recursion
-  io/                   Parquet (statistics pruning, string views), CSV, in-memory tables
-apps/web                Workhouse Studio (Next.js): app routes, features/*, server/*
+  physical/             physical planning, cardinality estimates, expression evaluation
+  exec/                 pipelines, hash join, hash aggregation, sort, window, recursion, spilling
+  io/                   Parquet, CSV, JSON, object stores, in-memory tables
+apps/web                Workhouse Studio (Next.js)
 packages/protocol       TypeScript types of the kernel protocol
-packages/ui             The Observatory design system and components
+packages/ui             Studio UI components
 ```
 
----
+## From SQL or DataFrame to result
 
-## Execution Model
+1. SQL is parsed with sqlparser. The DataFrame API builds the same logical plan.
+2. The optimizer rewrites the plan: constant folding, predicate and projection pushdown, limit and top-k pushdown into scans, and subquery decorrelation. Correlated `EXISTS` and `IN` become semi or anti joins, and correlated scalar subqueries become an aggregation joined back. Decorrelation handles equality correlations only.
+3. Joins are ordered greedily from cardinality estimates. For Parquet the estimates come from row group counts, min/max statistics and distinct counts.
+4. The physical plan is cut into pipelines at hash join builds, hash aggregations and sorts.
 
-### Morsel-Driven Push Pipelines
-A logical query plan is partitioned into physical execution pipelines at pipeline breakers (hash join build, hash aggregation, and sorting).
-- Each pipeline begins at a source split into granular morsels: individual Parquet row groups, byte ranges, or slices of in-memory data.
-- Morsels flow through a fused chain of streaming operators (filters, projections, unpackers) directly into thread-local accumulators in the pipeline sink.
-- Thread-local states are combined during a parallel `finalize` phase.
-- Morsel scheduling is managed dynamically across available CPU cores using a Rayon work-stealing pool.
+## Execution
 
-### Batch Sizing & L2 Cache Locality
-Workhouse operates on vectors of **8,192 rows** per batch by default. Sizing batches to 8,192 rows keeps the working set of a fused operator chain within CPU L2 cache, measuring approximately 25% faster than 64K-row batches in microbenchmarks.
+- A pipeline starts at a source split into morsels: a Parquet row group, a byte range of a CSV file, or a slice of an in-memory table. Worker threads take morsels from a Rayon pool and push them through the pipeline's operators into a thread-local sink. The sinks are merged when the input is exhausted.
+- Batches are 8,192 rows by default.
+- Results reach the consumer in morsel order. `sink_parquet`, `sink_csv` and `sink_ndjson` write while the query runs, and `lf.iter_batches()` yields batches through a bounded channel.
+- Parquet strings are read as Arrow `Utf8View`.
+- Hive-style `key=value` directories become partition columns. Filters on them skip directories before any file is read.
 
-### Vectorized Arrow Expressions
-Expressions evaluate directly on Apache Arrow array kernels with specialized fast paths:
-- `LIKE` string matching compiles to specialized prefix, suffix, and SIMD `memchr`-based substring algorithms.
-- Literal values are converted to the target column type at plan time to eliminate runtime casting overhead.
-- Unaliased expressions in projections automatically adopt root column names by default.
+### Joins and aggregation
 
-### Query Observability & Cancellation
-Every query is assigned an observable execution handle registered in a global handle table:
-- Pipelines report completed morsels and row counts in real time, checking cancellation flags between batch processing steps.
-- Cancellation and monitoring are exposed to Python via `wh.running_queries()` and `wh.interrupt()`.
-- Plan inspection is accessible through `LazyFrame.profile()`, `LazyFrame.explain_tree()`, `LazyFrame.analyze()`, and SQL `EXPLAIN ANALYZE`. Profiling tracks operator-level self-time, processed row counts, memory peaks, and disk spill metrics.
+- Joins: inner, left, right, full, semi and anti, with extra non-equality predicates. The hash table is built in parallel. For outer, semi and anti joins the smaller side is the build side.
+- Aggregation starts with thread-local hash tables. It switches to radix partitioning when there are too many distinct keys for local aggregation to shrink the data.
 
----
+### Windows and recursion
 
-## Memory Management & Out-of-Core Spilling
+- Ranking, offset (`lag`, `lead`, `first_value`, `last_value`, `nth_value`) and aggregate window functions, with `FILTER`, `IGNORE NULLS` and frames. Each distinct `(PARTITION BY, ORDER BY)` pair is sorted once.
+- `WITH RECURSIVE` runs iteratively until no new rows appear or a `LIMIT` is reached.
 
-### Process-Wide Memory Pool
-Execution operators reserve working memory (aggregation hash tables, join build tables, sort runs, and window buffers) from a centralized memory pool (`wh.set_memory_limit()`).
-- In the absence of a memory limit, operators incur no locking overhead and run along optimized fast paths.
-- Memory usage metrics are inspectable via `wh.memory_usage()` returning `{limit, used, peak, spilled}`.
+## Memory and spilling
 
-### Out-of-Core Operators
-When a memory allocation exceeds the pool limit, operators spill intermediate state to disk using Arrow IPC files compressed with LZ4:
-- **Radix Aggregation Spilling**: Hash aggregation dynamically transitions to radix partitioning. Each partition spills to an independent file, and partitions are finalized and aggregated one by one.
-- **Grace Hash Join**: Hash joins switch to Grace hash joins: build and probe sides are partitioned into temporary disk buckets based on key hashes. Each partition pair is then streamed and joined as an independent morsel.
-- **External K-Way Merge Sort**: Sorters write presorted runs to disk. A k-way merge reads them back using an optimized row format. Hidden row index columns preserve tie-breaking stability.
-- **Window Function Partition Spilling**: Window functions sharing partition keys (`PARTITION BY`) spill partitions to disk and evaluate each partition independently.
-- **String View Compaction**: String view columns (`Utf8View`) are compacted prior to spilling, ensuring slices never write unbounded source buffers to disk.
+Aggregation tables, join build sides, sort buffers and window buffers reserve memory from one process-wide pool. Set the limit with `wh.set_memory_limit()` or `WORKHOUSE_MEMORY_LIMIT`. When a reservation would exceed it, the operator spills to disk as LZ4-compressed Arrow IPC files:
 
-### Streaming Results
-Results stream directly to consumers in row order without requiring full materialization in memory:
-- Sinks stream output batches via a reordering buffer that restores deterministic morsel ordering.
-- `sink_parquet` and `sink_csv` write streams directly to local files or object store multipart uploads.
-- Python consumers read streamed batches through a bounded channel (`lf.iter_batches()`), applying backpressure to the query engine.
+- aggregation spills radix partitions and aggregates them one at a time;
+- joins fall back to a partitioned (grace) hash join;
+- sort writes sorted runs and merges them;
+- window functions spill by `PARTITION BY` partition.
 
----
+A single partition must still fit in memory. `wh.memory_usage()` returns `{limit, used, peak, spilled}`.
 
-## Hash Joins & Ordering
+## Running queries
 
-### Lock-Free Hash Table Construction
-Hash tables are built in parallel using lock-free chained bucket arrays populated via atomic pointer swaps:
-- Multi-column integer keys whose combined ranges fit within 64 bits are packed into a single primitive `i64`.
-- Arbitrary composite and string keys use the Arrow row-format representation.
+Each query has a handle that reports finished morsels and row counts and checks a cancel flag between batches.
 
-### Comprehensive Join Semantics
-Workhouse implements inner, left, right, full, semi, and anti joins, as well as residual non-equi predicates.
-- Outer, semi, and anti joins dynamically swap build and probe sides to build against the smaller relation.
-- Semi and anti joins track match presence using bitsets when the preserved side is smaller.
+- `wh.running_queries()` lists running queries, `wh.cancel_query(id)` cancels one and `wh.interrupt()` cancels all of them.
+- `lf.explain_tree()` returns the physical plan as nested dicts.
+- `lf.profile()` returns `(DataFrame, dict)`: the result and a run profile with per-pipeline times, row counts, memory peak and spilled bytes.
+- `lf.analyze()` runs the query and returns `{plan, profile, rows, requests}`, with metrics on every plan node. SQL `EXPLAIN ANALYZE` gives this as text.
 
-### Cost-Based Join Ordering
-Greedy Operator Ordering (GOO) determines join trees from the SQL join graph:
-- Cardinality estimates leverage Parquet metadata: row group counts, min/max statistics for range selectivity, integer key distinct value counts, and sampled NDVs for string columns.
+## Catalog and schemas
 
----
+Tables live in named schemas (`sales.orders`), and `main` is the default. `CREATE SCHEMA`, `DROP SCHEMA [CASCADE]` and `USE` manage them. A workspace declares its tables and schemas in `workhouse.toml`.
 
-## High-Performance Aggregation
+## Settings
 
-### Adaptive Radix Pre-Aggregation
-When group keys exhibit high cardinality and local aggregation fails to reduce dataset volume, the operator transitions automatically to radix partitioning, parallelizing downstream aggregations without a global merge bottleneck.
+| Variable | Default | Effect |
+|---|---|---|
+| `WORKHOUSE_BATCH_SIZE` | `8192` | Rows per batch. |
+| `WORKHOUSE_STRING_VIEW` | `1` | `0` reads Parquet strings as `Utf8`. |
+| `WORKHOUSE_AGG_PARTITIONS` | `4 x threads` | Partitions when aggregation switches to radix mode. |
+| `WORKHOUSE_MEMORY_LIMIT` | 75% of RAM on Linux, none elsewhere | Bytes, a unit (`4GB`) or a percentage (`60%`). |
+| `WORKHOUSE_SPILL_DIR` | system temp dir | Where spill files go. |
+| `WORKHOUSE_PROFILE` | `0` | `1` prints pipeline timings to stderr. |
 
-### Type-Specialized Key Interning
-- Primitive integer and floating point keys reside in cache-efficient SwissTable layouts.
-- Short strings are matched directly using their 16-byte `Utf8View` inline headers.
-- Composite keys map to dense surrogate identifiers.
-
-### Dependent Key Optimization
-For wide key combinations such as `(c_custkey, c_name, c_address)`, the engine hashes only the primary integer key (`c_custkey`) and verifies dependent column equality per group. If a row breaks the functional dependency, groups are split dynamically without changing existing IDs.
-
----
-
-## Query Optimizer
-
-The optimizer applies cost- and rule-based transformations:
-- **Predicates & Projections**: Constant folding, boolean simplification, predicate pushdown (including cross-table disjunction pushdown), projection pruning, and limit/top-k pushdown into table scans.
-- **Subquery Decorrelation**:
-  - `EXISTS` and `IN` transform into semi or anti joins.
-  - Correlated scalar subqueries become an aggregation with a left outer join.
-  - Correlated subquery scopes are constrained using "magic set" semi-joins generated from correlation key providers.
-- **Semi-Join Reduction & CTE Optimization**: Semi-joins push below intermediate joins when input sizes shrink. Common Table Expressions (CTEs) referenced multiple times materialize once.
-
----
-
-## Window Functions & Recursion
-
-### Window Functions
-Supports standard window functions:
-- Ranking: `row_number`, `rank`, `dense_rank`, `percent_rank`, `cume_dist`, `ntile`.
-- Value offsets: `lag`, `lead` (with custom defaults and `IGNORE NULLS`), `first_value`, `last_value`, `nth_value`.
-- Aggregates over windows: `SUM`, `AVG`, `COUNT`, `MIN`, `MAX`, `VARIANCE`, `STDDEV`, including `FILTER` clauses and `DISTINCT` across whole partitions.
-
-### Optimized Window Evaluation
-- Columns are sorted once per unique `(PARTITION BY, ORDER BY)` signature.
-- Compact fixed-width keys pack with row offsets into 64-bit or 128-bit integers, executing via parallel integer sorts.
-- Sliding frames operate in $O(1)$ amortized time per row for sums, counts, and averages, and $O(1)$ for running minimum/maximum via monotonic double-ended queues.
-
-### Recursive CTEs
-`WITH RECURSIVE` queries execute iteratively over working tables with `UNION ALL` or deduplicated `UNION` until reaching a fixed point or an early `LIMIT` termination.
-
----
-
-## I/O, Storage & Formats
-
-### Zero-Copy Parquet String Handling
-Parquet string columns decode directly into Arrow `Utf8View` arrays without copy operations. Strings under 12 bytes live inline inside array slots. String buffers are compacted at materialization boundaries so pipelines avoid retaining dead buffer references.
-
-### Hive-Style Partitioning
-Datasets stored in `key=value` directory structures automatically project partition columns (integers, dates, or strings). Predicate evaluation prunes unmatching directory paths before disk or network reads occur.
-
-### Transactional Catalogs & Schemas
-Tables reside in named schemas (`sales.orders`, defaulting to `main`).
-- Schema management via `CREATE SCHEMA`, `DROP SCHEMA [CASCADE]`, and `USE`.
-- Catalog declarations persist in `workhouse.toml`.
-- SQL DDL commands include `COPY TO`, `CREATE TABLE ... AS`, `INSERT INTO`, and `DROP TABLE`.
+Object store settings are in [storage-and-cloud.md](storage-and-cloud.md).

@@ -62,6 +62,10 @@ pub trait TableProvider: Send + Sync + Debug {
     fn location(&self) -> Option<dataset::TableLocation> {
         None
     }
+    /// The table as a Delta table, when it is one (its root, storage and snapshot).
+    fn as_delta(&self) -> Option<&crate::delta::DeltaTable> {
+        None
+    }
     /// The rows of an in-memory table.
     fn memory_batches(&self) -> Option<&[arrow::record_batch::RecordBatch]> {
         None

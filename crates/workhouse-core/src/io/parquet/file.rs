@@ -108,3 +108,19 @@ fn with_string_views(meta: ArrowReaderMetadata) -> ArrowReaderMetadata {
     let hinted = Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()));
     ArrowReaderMetadata::try_new(meta.metadata().clone(), ArrowReaderOptions::new().with_schema(hinted)).unwrap_or(meta)
 }
+
+/// A schema as the files decode it (see [`with_string_views`]): what a table
+/// built from a file list calls its columns' types.
+pub fn engine_schema(schema: &Schema) -> Schema {
+    let views = std::env::var("WORKHOUSE_STRING_VIEW").map(|v| v != "0").unwrap_or(true);
+    let fields: Vec<Field> = schema
+        .fields()
+        .iter()
+        .map(|f| match f.data_type() {
+            DataType::Utf8 | DataType::LargeUtf8 if views => f.as_ref().clone().with_data_type(DataType::Utf8View),
+            t if crate::nested::is_nested(t) => f.as_ref().clone().with_data_type(crate::nested::canonical_type(t)),
+            _ => f.as_ref().clone(),
+        })
+        .collect();
+    Schema::new_with_metadata(fields, schema.metadata().clone())
+}

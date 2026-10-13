@@ -12,13 +12,14 @@ import { useEffect, useState } from "react";
 
 import { useGuard, useNotify } from "@/features/shell/notify";
 import { unwrap } from "@/lib/action";
-import { isIdentifier } from "@/lib/catalogToml";
+import { isIdentifier, validLocation } from "@/lib/catalogToml";
 import { createSchema } from "@/server/actions/catalog";
 
 /** A new schema: a namespace for tables, declared in workhouse.toml. */
 export function NewSchemaDialog({ open, onClose }: { open: boolean; onClose(): void }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [location, setLocation] = useState("");
   const [busy, setBusy] = useState(false);
   const guard = useGuard();
   const notify = useNotify();
@@ -28,15 +29,19 @@ export function NewSchemaDialog({ open, onClose }: { open: boolean; onClose(): v
     if (!open) return;
     setName("");
     setDescription("");
+    setLocation("");
   }, [open]);
 
   const trimmed = name.trim();
   const badName = trimmed !== "" && !isIdentifier(trimmed);
 
+  const place = location.trim();
+  const badLocation = place !== "" && !validLocation(place);
+
   const create = async () => {
-    if (!trimmed || badName || busy) return;
+    if (!trimmed || badName || badLocation || busy) return;
     setBusy(true);
-    const made = await guard(async () => unwrap(await createSchema(trimmed, description)));
+    const made = await guard(async () => unwrap(await createSchema(trimmed, description, place)));
     setBusy(false);
     if (made === undefined) return;
     onClose();
@@ -59,13 +64,21 @@ export function NewSchemaDialog({ open, onClose }: { open: boolean; onClose(): v
             helperText={badName ? "Letters, digits and underscores" : "Its tables are named schema.table, e.g. tpch.lineitem"}
           />
           <TextField label="Description (optional)" value={description} onChange={(e) => setDescription(e.target.value)} />
+          <TextField
+            label="Location (optional)"
+            value={location}
+            onChange={(e) => setLocation(e.target.value)}
+            error={badLocation}
+            placeholder="s3://bucket/prefix/"
+            helperText={badLocation ? "An s3:// URL or a folder, without .." : "Each subfolder becomes a table of the schema"}
+          />
         </Stack>
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose} disabled={busy}>
           Cancel
         </Button>
-        <Button variant="contained" onClick={() => void create()} disabled={busy || !trimmed || badName}>
+        <Button variant="contained" onClick={() => void create()} disabled={busy || !trimmed || badName || badLocation}>
           Create
         </Button>
       </DialogActions>

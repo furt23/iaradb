@@ -7,7 +7,7 @@ import { canTerminate, groupClusters, notebooksLabel, runtimeSummary, showSearch
 const MIN = 60_000;
 
 function cluster(name: string, patch: Partial<ClusterView> = {}): ClusterView {
-  return { id: name, name, kind: "ec2", state: "running", notebooks: [], isDefault: false, ...patch };
+  return { id: name, name, kind: "ec2", state: "running", notebooks: [], isDefault: false, canManage: false, ...patch };
 }
 
 describe("groupClusters", () => {

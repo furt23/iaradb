@@ -17,6 +17,7 @@ pub mod file;
 pub mod list;
 pub mod list_cache;
 pub mod prefetch;
+pub mod put_if_absent;
 pub mod registry;
 pub mod remove;
 pub mod runtime;

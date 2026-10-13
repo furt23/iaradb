@@ -32,6 +32,7 @@ import ast
 import textwrap
 from pathlib import Path
 
+from workhouse.kernel.notebook.analysis import sql_placeholders
 from workhouse.kernel.notebook.codegen import INDENT, detect_markdown, detect_sql, markdown_source, sql_source
 from workhouse.kernel.notebook.graph import DependencyGraph
 from workhouse.kernel.notebook.model import SETUP_CELL_ID, Cell, Notebook, is_valid_cell_id, new_cell_id
@@ -45,7 +46,23 @@ ws = wh.workspace()"""
 
 
 def new_notebook(path: Path) -> Notebook:
-    return Notebook(path=path, cells=[Cell(new_cell_id(), "python", TEMPLATE_CELL)], app_args='width="medium"')
+    """A notebook whose imports live in the (hidden in the Studio) setup cell."""
+    return Notebook(path=path, cells=[Cell(SETUP_CELL_ID, "python", TEMPLATE_CELL, name="setup", setup=True)], app_args='width="medium"')
+
+
+def _lines(code: str) -> list[str]:
+    return [line.strip() for line in code.splitlines() if line.strip()]
+
+
+def migrate_template(nb: Notebook) -> Notebook:
+    """Notebooks made before the setup cell existed start with a cell holding
+    the template imports: that cell becomes the setup cell. Anything else is
+    left alone. Nothing is written; the file changes on the next save."""
+    if nb.cells and not any(c.setup for c in nb.cells):
+        first = nb.cells[0]
+        if first.kind == "python" and _lines(first.code) == _lines(TEMPLATE_CELL):
+            nb.cells[0] = Cell(SETUP_CELL_ID, "python", first.code, name="setup", setup=True)
+    return nb
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +174,7 @@ def parse(src: str, path: Path) -> Notebook:
         elif not _is_boilerplate(node):
             start = (node.decorator_list[0].lineno if getattr(node, "decorator_list", None) else node.lineno) - 1
             nb.extra.append("\n".join(lines[start : node.end_lineno]))
-    return nb
+    return migrate_template(nb)
 
 
 def read(path: Path) -> Notebook:
@@ -212,7 +229,8 @@ def _render_cell(cell: Cell, graph: DependencyGraph, globals_: set[str]) -> str:
     deps = graph.deps[cell.id]
     params = sorted(set(deps.refs) - globals_)
     if cell.kind == "sql":
-        params = sorted(set(params) | ({"ws"} - globals_))
+        needs = {"ws", "wh"} if sql_placeholders(cell.code) else {"ws"}
+        params = sorted(set(params) | (needs - globals_))
     elif cell.kind == "markdown":
         params = ["mo"] if "mo" not in globals_ else []
     defs = sorted(graph.analyses[cell.id].defs)

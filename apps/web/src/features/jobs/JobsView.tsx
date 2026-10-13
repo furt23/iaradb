@@ -22,11 +22,12 @@ import { useEffect, useState } from "react";
 import { PageBody, PageHeader } from "@/features/shell/PageHeader";
 import { useGuard, useNotify } from "@/features/shell/notify";
 import { unwrap } from "@/lib/action";
-import { isFinished, type JobSpec } from "@/lib/jobs";
+import { isFinished, type JobSpec, type Params } from "@/lib/jobs";
 import { cancelJobRun, jobsOverview, removeJob, runJobNow, setJobEnabled, type JobView } from "@/server/actions/jobs";
 
 import { JobDialog } from "./JobDialog";
 import { JobRow, type JobActions } from "./JobRow";
+import { RunParamsDialog } from "./RunParamsDialog";
 import { usePolling } from "./usePolling";
 
 /** Jobs: notebooks and queries that run by hand or on a schedule. */
@@ -34,6 +35,7 @@ export function JobsView({ targets, newTarget }: { targets: string[]; newTarget:
   const { data, error, reload } = usePolling(jobsOverview, (d) => d.jobs.some((j) => j.lastRun && !isFinished(j.lastRun.status)));
   const [editing, setEditing] = useState<{ job: JobSpec | null; target?: string } | null>(null);
   const [removing, setRemoving] = useState<JobView | null>(null);
+  const [runningWith, setRunningWith] = useState<JobView | null>(null);
   const guard = useGuard();
   const notify = useNotify();
   const router = useRouter();
@@ -49,12 +51,14 @@ export function JobsView({ targets, newTarget }: { targets: string[]; newTarget:
       await fn();
       await reload();
     });
+  const start = (j: JobView, params?: Params) =>
+    act(async () => {
+      unwrap(await runJobNow(j.id, params));
+      notify(`${j.name} started`, "success");
+    });
   const actions: JobActions = {
-    run: (j) =>
-      act(async () => {
-        unwrap(await runJobNow(j.id));
-        notify(`${j.name} started`, "success");
-      }),
+    run: (j) => start(j),
+    runWith: (j) => setRunningWith(j),
     cancel: (j) => act(async () => j.lastRun && unwrap(await cancelJobRun(j.lastRun.id))),
     edit: (j) => setEditing({ job: j }),
     remove: (j) => setRemoving(j),
@@ -127,10 +131,19 @@ export function JobsView({ targets, newTarget }: { targets: string[]; newTarget:
           router.refresh();
         }}
       />
+      <RunParamsDialog
+        job={runningWith}
+        onClose={() => setRunningWith(null)}
+        onRun={(params) => {
+          const j = runningWith!;
+          setRunningWith(null);
+          start(j, params);
+        }}
+      />
       <Dialog open={removing !== null} onClose={() => setRemoving(null)} maxWidth="xs" fullWidth>
         <DialogTitle>Delete {removing?.name}?</DialogTitle>
         <DialogContent>
-          <DialogContentText>Its file (jobs/{removing?.id}.toml) and run history are deleted. What it runs ({removing?.target}) stays.</DialogContentText>
+          <DialogContentText>Its file (jobs/{removing?.id}.toml) and run history are deleted. What it runs ({removing?.tasks.length === 1 ? removing.tasks[0].target : `${removing?.tasks.length} tasks`}) stays.</DialogContentText>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setRemoving(null)}>Cancel</Button>

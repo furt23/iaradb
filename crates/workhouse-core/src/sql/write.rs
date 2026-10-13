@@ -12,43 +12,76 @@ use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use parking_lot::Mutex;
 
 use super::command::{Command, CopyValue};
-use crate::catalog_names::{MAIN, TableName, TableRef, parse_schema, unknown_schema};
+use super::create::{CreateSpec, Source, create_table};
+use super::{Params, ddl, delta_stmt, describe, dml, maintenance};
+use crate::catalog_names::{TableRef, parse_schema, unknown_schema};
 use crate::error::{Result, WhError};
-use crate::io::StorageOptions;
+use crate::io::{StorageOptions, is_remote};
 use crate::io::csv::{CsvWriteOptions, sink_csv_with};
 use crate::io::dataset;
 use crate::io::json::sink_json;
 use crate::io::parquet::{DatasetSink, ParquetOptions, new_file_name};
 use crate::session::{LazyFrame, SessionContext, TableEntry};
 
-pub fn run(ctx: &SessionContext, command: Command) -> Result<LazyFrame> {
+pub fn run(ctx: &SessionContext, command: Command, params: &Params) -> Result<LazyFrame> {
     match command {
         Command::Query => Err(WhError::Plan("not a statement that writes".into())),
-        Command::Copy { query, path, options } => copy(ctx, &query, &path, &options),
-        Command::CreateTableAs { name, replace, if_not_exists, partition_by, query } => {
-            create_table(ctx, &name, replace, if_not_exists, partition_by, &query)
+        Command::Copy { query, path, options } => copy(ctx, &query, params, &path, &options),
+        Command::CreateTableAs { name, replace, if_not_exists, partition_by, using, query } => {
+            let spec = CreateSpec { name: &name, replace, if_not_exists, partition_by, using: using.as_deref(), comment: None };
+            create_table(ctx, spec, Source::Query(&query), params)
         }
-        Command::Insert { name, columns, query } => insert(ctx, &name, &columns, &query),
-        Command::DropTable { name, if_exists } => drop_table(ctx, &name, if_exists),
+        Command::CreateTable { name, replace, if_not_exists, columns, partition_by, using, comment } => {
+            let spec = CreateSpec { name: &name, replace, if_not_exists, partition_by, using: using.as_deref(), comment: comment.as_deref() };
+            create_table(ctx, spec, Source::Columns(&columns), params)
+        }
+        Command::Insert { name, columns, overwrite, query } => insert(ctx, &name, &columns, overwrite, &query, params),
+        Command::Truncate { name } => delta_stmt::truncate(ctx, &name),
+        Command::DropTable { name, if_exists } => delta_stmt::drop_table(ctx, &name, if_exists),
+        Command::CreateView { name, replace, if_not_exists, temp, query } => ddl::create_view(ctx, &name, replace, if_not_exists, temp, &query, params),
+        Command::DropView { name, if_exists } => ddl::drop_view(ctx, &name, if_exists),
+        Command::ShowTables { schema } => describe::show_tables(ctx, schema.as_deref()),
+        Command::ShowSchemas => describe::show_schemas(ctx),
+        Command::Describe { name } => describe::describe(ctx, &name),
         Command::CreateSchema { name, if_not_exists } => create_schema(ctx, &name, if_not_exists),
         Command::DropSchema { name, if_exists, cascade } => drop_schema(ctx, &name, if_exists, cascade),
         Command::Use { schema } => use_schema(ctx, &schema),
+        Command::Dml { sql } => dml::run(ctx, &sql, params),
+        Command::Maintenance(m) => maintenance::run(ctx, m, params),
     }
 }
 
 /// What a statement did, as a one-row result.
 fn summary(ctx: &SessionContext, operation: &str, table: Option<&str>, path: Option<&str>, rows: usize) -> Result<LazyFrame> {
+    summary_with(ctx, operation, table, path, rows, None, None)
+}
+
+/// [`summary`] with the format of the table (`delta`, `parquet`, `memory`; `view` / `temp view` for views)
+/// and the Delta version it is at after the statement.
+pub(super) fn summary_with(
+    ctx: &SessionContext,
+    operation: &str,
+    table: Option<&str>,
+    path: Option<&str>,
+    rows: usize,
+    format: Option<&str>,
+    version: Option<u64>,
+) -> Result<LazyFrame> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("operation", DataType::Utf8, false),
         Field::new("table", DataType::Utf8, true),
         Field::new("path", DataType::Utf8, true),
         Field::new("rows", DataType::Int64, false),
+        Field::new("format", DataType::Utf8, true),
+        Field::new("version", DataType::Int64, true),
     ]));
     let columns: Vec<ArrayRef> = vec![
         Arc::new(StringArray::from(vec![operation])),
         Arc::new(StringArray::from(vec![table])),
         Arc::new(StringArray::from(vec![path])),
         Arc::new(Int64Array::from(vec![rows as i64])),
+        Arc::new(StringArray::from(vec![format])),
+        Arc::new(Int64Array::from(vec![version.map(|v| v as i64)])),
     ];
     ctx.from_batches(schema.clone(), vec![RecordBatch::try_new(schema, columns)?])
 }
@@ -93,8 +126,24 @@ fn byte_option(key: &str, v: &CopyValue) -> Result<u8> {
     }
 }
 
+/// Whether COPY's target names a folder: a trailing separator, or a local folder.
+fn is_folder_target(path: &str) -> bool {
+    path.ends_with(['/', '\\']) || (!is_remote(path) && std::path::Path::new(path).is_dir())
+}
+
+/// After a write succeeded: delete the files the target held before. The new
+/// files have names of their own, so none of them is among `old`.
+pub(super) fn drop_replaced(root: &str, old: &[String], storage: &StorageOptions) -> Result<()> {
+    if old.is_empty() {
+        return Ok(());
+    }
+    dataset::remove_files(old, storage)?;
+    dataset::prune_empty_dirs(root);
+    Ok(())
+}
+
 /// `COPY (query) TO 'path' (FORMAT parquet | csv | json, PARTITION_BY (...), COMPRESSION ..., ROW_GROUP_SIZE n, HEADER, DELIMITER ',', OVERWRITE)`
-fn copy(ctx: &SessionContext, query: &str, path: &str, options: &[(String, CopyValue)]) -> Result<LazyFrame> {
+fn copy(ctx: &SessionContext, query: &str, params: &Params, path: &str, options: &[(String, CopyValue)]) -> Result<LazyFrame> {
     let mut format = format_of_path(path);
     let mut parquet = ParquetOptions::default();
     let mut csv = CsvWriteOptions::default();
@@ -128,16 +177,23 @@ fn copy(ctx: &SessionContext, query: &str, path: &str, options: &[(String, CopyV
         }
     }
     let storage = StorageOptions::default();
-    let lf = ctx.sql(query)?;
+    let lf = ctx.sql_with(query, params)?;
     let rows = match format.as_str() {
         "parquet" => {
-            if !parquet.partition_by.is_empty() && dataset::holds_data(path, &storage)? {
+            // a folder (partitioned, or named as one) gets new files; what it held goes only once they are written
+            let partitioned = !parquet.partition_by.is_empty();
+            let folder = partitioned || is_folder_target(path);
+            let mut old = vec![];
+            if folder && dataset::holds_data(path, &storage)? {
                 if !overwrite {
                     return Err(WhError::Plan(format!("'{path}' already holds files: add OVERWRITE to replace them")));
                 }
-                dataset::remove(path, &storage)?;
+                old = dataset::list_files(path, &storage)?;
             }
-            lf.sink_parquet(path, &parquet, &storage)?
+            let dest = if folder && !partitioned { dataset::join(path, &new_file_name()) } else { path.to_string() };
+            let files = lf.sink_parquet_files(&dest, &parquet, &storage)?;
+            drop_replaced(path, &old, &storage)?;
+            files.iter().map(|f| f.rows as usize).sum()
         }
         "csv" => {
             if !parquet.partition_by.is_empty() {
@@ -154,67 +210,6 @@ fn copy(ctx: &SessionContext, query: &str, path: &str, options: &[(String, CopyV
         other => return Err(WhError::Plan(format!("unknown FORMAT '{other}' (expected parquet, csv or json)"))),
     };
     summary(ctx, "copy", None, Some(path), rows)
-}
-
-/// Where `CREATE TABLE name` puts a table: `name`'s schema, else the current one,
-/// which must exist.
-fn create_target(ctx: &SessionContext, name: &str) -> Result<TableName> {
-    let target = TableRef::strict(name)?.in_schema(&ctx.current_schema());
-    if !ctx.has_schema(&target.schema) {
-        return Err(unknown_schema(&target.schema));
-    }
-    Ok(target)
-}
-
-/// A table's folder in the warehouse: `<root>/<table>` in `main`, `<root>/<schema>/<table>` elsewhere.
-fn table_location(root: &str, name: &TableName) -> String {
-    if name.schema == MAIN {
-        return dataset::join(root, &name.table);
-    }
-    dataset::join(&dataset::join(root, &name.schema), &name.table)
-}
-
-/// `CREATE [OR REPLACE] TABLE [IF NOT EXISTS] name [PARTITIONED BY (...)] AS query`:
-/// Parquet in the warehouse's `name/` folder (`schema/name/` outside `main`), or in
-/// memory without a warehouse.
-fn create_table(ctx: &SessionContext, name: &str, replace: bool, if_not_exists: bool, partition_by: Vec<String>, query: &str) -> Result<LazyFrame> {
-    let target = create_target(ctx, name)?;
-    let (key, shown) = (target.key(), target.display());
-    if ctx.table_exists(&target) && !replace {
-        if if_not_exists {
-            return summary(ctx, "create", Some(&shown), None, 0);
-        }
-        return Err(WhError::Plan(format!("table '{shown}' already exists: use CREATE OR REPLACE TABLE to overwrite it")));
-    }
-    let lf = ctx.sql(query)?;
-    let Some((root, storage)) = ctx.warehouse() else {
-        if !partition_by.is_empty() {
-            return Err(WhError::Plan("PARTITIONED BY needs a warehouse: a folder or s3:// prefix where tables are written".into()));
-        }
-        let (schema, batches) = lf.collect()?;
-        let rows = batches.iter().map(|b| b.num_rows()).sum();
-        ctx.register_batches(&key, schema, batches);
-        return summary(ctx, "create", Some(&shown), None, rows);
-    };
-    let location = table_location(&root, &target);
-    if dataset::holds_data(&location, &storage)? {
-        if !replace {
-            return Err(WhError::Plan(format!("'{location}' already holds data: use CREATE OR REPLACE TABLE to overwrite it")));
-        }
-        dataset::remove(&location, &storage)?;
-    }
-    let partitioned = !partition_by.is_empty();
-    let dest = if partitioned { location.clone() } else { dataset::join(&location, &new_file_name()) };
-    let opts = ParquetOptions { partition_by, ..Default::default() };
-    let rows = lf.sink_parquet(&dest, &opts, &storage)?;
-    if rows == 0 && partitioned {
-        // no partition, no file: an empty table, in memory, of the right shape
-        let (schema, batches) = lf.limit(0).collect()?;
-        ctx.register_batches(&key, schema, batches);
-    } else {
-        ctx.register_parquet_with(&key, &location, &storage, false)?;
-    }
-    summary(ctx, "create", Some(&shown), Some(&location), rows)
 }
 
 /// Where each column of the table comes from: a column of the query, or null.
@@ -251,7 +246,7 @@ fn conform(batch: &RecordBatch, mapping: &[Option<usize>], table: &SchemaRef) ->
 }
 
 /// Why a name refers to no table.
-fn missing(ctx: &SessionContext, r: &TableRef, name: &str) -> WhError {
+pub(super) fn missing(ctx: &SessionContext, r: &TableRef, name: &str) -> WhError {
     match &r.schema {
         Some(s) if !ctx.has_schema(s) => unknown_schema(s),
         _ => WhError::Plan(format!("table '{name}' not found")),
@@ -260,7 +255,7 @@ fn missing(ctx: &SessionContext, r: &TableRef, name: &str) -> WhError {
 
 /// `INSERT INTO name [(columns)] query`: new files in a folder table (in
 /// their partitions), or more rows for an in-memory table.
-fn insert(ctx: &SessionContext, name: &str, columns: &[String], query: &str) -> Result<LazyFrame> {
+fn insert(ctx: &SessionContext, name: &str, columns: &[String], overwrite: bool, query: &str, params: &Params) -> Result<LazyFrame> {
     let r = TableRef::strict(name)?;
     let target = ctx.resolve_table(&r).ok_or_else(|| missing(ctx, &r, name))?;
     let (key, shown) = (target.key(), target.display());
@@ -270,8 +265,14 @@ fn insert(ctx: &SessionContext, name: &str, columns: &[String], query: &str) -> 
         None => return Err(WhError::Plan(format!("table '{shown}' not found"))),
     };
     let table = provider.schema();
-    let lf = ctx.sql(query)?;
+    let lf = ctx.sql_with(query, params)?;
+    if let Some(d) = provider.as_delta() {
+        return delta_stmt::insert(ctx, &key, &shown, d, columns, overwrite, lf);
+    }
+    let op = if overwrite { "insert overwrite" } else { "insert" };
     if let Some(loc) = provider.location() {
+        // an overwrite deletes what the folder held once the new files are written
+        let old = if overwrite { dataset::list_files(&loc.path, &loc.storage)? } else { vec![] };
         let partitioned = !loc.partition_by.is_empty();
         let target = if partitioned { loc.path.clone() } else { dataset::join(&loc.path, &new_file_name()) };
         let opts = ParquetOptions { partition_by: loc.partition_by.clone(), ..Default::default() };
@@ -291,37 +292,25 @@ fn insert(ctx: &SessionContext, name: &str, columns: &[String], query: &str) -> 
             },
         )?;
         sink.into_inner().expect("writer").0.finish()?;
+        drop_replaced(&loc.path, &old, &loc.storage)?;
         // the folder has new files: list it again
         ctx.register_parquet_with(&key, &loc.path, &loc.storage, false)?;
-        return summary(ctx, "insert", Some(&shown), Some(&loc.path), rows.into_inner());
+        return summary_with(ctx, op, Some(&shown), Some(&loc.path), rows.into_inner(), Some("parquet"), None);
     }
     if let Some(old) = provider.memory_batches() {
         let (schema, batches) = lf.collect()?;
         let mapping = column_mapping(&table, columns, &schema)?;
         let rows = batches.iter().map(|b| b.num_rows()).sum();
         let same: Vec<Option<usize>> = (0..table.fields().len()).map(Some).collect();
-        let old = old.iter().map(|b| conform(b, &same, &table));
+        let old = old.iter().filter(|_| !overwrite).map(|b| conform(b, &same, &table));
         let new = batches.iter().map(|b| conform(b, &mapping, &table));
         ctx.register_batches(&key, nullable(&table), old.chain(new).collect::<Result<Vec<_>>>()?);
-        return summary(ctx, "insert", Some(&shown), None, rows);
+        return summary_with(ctx, op, Some(&shown), None, rows, Some("memory"), None);
     }
     Err(WhError::NotSupported(format!(
         "cannot insert into '{shown}' (a {} table): rows go into folders of Parquet files and in-memory tables",
         provider.kind()
     )))
-}
-
-/// `DROP TABLE [IF EXISTS] name`: the table leaves the session; its files stay.
-fn drop_table(ctx: &SessionContext, name: &str, if_exists: bool) -> Result<LazyFrame> {
-    let r = TableRef::strict(name)?;
-    match ctx.resolve_table(&r) {
-        Some(target) => {
-            ctx.deregister(&target.key());
-            summary(ctx, "drop", Some(&target.display()), None, 0)
-        }
-        None if if_exists => summary(ctx, "drop", Some(name), None, 0),
-        None => Err(missing(ctx, &r, name)),
-    }
 }
 
 /// `CREATE SCHEMA [IF NOT EXISTS] name`

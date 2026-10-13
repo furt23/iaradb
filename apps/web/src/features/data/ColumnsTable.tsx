@@ -43,6 +43,7 @@ export function ColumnsTable({ info }: { info: TableInfo }) {
               <TableCell sx={{ fontWeight: 650 }}>{c.name}</TableCell>
               <TableCell>
                 <Chip label={c.type} variant="outlined" size="small" sx={{ fontFamily: MONO, fontWeight: 500 }} />
+                {c.nullable === false && <Chip label="NOT NULL" size="small" sx={{ ml: 0.75, height: 18, fontSize: 10 }} />}
               </TableCell>
               <Tooltip title={`${show(s?.min)}${approx}`} enterDelay={500}>
                 <TableCell sx={VALUE}>{show(s?.min)}</TableCell>

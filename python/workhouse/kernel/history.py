@@ -17,7 +17,15 @@ class History:
         self.path = root / ".workhouse" / "history.jsonl"
         self._lock = threading.Lock()
 
-    def record(self, query: str, source: str, elapsed_ms: float, rows: int | None, error: str | None = None) -> None:
+    def record(
+        self,
+        query: str,
+        source: str,
+        elapsed_ms: float,
+        rows: int | None,
+        error: str | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> None:
         entry = {
             "ts": time.time(),
             "query": query[:MAX_QUERY_CHARS],
@@ -26,10 +34,12 @@ class History:
             "rows": rows,
             "error": error,
         }
+        if params:
+            entry["params"] = params
         with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry) + "\n")
+                f.write(json.dumps(entry, default=str) + "\n")
 
     def recent(self, limit: int = 200) -> list[dict[str, Any]]:
         if not self.path.is_file():

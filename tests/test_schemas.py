@@ -241,7 +241,7 @@ def test_ctas_into_a_schema_joins_the_catalog(tmp_path: Path) -> None:
     ws.sql("create table tpch.sales_copy as select * from sales").collect()
     assert changes[-1] == {
         "name": "tpch.sales_copy",
-        "entry": '\n[tables.tpch.sales_copy]\npath = "lake/tpch/sales_copy"\n',
+        "entry": '\n[tables.tpch.sales_copy]\npath = "lake/tpch/sales_copy"\nformat = "delta"\n',
         "kind": "table",
     }
     assert (tmp_path / "lake" / "tpch" / "sales_copy").is_dir()

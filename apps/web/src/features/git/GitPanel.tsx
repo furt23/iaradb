@@ -16,10 +16,11 @@ import { LocalTime } from "@/features/shell/LocalTime";
 import { PageHeader } from "@/features/shell/PageHeader";
 import { useGuard, useNotify } from "@/features/shell/notify";
 import { unwrap } from "@/lib/action";
-import { gitCommit, gitDiff } from "@/server/actions/git";
+import { gitCommit, gitDiff, gitRemoteSettings, type GitRemoteSettings } from "@/server/actions/git";
 import type { GitFile, GitStatus } from "@/server/git/status";
 
 import { DiffView } from "./DiffView";
+import { RemoteBar } from "./RemoteBar";
 
 function badge(f: GitFile): { label: string; color: "success" | "warning" | "error" | "info" } {
   const code = f.index !== " " && f.index !== "?" ? f.index : f.worktree;
@@ -41,9 +42,22 @@ export function GitPanel({ status, error, log }: GitPanelProps) {
   const [focus, setFocus] = useState<string | null>(files[0]?.path ?? null);
   const [diff, setDiff] = useState("");
   const [message, setMessage] = useState("");
+  const [remote, setRemote] = useState<GitRemoteSettings | null>(null);
   const guard = useGuard();
   const notify = useNotify();
   const router = useRouter();
+
+  useEffect(() => {
+    let live = true;
+    gitRemoteSettings().then((r) => {
+      if (!live) return;
+      if (r.ok) setRemote(r.data);
+      else notify(r.error.message, "error");
+    });
+    return () => {
+      live = false;
+    };
+  }, [notify]);
 
   useEffect(() => {
     if (!focus) return setDiff("");
@@ -81,10 +95,13 @@ export function GitPanel({ status, error, log }: GitPanelProps) {
           </Button>
         }
       />
+      <RemoteBar remote={remote} status={status} onChanged={setRemote} />
       {error ? (
         <Box sx={{ p: 3 }}>
           <Typography sx={{ color: "error.main", whiteSpace: "pre-wrap", fontFamily: "'JetBrains Mono Variable', monospace", fontSize: 13 }}>{error}</Typography>
-          <Typography sx={{ color: "text.secondary", mt: 1 }}>The workspace must be inside a Git repository (git init) that Git trusts.</Typography>
+          <Typography sx={{ color: "text.secondary", mt: 1 }}>
+            The workspace is not a usable Git repository. Connect a repository above to create one, or check that Git trusts the workspace.
+          </Typography>
         </Box>
       ) : (
         <Box sx={{ display: "grid", gridTemplateColumns: "340px 1fr", flex: 1, minHeight: 0 }}>

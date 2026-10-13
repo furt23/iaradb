@@ -7,7 +7,21 @@ import { removeSchemaSection, removeTableSection } from "@/lib/catalogToml";
 import { WORKSPACE_KERNEL } from "../kernel/keys";
 import { kernels } from "../kernel/manager";
 import type { KernelClient } from "../kernel/client";
+import { catalogSchemas } from "./catalog";
+import { invalidateDiscovery } from "./discovery";
 import { readConfigText, workspaceName, writeConfigText } from "./sources";
+
+/** A schema's location got new data: its listing is read again (workhouse.toml is not touched). */
+async function invalidateSchemas(names: string[]): Promise<void> {
+  try {
+    const wanted = new Set(names.map((n) => n.toLowerCase()));
+    const places = (await catalogSchemas()).filter((s) => wanted.has(s.name) && s.location);
+    if (places.length) for (const s of places) invalidateDiscovery(s.location);
+    else invalidateDiscovery();
+  } catch {
+    invalidateDiscovery();
+  }
+}
 
 function appendEntry(text: string, entry: string | null): string {
   if (!entry) return text;
@@ -29,7 +43,10 @@ function withChange(text: string, change: CatalogChange): string {
  * Studio owns; the workspace kernel (catalog, SQL editor) re-reads it unless
  * it made the changes.
  */
-export async function applyCatalogChanges(changes: CatalogChange[], from: KernelClient | null): Promise<void> {
+export async function applyCatalogChanges(all: CatalogChange[], from: KernelClient | null): Promise<void> {
+  const refreshed = all.filter((c) => c.kind === "refresh");
+  if (refreshed.length) await invalidateSchemas(refreshed.map((c) => c.name));
+  const changes = all.filter((c) => c.kind !== "refresh");
   if (!changes.length) return;
   const toml = await kernels.exclusive(async () => {
     let text = (await readConfigText()) ?? `[workspace]\nname = ${JSON.stringify(await workspaceName())}\n`;

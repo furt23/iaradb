@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 
+import { authErrorResponse, requireUser } from "@/server/auth/session";
 import { normalizeRelative } from "@/server/kernel/keys";
 import { resolveWorkspacePath } from "@/server/workspace/files";
 
@@ -10,6 +11,13 @@ export const runtime = "nodejs";
 
 /** Download a workspace file (the file tree's "Download"). */
 export async function GET(req: Request): Promise<Response> {
+  try {
+    await requireUser();
+  } catch (e) {
+    const res = authErrorResponse(e);
+    if (res) return res;
+    throw e;
+  }
   let file: string;
   try {
     const rel = normalizeRelative(new URL(req.url).searchParams.get("path") ?? "");

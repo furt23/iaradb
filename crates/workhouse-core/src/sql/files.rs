@@ -20,6 +20,7 @@ enum Format {
     Parquet,
     Csv,
     Json,
+    Delta,
 }
 
 /// The options of one file read.
@@ -28,6 +29,7 @@ struct ReadOptions {
     csv: CsvOptions,
     json: JsonOptions,
     storage: StorageOptions,
+    delta: Option<crate::delta::VersionSpec>,
 }
 
 /// A provider for `read_parquet(...)` / `read_csv(...)` / `read_json(...)`.
@@ -38,6 +40,7 @@ pub fn table_function(fname: &str, args: &[sql::FunctionArg]) -> Result<Arc<dyn 
         "read_json" | "read_json_auto" | "read_ndjson" | "read_ndjson_auto" | "read_jsonl" | "scan_json" | "scan_ndjson" | "read_json_objects" => {
             Format::Json
         }
+        "read_delta" | "delta_scan" | "scan_delta" => Format::Delta,
         other => return Err(WhError::NotSupported(format!("table function {other}"))),
     };
     let mut path = None;
@@ -77,16 +80,26 @@ fn provider(format: Format, path: &str, o: ReadOptions) -> Result<Arc<dyn TableP
         Format::Parquet => Arc::new(ParquetTable::try_new_with(path, &o.storage)?),
         Format::Csv => Arc::new(CsvTable::try_new_with(path, o.csv, &o.storage)?),
         Format::Json => Arc::new(JsonTable::try_new_with(path, o.json, &o.storage)?),
+        Format::Delta => Arc::new(crate::delta::DeltaTable::open(path, &o.storage, o.delta)?),
     })
 }
 
 fn named(key: &str, e: &sql::Expr, format: Format, o: &mut ReadOptions) -> Result<()> {
     let key = key.to_ascii_lowercase();
     let value = opt_value(e)?;
+    if format == Format::Delta && (key == "version" || key == "timestamp") {
+        o.delta = Some(match (key.as_str(), &value) {
+            ("version", OptValue::Number(n)) if *n >= 0.0 => crate::delta::VersionSpec::Version(*n as u64),
+            ("timestamp", OptValue::Number(n)) => crate::delta::VersionSpec::Timestamp(*n as i64),
+            ("timestamp", v) => crate::delta::VersionSpec::Timestamp(super::timetravel::timestamp_millis(&v.text()?)?),
+            _ => return Err(WhError::Sql("read_delta(): version expects a number, timestamp a number of milliseconds or a text".into())),
+        });
+        return Ok(());
+    }
     let known = match format {
         Format::Csv => o.csv.set_option(&key, &value)?,
         Format::Json => o.json.set_option(&key, &value)?,
-        Format::Parquet => false,
+        Format::Parquet | Format::Delta => false,
     };
     if !known {
         o.storage = std::mem::take(&mut o.storage).with(&key, value.text()?);

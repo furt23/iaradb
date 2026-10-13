@@ -11,12 +11,24 @@
 //! (`OVER`, named windows, `QUALIFY`) and recursive CTEs.
 
 pub mod command;
+mod create;
+pub mod ddl;
+mod delta_stmt;
+mod describe;
+mod dml;
+mod dialect;
+mod distinct_on;
 mod files;
 mod grouping_sets;
 mod json;
 mod lists;
+mod maintenance;
+pub mod params;
 mod recursive;
+mod sample;
 mod structs;
+mod timetravel;
+mod wildcard;
 mod window;
 pub mod write;
 
@@ -39,10 +51,12 @@ use crate::scalar::Scalar;
 use crate::schema::{Column, PlanSchema};
 use crate::session::{MaterializedCte, SessionContext, TableEntry, plan_aggregate};
 use crate::types::{common_supertype, parse_data_type};
+pub use params::Params;
 
-pub fn plan_sql(ctx: &SessionContext, query: &str) -> Result<LogicalPlan> {
-    let dialect = sqlparser::dialect::DuckDbDialect {};
-    let normalized = normalize_null_treatment(query);
+pub fn plan_sql(ctx: &SessionContext, query: &str, params: &Params) -> Result<LogicalPlan> {
+    let dialect = dialect::WorkhouseDialect;
+    let bound = params.bind(query)?;
+    let normalized = normalize_null_treatment(&bound);
     let stmts = Parser::parse_sql(&dialect, &normalized).map_err(|e| WhError::Sql(e.to_string()))?;
     if stmts.len() != 1 {
         return Err(WhError::Sql(format!("expected exactly one statement, got {}", stmts.len())));
@@ -57,7 +71,7 @@ pub fn plan_sql(ctx: &SessionContext, query: &str) -> Result<LogicalPlan> {
             }
         }
     }
-    let mut planner = SqlPlanner { ctx, ctes: vec![], windows: vec![], next_id: 0, word_counts };
+    let mut planner = SqlPlanner { ctx, params, ctes: vec![], windows: vec![], next_id: 0, word_counts };
     match &stmts[0] {
         sql::Statement::Query(q) => planner.plan_query(q, None),
         sql::Statement::Explain { describe_alias: sql::DescribeAlias::Explain, analyze, statement, options: None, .. } => {
@@ -145,6 +159,7 @@ enum OrderKey {
 
 struct SqlPlanner<'a> {
     ctx: &'a SessionContext,
+    params: &'a Params,
     ctes: Vec<HashMap<String, Arc<LogicalPlan>>>,
     /// WINDOW clauses of the SELECTs being planned (innermost last)
     windows: Vec<Vec<sql::NamedWindowDefinition>>,
@@ -562,7 +577,7 @@ impl<'a> SqlPlanner<'a> {
             return self.lateral_unnest(None, &call, outer);
         }
         match tf {
-            sql::TableFactor::Table { name, alias, args, .. } => {
+            sql::TableFactor::Table { name, alias, args, version, sample, .. } => {
                 let parts = object_name_parts(name);
                 let alias_name = alias.as_ref().map(|a| ident(&a.name));
                 let mut plan = if let Some(args) = args {
@@ -570,9 +585,14 @@ impl<'a> SqlPlanner<'a> {
                     let provider = files::table_function(&fname, &args.args)?;
                     let q = alias_name.clone().unwrap_or(fname);
                     LogicalPlan::scan(&q, Some(q.clone()), provider, None, vec![], None)?
+                } else if let Some(v) = version {
+                    self.plan_versioned_table(&parts, alias_name, v)?
                 } else {
                     self.plan_named_table(&parts, alias_name)?
                 };
+                if let Some(kind) = sample {
+                    plan = self.sample_table(plan, kind)?;
+                }
                 if let Some(a) = alias {
                     if !a.columns.is_empty() {
                         let names: Vec<String> = a.columns.iter().map(|c| ident(&c.name)).collect();
@@ -582,12 +602,15 @@ impl<'a> SqlPlanner<'a> {
                 }
                 Ok(plan)
             }
-            sql::TableFactor::Derived { lateral, subquery, alias, .. } => {
+            sql::TableFactor::Derived { lateral, subquery, alias, sample } => {
                 if *lateral {
                     return Err(WhError::NotSupported("LATERAL subqueries".into()));
                 }
                 let _ = outer;
                 let mut p = self.plan_query(subquery, None)?;
+                if let Some(kind) = sample {
+                    p = self.sample_table(p, kind)?;
+                }
                 let name = match alias {
                     Some(a) => {
                         if !a.columns.is_empty() {
@@ -860,42 +883,38 @@ impl<'a> SqlPlanner<'a> {
                     select_exprs.extend(Self::expand_struct_unnest(x, true, scope)?.into_iter().map(|e| e.alias(ident(alias))));
                 }
                 sql::SelectItem::Wildcard(opts) => {
-                    let excluded = excluded_columns(opts);
-                    for f in from_schema.fields() {
-                        if f.qualifier.as_deref().is_some_and(|q| q.starts_with("__")) && f.name().starts_with("__") {
-                            continue;
-                        }
-                        if excluded.iter().any(|x| x.eq_ignore_ascii_case(f.name())) {
-                            continue;
-                        }
-                        select_exprs.push(Expr::Column(f.column()));
-                    }
+                    let opts = wildcard::WildcardOpts::new(opts)?;
+                    let columns = from_schema
+                        .fields()
+                        .iter()
+                        .filter(|f| !(f.qualifier.as_deref().is_some_and(|q| q.starts_with("__")) && f.name().starts_with("__")))
+                        .map(|f| (f.name().to_string(), Expr::Column(f.column())))
+                        .collect();
+                    select_exprs.extend(opts.apply(self, columns, scope)?);
                 }
                 sql::SelectItem::QualifiedWildcard(kind, opts) => {
                     let q = match kind {
                         sql::SelectItemQualifiedWildcardKind::ObjectName(n) => object_name_parts(n).last().cloned().unwrap_or_default(),
                         sql::SelectItemQualifiedWildcardKind::Expr(e) => e.to_string(),
                     };
-                    let excluded = excluded_columns(opts);
-                    let mut any = false;
-                    for f in from_schema.fields() {
-                        if f.qualifier.as_deref().is_some_and(|fq| fq.eq_ignore_ascii_case(&q))
-                            && !excluded.iter().any(|x| x.eq_ignore_ascii_case(f.name()))
-                        {
-                            any = true;
-                            select_exprs.push(Expr::Column(f.column()));
-                        }
-                    }
-                    if !any {
+                    let opts = wildcard::WildcardOpts::new(opts)?;
+                    let mut columns: Vec<(String, Expr)> = from_schema
+                        .fields()
+                        .iter()
+                        .filter(|f| f.qualifier.as_deref().is_some_and(|fq| fq.eq_ignore_ascii_case(&q)))
+                        .map(|f| (f.name().to_string(), Expr::Column(f.column())))
+                        .collect();
+                    if columns.is_empty() {
                         let target = match kind {
                             sql::SelectItemQualifiedWildcardKind::ObjectName(n) => self.resolve_parts(&object_name_parts(n), scope)?,
                             sql::SelectItemQualifiedWildcardKind::Expr(e) => Some(self.sql_expr(e, scope)?),
                         };
-                        match target.map(|t| self.expand_struct_star(t, &excluded, scope)).transpose()?.flatten() {
-                            Some(fields) => select_exprs.extend(fields),
+                        match target.map(|t| self.expand_struct_star(t, &[], scope)).transpose()?.flatten() {
+                            Some(fields) => columns = fields.into_iter().map(|e| (e.output_name(), e)).collect(),
                             None => return Err(WhError::Plan(format!("no columns for '{q}.*'"))),
                         }
                     }
+                    select_exprs.extend(opts.apply(self, columns, scope)?);
                 }
                 other => return Err(WhError::NotSupported(format!("select item {other}"))),
             }
@@ -972,32 +991,13 @@ impl<'a> SqlPlanner<'a> {
         let mut hidden: Vec<Expr> = vec![];
         for o in order_by {
             let (desc, nf) = sort_opts(o);
-            if let Some(k) = as_ordinal(&o.expr) {
-                if k >= 1 && k <= select_exprs.len() {
-                    order_keys.push((OrderKey::Output(k - 1), desc, nf));
-                    continue;
-                }
-            }
-            if let sql::Expr::Identifier(id) = &o.expr {
-                let name = ident(id);
-                let matches: Vec<usize> = out_names
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, n)| n.eq_ignore_ascii_case(&name))
-                    .map(|(i, _)| i)
-                    .collect();
-                if matches.len() == 1 {
-                    order_keys.push((OrderKey::Output(matches[0]), desc, nf));
-                    continue;
-                }
-            }
-            let e = self.sql_expr(&o.expr, alias_scope)?;
-            match select_exprs.iter().position(|s| s.unalias_ref() == &e) {
-                Some(i) => order_keys.push((OrderKey::Output(i), desc, nf)),
-                None => {
-                    order_keys.push((OrderKey::Hidden(hidden.len()), desc, nf));
-                    hidden.push(e);
-                }
+            let key = self.order_key(&o.expr, &select_exprs, &out_names, &mut hidden, alias_scope)?;
+            order_keys.push((key, desc, nf));
+        }
+        let mut distinct_on_keys: Vec<OrderKey> = vec![];
+        if let Some(sql::Distinct::On(keys)) = &s.distinct {
+            for k in keys {
+                distinct_on_keys.push(self.order_key(k, &select_exprs, &out_names, &mut hidden, alias_scope)?);
             }
         }
 
@@ -1071,27 +1071,18 @@ impl<'a> SqlPlanner<'a> {
         plan = LogicalPlan::project(Arc::new(plan), proj)?;
         match &s.distinct {
             Some(sql::Distinct::Distinct) => plan = distinct(plan)?,
-            Some(sql::Distinct::On(_)) => return Err(WhError::NotSupported("DISTINCT ON".into())),
+            Some(sql::Distinct::On(_)) => plan = distinct_on::distinct_on(plan, &distinct_on_keys, &order_keys)?,
             _ => {}
         }
         if !order_keys.is_empty() {
             let schema = plan.schema().clone();
-            let sorts = order_keys
-                .into_iter()
-                .map(|(k, desc, nf)| {
-                    let e = match k {
-                        OrderKey::Output(i) => Expr::Column(schema.column(i)),
-                        OrderKey::Hidden(i) => Expr::Column(Column::from_name(format!("__sort_{i}"))),
-                    };
-                    SortExpr::new(e, desc, nf)
-                })
-                .collect();
+            let sorts = order_keys.into_iter().map(|(k, desc, nf)| SortExpr::new(k.column(&schema), desc, nf)).collect();
             plan = LogicalPlan::sort(Arc::new(plan), sorts, None)?;
-            if !hidden.is_empty() {
-                let schema = plan.schema().clone();
-                let keep = (0..n_sel).map(|i| Expr::Column(schema.column(i))).collect();
-                plan = LogicalPlan::project(Arc::new(plan), keep)?;
-            }
+        }
+        if !hidden.is_empty() {
+            let schema = plan.schema().clone();
+            let keep = (0..n_sel).map(|i| Expr::Column(schema.column(i))).collect();
+            plan = LogicalPlan::project(Arc::new(plan), keep)?;
         }
         Ok(plan)
     }
@@ -1336,6 +1327,7 @@ impl<'a> SqlPlanner<'a> {
                 let raw = match iv.value.as_ref() {
                     E::Value(v) => match &v.value {
                         sql::Value::Number(n, _) => n.clone(),
+                        sql::Value::Placeholder(p) => self.params.lookup(p)?.to_string(),
                         other => other.clone().into_string().unwrap_or_default(),
                     },
                     other => return Err(WhError::NotSupported(format!("interval value {other}"))),
@@ -1514,6 +1506,7 @@ impl<'a> SqlPlanner<'a> {
             sql::Value::Number(n, _) => parse_number(n)?,
             sql::Value::Boolean(x) => Scalar::boolean(*x),
             sql::Value::Null => Scalar::null(),
+            sql::Value::Placeholder(p) => self.params.lookup(p)?,
             other => match other.clone().into_string() {
                 Some(s) => Scalar::utf8(&s),
                 None => return Err(WhError::NotSupported(format!("literal {other}"))),
@@ -1663,14 +1656,6 @@ fn sort_opts(o: &sql::OrderByExpr) -> (bool, bool) {
     let desc = matches!(o.options.sort, Some(sql::OrderBySort::Desc));
     let nulls_first = o.options.nulls_first.unwrap_or(false);
     (desc, nulls_first)
-}
-
-fn excluded_columns(opts: &sql::WildcardAdditionalOptions) -> Vec<String> {
-    match &opts.opt_exclude {
-        Some(sql::ExcludeSelectItem::Single(i)) => vec![i.to_string()],
-        Some(sql::ExcludeSelectItem::Multiple(v)) => v.iter().map(|i| i.to_string()).collect(),
-        None => vec![],
-    }
 }
 
 fn distinct(plan: LogicalPlan) -> Result<LogicalPlan> {

@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from workhouse import widgets
 from workhouse.kernel.cell_runner import CellRunner, Emit, Outcome
 from workhouse.kernel.notebook import marimo_io
 from workhouse.kernel.notebook.graph import DependencyGraph
@@ -72,6 +73,9 @@ class NotebookService:
         self.notebook: Notebook | None = None
         self.values: dict[str, Any] = {}
         self.states: dict[str, CellState] = {}
+        #: the notebook's widgets (definitions per cell, values): they outlive kernel-side re-adoption of cells
+        self.widgets = widgets.Registry()
+        widgets.install(self.widgets)
         self._lock = threading.RLock()
 
     # -- files ---------------------------------------------------------------
@@ -87,24 +91,30 @@ class NotebookService:
                 "path": nb.path.relative_to(self.ws.root).as_posix(),
                 "cells": [c.to_view() for c in nb.cells],
                 "states": {c.id: self.states.setdefault(c.id, CellState()).view(c.code) for c in nb.cells},
+                "widgets": self.widgets.payload(),
             }
 
-    def open(self, rel: str, source: str | None = None) -> dict[str, Any]:
-        """Open a notebook from ``source`` (sent by the Studio) or its file."""
+    def open(self, rel: str, source: str | None = None, preset: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Open a notebook from ``source`` (sent by the Studio) or its file.
+        ``preset``: widget values (a job's parameters, or the ones a restarted
+        kernel lost), applied before anything runs."""
         path = resolve_in(self.ws.root, rel)
         with self._lock:
             if self.notebook is not None and self.notebook.path == path:
+                if preset:
+                    self.widgets.preset(preset)
                 return self.view()
             if source is not None:
-                self._adopt(marimo_io.parse(source, path))
+                self._adopt(marimo_io.parse(source, path), preset)
             elif path.is_file():
-                self._adopt(marimo_io.read(path))
+                self._adopt(marimo_io.read(path), preset)
             else:
                 raise FileNotFoundError(f"notebook {rel!r} does not exist")
         return self.view()
 
-    def _adopt(self, nb: Notebook) -> None:
+    def _adopt(self, nb: Notebook, preset: dict[str, Any] | None = None) -> None:
         self.notebook, self.values, self.states = nb, {}, {}
+        self.widgets.reset({n: v for n, v in (preset or {}).items() if isinstance(n, str)})
 
     def rename(self, rel: str) -> dict[str, Any]:
         """The open notebook moved (the Studio moved its file): same cells,
@@ -139,6 +149,8 @@ class NotebookService:
             if cid not in alive:
                 for name in self.states.pop(cid).defs:
                     self.values.pop(name, None)
+        for cid in [c for c in self.widgets.cell_ids() if c not in alive]:
+            self.widgets.forget_cell(cid)
         return nb
 
     def save(self, cells: list[dict[str, Any]] | None, persist: bool = True) -> dict[str, Any]:
@@ -175,14 +187,23 @@ class NotebookService:
 
     def _plan(self, graph: DependencyGraph, nb: Notebook, targets: list[str]) -> list[str]:
         seeds = set(targets)
+        # the setup cell comes before any cell: it runs when it never did or was edited
+        seeds |= {c for c in graph.setup if self._needs_run(nb.cell(c))} if seeds else set()
         for t in targets:
             seeds |= {a for a in graph.ancestors(t) if self._needs_run(nb.cell(a))}
         plan = set(seeds)
         for s in seeds:
             plan |= graph.descendants(s)
         ordered = graph.topological(plan)
+        ordered = [c for c in ordered if c in graph.setup] + [c for c in ordered if c not in graph.setup]
         # cells inside a dependency cycle are reported as errors, not skipped
         return ordered + [c for c in graph.order if c in plan and c not in ordered]
+
+    def _emit_widgets(self, emit: Emit) -> None:
+        """Tell the client when the widgets (their definitions or values) changed since last told."""
+        changes = self.widgets.take_changes()
+        if changes is not None:
+            emit("widgets.changed", changes)
 
     def _emit_state(self, emit: Emit, cell: Cell) -> None:
         emit("cell.state", {"cell_id": cell.id, **self.states[cell.id].view(cell.code)})
@@ -201,6 +222,7 @@ class NotebookService:
     def run(self, cells: list[dict[str, Any]] | None, targets: list[str] | None, emit: Emit) -> dict[str, Any]:
         with self._lock:
             nb = self._sync(cells)
+            self._emit_widgets(emit)
             # a snapshot: saves arriving during the run may replace nb.cells
             snapshot = {c.id: c for c in nb.cells}
             graph = DependencyGraph(nb.cells)
@@ -222,6 +244,8 @@ class NotebookService:
                 self.states[cid].defs = ()
             if cid in graph.errors:
                 outcome = self._blocked(graph.errors[cid])
+            elif cid not in graph.setup and graph.setup & failed:
+                outcome = self._blocked("the setup cell failed")
             elif deps.parents & failed:
                 outcome = self._blocked("an upstream cell failed")
             else:
@@ -229,17 +253,31 @@ class NotebookService:
                     inputs = {r: self.values[r] for r in deps.refs if r in self.values}
                     self.states[cid].status = "running"
                     self._emit_state(emit, cell)
-                outcome = self.runner.run(cell, deps, graph.analyses[cid].defs, inputs, self._stream_into(emit, cid), source)
+                with self.widgets.cell(cid):
+                    outcome = self.runner.run(cell, deps, graph.analyses[cid].defs, inputs, self._stream_into(emit, cid), source)
                 ran.append(cid)
             with self._lock:
                 self._finish(cell, outcome, defs)
                 self._emit_state(emit, cell)
+                self._emit_widgets(emit)
             if outcome.status != "done":
                 failed.add(cid)
             if outcome.status == "cancelled":
                 self._unqueue([snapshot[c] for c in order[i + 1 :]], emit)
                 return {"ran": ran, "interrupted": True}
         return {"ran": ran, "interrupted": False}
+
+    def set_widget(self, name: str, value: Any, cells: list[dict[str, Any]] | None, emit: Emit) -> dict[str, Any]:
+        """A widget got a new value (coerced to its type): the cells that read
+        it run, then their descendants, as when a cell is run."""
+        with self._lock:
+            nb = self._sync(cells)
+            self.widgets.set(name, value)
+            targets = DependencyGraph(nb.cells).widget_readers(name)
+            self._emit_widgets(emit)
+        if not targets:
+            return {"ran": [], "interrupted": False}
+        return self.run(None, targets, emit)
 
     def _unqueue(self, rest: list[Cell], emit: Emit) -> None:
         with self._lock:

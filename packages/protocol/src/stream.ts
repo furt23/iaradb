@@ -1,7 +1,8 @@
 /** Server-sent events from the Studio's run endpoint to the browser. */
 
 import type { KernelEvent } from "./methods";
-import type { Cell } from "./notebook";
+import type { Cell, WidgetValue } from "./notebook";
+import type { QueryParams } from "./query";
 
 export type RunStreamEvent =
   | KernelEvent
@@ -11,4 +12,6 @@ export type RunStreamEvent =
 /** What a run request asks for. */
 export type RunRequest =
   | { kind: "notebook"; path: string; cells: Cell[]; cellIds: string[] | null }
-  | { kind: "sql"; query: string };
+  /** a widget got a value: the cells that read it run */
+  | { kind: "widget"; path: string; cells: Cell[]; name: string; value: WidgetValue }
+  | ({ kind: "sql"; query: string } & QueryParams);

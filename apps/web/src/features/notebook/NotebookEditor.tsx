@@ -1,6 +1,8 @@
 "use client";
 
+import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
 import type { CellKind, NotebookView, Variable } from "@workhouse/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -11,9 +13,11 @@ import { notebookVariables } from "@/server/actions/notebooks";
 
 import { AddCellBar } from "./AddCellBar";
 import { CellList } from "./CellList";
-import { IDLE, isStale, totalElapsed } from "./notebookState";
+import { IDLE, isStale, setupCell, setupError, totalElapsed, visibleCells } from "./notebookState";
 import { NotebookSidePanel } from "./NotebookSidePanel";
 import { NotebookToolbar } from "./NotebookToolbar";
+import { SetupDialog } from "./SetupDialog";
+import { WidgetBar } from "./WidgetBar";
 import { SortableCell } from "./SortableCell";
 import { cellLink, useCellAnchor } from "./useCellAnchor";
 import { useNotebook } from "./useNotebook";
@@ -78,7 +82,21 @@ export function NotebookEditor({ initial, schema }: { initial: NotebookView; sch
   // the cell just added takes the focus
   const [fresh, setFresh] = useState<string | null>(null);
   const addAt = useCallback((index: number, kind: CellKind) => setFresh(addCell(index, kind).id), [addCell]);
-  const last = state.cells.length - 1;
+  // the setup cell is edited in its dialog: the list, the outline and every index below are those of the visible cells
+  const cells = useMemo(() => visibleCells(state.cells), [state.cells]);
+  const setup = useMemo(() => setupCell(state.cells), [state.cells]);
+  const failure = setupError(state);
+  const [setupOpen, setSetupOpen] = useState(false);
+  const saveSetup = useCallback((id: string, code: string) => nb.edit(id, { code }), [nb.edit]);
+  // run after the edit has rendered: `run` sends the cells as the editor holds them
+  const runSetup = useCallback(
+    (id: string, code: string) => {
+      nb.edit(id, { code });
+      setTimeout(() => void run([id]), 0);
+    },
+    [nb.edit, run],
+  );
+  const last = cells.length - 1;
 
   return (
     <Box ref={rootRef} sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, flex: 1 }}>
@@ -86,25 +104,50 @@ export function NotebookEditor({ initial, schema }: { initial: NotebookView; sch
         path={state.path}
         dirty={state.dirty}
         running={state.running}
-        timer={{ current: state.current, lastRun: state.lastRun, total: totalElapsed(state), cells: state.cells.length }}
+        timer={{ current: state.current, lastRun: state.lastRun, total: totalElapsed(state), cells: cells.length }}
         onRunAll={() => run(null)}
         onInterrupt={nb.interrupt}
         onRestart={nb.restart}
         onRestartAndClear={nb.restartAndClear}
         onRestartAndRunAll={nb.restartAndRunAll}
         onClearOutputs={() => clearOutputs(null)}
+        onShowSetup={setup ? () => setSetupOpen(true) : undefined}
         onToggleSide={() => setShowSide((v) => !v)}
         sideOpen={showSide}
-        onOutputs={(hide) => outputs.setHidden(hide ? new Set(state.cells.map((c) => c.id)) : new Set())}
+        onOutputs={(hide) => outputs.setHidden(hide ? new Set(cells.map((c) => c.id)) : new Set())}
         fileMenu={<FileActionsMenu path={state.path} kind="notebook" cells={state.cells} />}
         cluster={<NotebookClusterSelect path={state.path} onAttached={nb.reset} />}
+      />
+      <WidgetBar widgets={state.widgets} onChange={nb.setWidget} />
+      {failure && (
+        <Alert
+          severity="warning"
+          sx={{ borderRadius: 0, py: 0, flexShrink: 0, alignItems: "center" }}
+          action={
+            <Button color="inherit" size="small" onClick={() => setSetupOpen(true)}>
+              Show setup code
+            </Button>
+          }
+        >
+          Setup code failed: {failure}
+        </Alert>
+      )}
+      <SetupDialog
+        open={setupOpen}
+        path={state.path}
+        cell={setup}
+        error={failure}
+        running={state.running}
+        onClose={() => setSetupOpen(false)}
+        onSave={saveSetup}
+        onRun={runSetup}
       />
       <Box sx={{ display: "flex", flex: 1, minHeight: 0 }}>
         <Box ref={setScrollEl} sx={{ flex: 1, overflow: "auto", px: { xs: 1, md: 4 }, py: 2 }}>
           <Box sx={{ maxWidth: 1180, mx: "auto" }}>
-            <AddCellBar onAdd={(k) => addAt(0, k)} persistent={state.cells.length === 0} />
-            <CellList cells={state.cells} onReorder={nb.reorder}>
-              {state.cells.map((cell, i) => (
+            <AddCellBar onAdd={(k) => addAt(0, k)} persistent={cells.length === 0} />
+            <CellList cells={cells} onReorder={nb.reorder}>
+              {cells.map((cell, i) => (
                 <SortableCell
                   key={cell.id}
                   index={i}
@@ -133,7 +176,7 @@ export function NotebookEditor({ initial, schema }: { initial: NotebookView; sch
             </CellList>
           </Box>
         </Box>
-        {showSide && <NotebookSidePanel cells={state.cells} variables={variables} scrollRoot={scrollEl} />}
+        {showSide && <NotebookSidePanel cells={cells} variables={variables} scrollRoot={scrollEl} />}
       </Box>
     </Box>
   );

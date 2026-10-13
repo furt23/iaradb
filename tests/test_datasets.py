@@ -70,12 +70,12 @@ def test_workspace_tables_created_by_sql_join_the_catalog(sales: pa.Table, tmp_p
     done = ws.sql("create table by_year partitioned by (year) as select id, year, amount from sales").collect()
     assert done.to_pydict()["rows"] == [N]
     assert (tmp_path / "lake" / "by_year" / "year=2022").is_dir()
-    assert changes == [{"name": "by_year", "entry": '\n[tables.by_year]\npath = "lake/by_year"\n', "kind": "table"}]
+    assert changes == [{"name": "by_year", "entry": '\n[tables.by_year]\npath = "lake/by_year"\nformat = "delta"\n', "kind": "table"}]
     assert [t.name for t in ws.tables] == ["by_year"]
 
     # a frame from a notebook cell feeds an INSERT; the main session sees the new rows
     extra = wh.from_dict({"id": [-1], "amount": [1.0], "year": [2030]})
-    ws.sql("insert into by_year select * from extra", extra=extra)
+    ws.sql("insert into by_year select id, year, amount from extra", extra=extra)
     assert ws.sql("select count(*) as n from by_year where year = 2030").collect().to_pydict()["n"] == [1]
 
     # a workspace reloaded from the new entry finds the table (partitions included)

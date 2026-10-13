@@ -5,6 +5,11 @@
 //! COPY (select ...) TO 's3://bucket/out' (FORMAT parquet, PARTITION_BY (year, month), COMPRESSION zstd)
 //! CREATE [OR REPLACE] TABLE [IF NOT EXISTS] sales_2024 [PARTITIONED BY (region)] AS select ...
 //! INSERT INTO sales_2024 [(col, ...)] select ...
+//! CREATE [OR REPLACE] TABLE [IF NOT EXISTS] t (id bigint NOT NULL, name text) [USING DELTA | PARQUET] [PARTITIONED BY (..)] [COMMENT '..']
+//! INSERT OVERWRITE [TABLE] sales_2024 select ...
+//! TRUNCATE TABLE sales_2024
+//! CREATE [OR REPLACE] [TEMP] VIEW v AS select ...      DROP VIEW [IF EXISTS] v
+//! SHOW TABLES [IN schema]    SHOW SCHEMAS    SHOW COLUMNS FROM t    DESCRIBE [TABLE] t
 //! DROP TABLE [IF EXISTS] sales_2024
 //! CREATE SCHEMA [IF NOT EXISTS] tpch
 //! DROP SCHEMA [IF EXISTS] tpch [CASCADE | RESTRICT]
@@ -13,6 +18,7 @@
 //!
 //! Table names may be qualified: `tpch.lineitem`, `"tpch"."lineitem"`.
 
+use super::ddl::{ColumnSpec, parse_columns};
 use crate::error::{Result, WhError};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -28,16 +34,60 @@ pub enum Command {
     /// anything else: a query
     Query,
     Copy { query: String, path: String, options: Vec<(String, CopyValue)> },
-    CreateTableAs { name: String, replace: bool, if_not_exists: bool, partition_by: Vec<String>, query: String },
-    Insert { name: String, columns: Vec<String>, query: String },
+    /// `using`: the format named (`delta`, `parquet`), lowercase; none: Delta
+    CreateTableAs { name: String, replace: bool, if_not_exists: bool, partition_by: Vec<String>, using: Option<String>, query: String },
+    CreateTable {
+        name: String,
+        replace: bool,
+        if_not_exists: bool,
+        columns: Vec<ColumnSpec>,
+        partition_by: Vec<String>,
+        using: Option<String>,
+        comment: Option<String>,
+    },
+    Insert { name: String, columns: Vec<String>, overwrite: bool, query: String },
+    Truncate { name: String },
+    CreateView { name: String, replace: bool, if_not_exists: bool, temp: bool, query: String },
+    DropView { name: String, if_exists: bool },
+    ShowTables { schema: Option<String> },
+    ShowSchemas,
+    /// `SHOW COLUMNS FROM t`, `DESCRIBE t`
+    Describe { name: String },
     DropTable { name: String, if_exists: bool },
     CreateSchema { name: String, if_not_exists: bool },
     DropSchema { name: String, if_exists: bool, cascade: bool },
     Use { schema: String },
+    /// `DELETE`, `UPDATE` or `MERGE` on a Delta table: the whole text (its parts are planned in `super::dml`)
+    Dml { sql: String },
+    /// `DESCRIBE HISTORY|DETAIL`, `OPTIMIZE`, `VACUUM`, `RESTORE`, `ALTER TABLE`, `COMMENT ON`
+    Maintenance(Maintenance),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum Tok {
+pub enum RestoreTo {
+    Version(u64),
+    /// the text of `TIMESTAMP AS OF '...'`
+    Timestamp(String),
+}
+
+/// Statements on Delta tables that do not change rows.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Maintenance {
+    History { name: String, limit: Option<usize> },
+    Detail { name: String },
+    /// `predicate`: the text after `WHERE` (partition columns only)
+    Optimize { name: String, predicate: Option<String> },
+    Vacuum { name: String, retain_hours: Option<f64>, dry_run: bool, force: bool },
+    Restore { name: String, to: RestoreTo },
+    AddColumns { name: String, columns: Vec<ColumnSpec> },
+    RenameColumn { name: String, from: String, to: String },
+    SetProperties { name: String, properties: Vec<(String, String)> },
+    UnsetProperties { name: String, keys: Vec<String>, if_exists: bool },
+    Comment { name: String, comment: Option<String> },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum Tok {
     Word(String),
     Quoted(String),
     Text(String),
@@ -49,7 +99,7 @@ enum Tok {
 }
 
 /// Tokens with their byte offsets (comments and spaces skipped).
-fn tokenize(sql: &str) -> Result<Vec<(usize, Tok)>> {
+pub(super) fn tokenize(sql: &str) -> Result<Vec<(usize, Tok)>> {
     let b = sql.as_bytes();
     let mut out = vec![];
     let mut i = 0;
@@ -107,18 +157,18 @@ fn tokenize(sql: &str) -> Result<Vec<(usize, Tok)>> {
     Ok(out)
 }
 
-struct Cursor<'a> {
-    sql: &'a str,
-    toks: Vec<(usize, Tok)>,
-    at: usize,
+pub(super) struct Cursor<'a> {
+    pub(super) sql: &'a str,
+    pub(super) toks: Vec<(usize, Tok)>,
+    pub(super) at: usize,
 }
 
 impl Cursor<'_> {
-    fn peek(&self) -> Option<&Tok> {
+    pub(super) fn peek(&self) -> Option<&Tok> {
         self.toks.get(self.at).map(|(_, t)| t)
     }
 
-    fn keyword(&mut self, word: &str) -> bool {
+    pub(super) fn keyword(&mut self, word: &str) -> bool {
         if matches!(self.peek(), Some(Tok::Word(w)) if w.eq_ignore_ascii_case(word)) {
             self.at += 1;
             return true;
@@ -126,7 +176,7 @@ impl Cursor<'_> {
         false
     }
 
-    fn keywords(&mut self, words: &[&str]) -> bool {
+    pub(super) fn keywords(&mut self, words: &[&str]) -> bool {
         let save = self.at;
         if words.iter().all(|w| self.keyword(w)) {
             return true;
@@ -135,18 +185,18 @@ impl Cursor<'_> {
         false
     }
 
-    fn expect(&mut self, word: &str) -> Result<()> {
+    pub(super) fn expect(&mut self, word: &str) -> Result<()> {
         if self.keyword(word) { Ok(()) } else { Err(self.error(&format!("expected {}", word.to_ascii_uppercase()))) }
     }
 
-    fn error(&self, what: &str) -> WhError {
+    pub(super) fn error(&self, what: &str) -> WhError {
         let near = self.toks.get(self.at).map_or("the end".to_string(), |(o, _)| format!("'{}'", self.sql[*o..].chars().take(20).collect::<String>()));
         WhError::Sql(format!("{what} near {near}"))
     }
 
     /// A name: a word or a quoted identifier, or several joined by dots
     /// (`s.t`, `"s"."t"`, `s."t"`, `"s".t`), returned with the dots.
-    fn name(&mut self) -> Result<String> {
+    pub(super) fn name(&mut self) -> Result<String> {
         let mut out = String::new();
         loop {
             let (part, dot_follows) = match self.peek().cloned() {
@@ -167,7 +217,7 @@ impl Cursor<'_> {
     }
 
     /// Skip a `.` that stands alone (after a quoted identifier).
-    fn dot(&mut self) -> bool {
+    pub(super) fn dot(&mut self) -> bool {
         match self.toks.get(self.at) {
             Some((o, Tok::Other)) if self.sql[*o..].starts_with('.') => {
                 self.at += 1;
@@ -177,7 +227,7 @@ impl Cursor<'_> {
         }
     }
 
-    fn text(&mut self) -> Result<String> {
+    pub(super) fn text(&mut self) -> Result<String> {
         match self.peek().cloned() {
             Some(Tok::Text(t)) => {
                 self.at += 1;
@@ -188,7 +238,7 @@ impl Cursor<'_> {
     }
 
     /// `(a, b, c)`
-    fn name_list(&mut self) -> Result<Vec<String>> {
+    pub(super) fn name_list(&mut self) -> Result<Vec<String>> {
         if self.peek() != Some(&Tok::Open) {
             return Err(self.error("expected a parenthesized list"));
         }
@@ -206,13 +256,13 @@ impl Cursor<'_> {
     }
 
     /// The text from the current token on.
-    fn rest(&self) -> Result<String> {
+    pub(super) fn rest(&self) -> Result<String> {
         let (o, _) = self.toks.get(self.at).ok_or_else(|| self.error("expected a query"))?;
         Ok(self.sql[*o..].trim().trim_end_matches(';').trim().to_string())
     }
 
     /// A parenthesized query; leaves the cursor after its `)`.
-    fn parenthesized(&mut self) -> Result<String> {
+    pub(super) fn parenthesized(&mut self) -> Result<String> {
         let (open, _) = self.toks[self.at];
         let mut depth = 0;
         for k in self.at..self.toks.len() {
@@ -232,7 +282,7 @@ impl Cursor<'_> {
         Err(self.error("unbalanced parentheses"))
     }
 
-    fn done(&self) -> Result<()> {
+    pub(super) fn done(&self) -> Result<()> {
         match self.peek() {
             None => Ok(()),
             Some(Tok::Other) if self.toks.len() == self.at + 1 && self.sql[self.toks[self.at].0..].trim() == ";" => Ok(()),
@@ -283,6 +333,180 @@ fn copy_options(c: &mut Cursor<'_>) -> Result<Vec<(String, CopyValue)>> {
     Ok(out)
 }
 
+/// `('k' = 'v', ...)` (values) or `('k', ...)` (keys only).
+fn property_list(c: &mut Cursor<'_>, values: bool) -> Result<Vec<(String, String)>> {
+    if c.peek() != Some(&Tok::Open) {
+        return Err(c.error("expected a parenthesized list"));
+    }
+    c.at += 1;
+    let mut out = vec![];
+    loop {
+        let key = match c.peek().cloned() {
+            Some(Tok::Text(t) | Tok::Quoted(t) | Tok::Word(t)) => t,
+            _ => return Err(c.error("expected a property name")),
+        };
+        c.at += 1;
+        let mut value = String::new();
+        if values {
+            if !matches!(c.toks.get(c.at), Some((o, Tok::Other)) if c.sql[*o..].starts_with('=')) {
+                return Err(c.error("expected '='"));
+            }
+            c.at += 1;
+            value = match c.peek().cloned() {
+                Some(Tok::Text(t) | Tok::Quoted(t) | Tok::Word(t)) => t,
+                Some(Tok::Number(n)) => {
+                    if n.fract() == 0.0 {
+                        format!("{}", n as i64)
+                    } else {
+                        n.to_string()
+                    }
+                }
+                _ => return Err(c.error("expected a property value")),
+            };
+            c.at += 1;
+        }
+        out.push((key, value));
+        match c.peek() {
+            Some(Tok::Comma) => c.at += 1,
+            Some(Tok::Close) => {
+                c.at += 1;
+                return Ok(out);
+            }
+            _ => return Err(c.error("expected ',' or ')'")),
+        }
+    }
+}
+
+fn paren_or_rest(c: &mut Cursor<'_>) -> Result<String> {
+    if c.peek() == Some(&Tok::Open) && c.toks.last().map(|t| &t.1) == Some(&Tok::Close) { c.parenthesized() } else { c.rest() }
+}
+
+/// Statements on Delta tables that do not change rows, or `None` for any other text.
+fn parse_maintenance(c: &mut Cursor<'_>) -> Result<Option<Maintenance>> {
+    let save = c.at;
+    if c.keyword("describe") || c.keyword("desc") {
+        for (word, history) in [("history", true), ("detail", false)] {
+            let follows_name = matches!(c.toks.get(c.at + 1), Some((_, Tok::Word(_) | Tok::Quoted(_))));
+            if follows_name && c.keyword(word) {
+                let name = c.name()?;
+                if !history {
+                    c.done()?;
+                    return Ok(Some(Maintenance::Detail { name }));
+                }
+                let limit = if c.keyword("limit") {
+                    match c.peek().cloned() {
+                        Some(Tok::Number(n)) if n >= 0.0 && n.fract() == 0.0 => {
+                            c.at += 1;
+                            Some(n as usize)
+                        }
+                        _ => return Err(c.error("LIMIT expects a number")),
+                    }
+                } else {
+                    None
+                };
+                c.done()?;
+                return Ok(Some(Maintenance::History { name, limit }));
+            }
+        }
+        c.at = save;
+        return Ok(None);
+    }
+    if c.keyword("optimize") {
+        let name = c.name()?;
+        let predicate = if c.keyword("where") {
+            Some(c.rest()?)
+        } else {
+            c.done()?;
+            None
+        };
+        return Ok(Some(Maintenance::Optimize { name, predicate }));
+    }
+    if c.keyword("vacuum") {
+        let name = c.name()?;
+        let (mut retain_hours, mut dry_run, mut force) = (None, false, false);
+        loop {
+            if c.keyword("retain") {
+                let Some(Tok::Number(n)) = c.peek().cloned() else { return Err(c.error("RETAIN expects a number of hours")) };
+                c.at += 1;
+                if !c.keyword("hours") && !c.keyword("hour") {
+                    return Err(c.error("expected HOURS"));
+                }
+                retain_hours = Some(n);
+            } else if c.keywords(&["dry", "run"]) {
+                dry_run = true;
+            } else if c.keyword("force") {
+                force = true;
+            } else {
+                break;
+            }
+        }
+        c.done()?;
+        return Ok(Some(Maintenance::Vacuum { name, retain_hours, dry_run, force }));
+    }
+    if c.keyword("restore") {
+        c.keyword("table");
+        let name = c.name()?;
+        c.expect("to")?;
+        let to = if c.keywords(&["version", "as", "of"]) {
+            match c.peek().cloned() {
+                Some(Tok::Number(n)) if n >= 0.0 && n.fract() == 0.0 => {
+                    c.at += 1;
+                    RestoreTo::Version(n as u64)
+                }
+                _ => return Err(c.error("VERSION AS OF expects a version number")),
+            }
+        } else if c.keywords(&["timestamp", "as", "of"]) {
+            RestoreTo::Timestamp(c.text()?)
+        } else {
+            return Err(c.error("expected VERSION AS OF n or TIMESTAMP AS OF '...'"));
+        };
+        c.done()?;
+        return Ok(Some(Maintenance::Restore { name, to }));
+    }
+    if c.keywords(&["comment", "on"]) {
+        c.keyword("table");
+        let name = c.name()?;
+        c.expect("is")?;
+        let comment = if c.keyword("null") { None } else { Some(c.text()?) };
+        c.done()?;
+        return Ok(Some(Maintenance::Comment { name, comment }));
+    }
+    if c.keywords(&["alter", "table"]) {
+        let name = c.name()?;
+        if c.keyword("add") {
+            if !c.keyword("columns") {
+                c.expect("column")?;
+            }
+            let columns = parse_columns(&paren_or_rest(c)?)?;
+            return Ok(Some(Maintenance::AddColumns { name, columns }));
+        }
+        if c.keyword("rename") {
+            c.expect("column")?;
+            let from = c.name()?;
+            c.expect("to")?;
+            let to = c.name()?;
+            c.done()?;
+            return Ok(Some(Maintenance::RenameColumn { name, from, to }));
+        }
+        if c.keyword("set") {
+            c.expect("tblproperties")?;
+            let properties = property_list(c, true)?;
+            c.done()?;
+            return Ok(Some(Maintenance::SetProperties { name, properties }));
+        }
+        if c.keyword("unset") {
+            c.expect("tblproperties")?;
+            let if_exists = c.keywords(&["if", "exists"]);
+            let keys = property_list(c, false)?.into_iter().map(|(k, _)| k).collect();
+            c.done()?;
+            return Ok(Some(Maintenance::UnsetProperties { name, keys, if_exists }));
+        }
+        return Err(c.error("expected ADD COLUMN, RENAME COLUMN, SET TBLPROPERTIES or UNSET TBLPROPERTIES after ALTER TABLE t"));
+    }
+    c.at = save;
+    Ok(None)
+}
+
 /// What a SQL text does: a write (with its parts) or a query.
 pub fn parse_command(sql: &str) -> Result<Command> {
     let toks = tokenize(sql)?;
@@ -306,23 +530,63 @@ pub fn parse_command(sql: &str) -> Result<Command> {
             return Ok(Command::CreateSchema { name, if_not_exists });
         }
         let replace = c.keywords(&["or", "replace"]);
+        let temp = c.keyword("temp") || c.keyword("temporary");
+        if c.keyword("view") {
+            let if_not_exists = c.keywords(&["if", "not", "exists"]);
+            let name = c.name()?;
+            c.expect("as")?;
+            let query = if c.peek() == Some(&Tok::Open) && c.toks.last().map(|t| &t.1) == Some(&Tok::Close) { c.parenthesized()? } else { c.rest()? };
+            return Ok(Command::CreateView { name, replace, if_not_exists, temp, query });
+        }
+        if temp {
+            return Err(c.error("expected VIEW"));
+        }
         c.expect("table")?;
         let if_not_exists = c.keywords(&["if", "not", "exists"]);
         let name = c.name()?;
-        let partition_by = if c.keywords(&["partitioned", "by"]) || c.keywords(&["partition", "by"]) { c.name_list()? } else { vec![] };
+        let columns = if c.peek() == Some(&Tok::Open) { Some(parse_columns(&c.parenthesized()?)?) } else { None };
+        let (mut partition_by, mut using, mut comment) = (vec![], None, None);
+        loop {
+            if c.keywords(&["partitioned", "by"]) || c.keywords(&["partition", "by"]) {
+                partition_by = c.name_list()?;
+            } else if c.keyword("using") {
+                using = Some(c.name()?.to_ascii_lowercase());
+            } else if c.keyword("comment") {
+                comment = Some(c.text()?);
+            } else {
+                break;
+            }
+        }
+        if let Some(columns) = columns {
+            if c.keyword("as") {
+                return Err(WhError::Sql("a column list cannot be combined with AS query: declare the columns or give a query".into()));
+            }
+            c.done()?;
+            return Ok(Command::CreateTable { name, replace, if_not_exists, columns, partition_by, using, comment });
+        }
         c.expect("as")?;
+        if comment.is_some() {
+            return Err(WhError::Sql("COMMENT needs column definitions: CREATE TABLE t (cols) COMMENT '..'".into()));
+        }
         let query = if c.peek() == Some(&Tok::Open) && c.toks.last().map(|t| &t.1) == Some(&Tok::Close) { c.parenthesized()? } else { c.rest()? };
-        return Ok(Command::CreateTableAs { name, replace, if_not_exists, partition_by, query });
+        return Ok(Command::CreateTableAs { name, replace, if_not_exists, partition_by, using, query });
     }
     if c.keyword("insert") {
-        c.expect("into")?;
+        let overwrite = c.keyword("overwrite");
+        if overwrite {
+            c.keyword("into");
+            c.keyword("table");
+        } else {
+            c.expect("into")?;
+            c.keyword("table");
+        }
         let name = c.name()?;
         // a column list, not a parenthesized query
         let columns = match (c.peek(), c.toks.get(c.at + 1).map(|t| &t.1)) {
             (Some(Tok::Open), Some(Tok::Word(w))) if !["select", "with", "values", "from"].contains(&w.to_ascii_lowercase().as_str()) => c.name_list()?,
             _ => vec![],
         };
-        return Ok(Command::Insert { name, columns, query: c.rest()? });
+        return Ok(Command::Insert { name, columns, overwrite, query: c.rest()? });
     }
     if c.keyword("drop") {
         if c.keyword("schema") {
@@ -335,11 +599,59 @@ pub fn parse_command(sql: &str) -> Result<Command> {
             c.done()?;
             return Ok(Command::DropSchema { name, if_exists, cascade });
         }
+        if c.keyword("view") {
+            let if_exists = c.keywords(&["if", "exists"]);
+            let name = c.name()?;
+            c.done()?;
+            return Ok(Command::DropView { name, if_exists });
+        }
         c.expect("table")?;
         let if_exists = c.keywords(&["if", "exists"]);
         let name = c.name()?;
         c.done()?;
         return Ok(Command::DropTable { name, if_exists });
+    }
+    if c.keyword("truncate") {
+        c.keyword("table");
+        let name = c.name()?;
+        c.done()?;
+        return Ok(Command::Truncate { name });
+    }
+    if c.keyword("show") {
+        if c.keyword("tables") {
+            let schema = if c.keyword("in") || c.keyword("from") { Some(c.name()?) } else { None };
+            c.done()?;
+            return Ok(Command::ShowTables { schema });
+        }
+        if c.keyword("schemas") || c.keyword("databases") {
+            c.done()?;
+            return Ok(Command::ShowSchemas);
+        }
+        if c.keyword("columns") {
+            if !c.keyword("from") {
+                c.expect("in")?;
+            }
+            let name = c.name()?;
+            c.done()?;
+            return Ok(Command::Describe { name });
+        }
+        return Err(c.error("expected TABLES, SCHEMAS or COLUMNS after SHOW"));
+    }
+    if matches!(c.peek(), Some(Tok::Word(w)) if ["delete", "update", "merge"].iter().any(|k| w.eq_ignore_ascii_case(k))) {
+        return Ok(Command::Dml { sql: sql.trim().trim_end_matches(';').trim().to_string() });
+    }
+    if let Some(m) = parse_maintenance(&mut c)? {
+        return Ok(Command::Maintenance(m));
+    }
+    if c.keyword("describe") || c.keyword("desc") {
+        let query_follows = matches!(c.peek(), Some(Tok::Word(w)) if ["select", "with", "from"].contains(&w.to_ascii_lowercase().as_str()));
+        if query_follows {
+            return Ok(Command::Query);
+        }
+        c.keyword("table");
+        let name = c.name()?;
+        c.done()?;
+        return Ok(Command::Describe { name });
     }
     if c.keyword("use") {
         let schema = c.name()?;
@@ -384,20 +696,21 @@ mod tests {
                 replace: true,
                 if_not_exists: true,
                 partition_by: vec!["region".into()],
+                using: None,
                 query: "select * from s".into(),
             }
         );
         assert_eq!(
             parse_command("CREATE TABLE t AS (select 1 as x)").unwrap(),
-            Command::CreateTableAs { name: "t".into(), replace: false, if_not_exists: false, partition_by: vec![], query: "select 1 as x".into() }
+            Command::CreateTableAs { name: "t".into(), replace: false, if_not_exists: false, partition_by: vec![], using: None, query: "select 1 as x".into() }
         );
         assert_eq!(
             parse_command("insert into t (a, b) select 1, 2").unwrap(),
-            Command::Insert { name: "t".into(), columns: vec!["a".into(), "b".into()], query: "select 1, 2".into() }
+            Command::Insert { name: "t".into(), columns: vec!["a".into(), "b".into()], overwrite: false, query: "select 1, 2".into() }
         );
         assert_eq!(
             parse_command("insert into t (select 1)").unwrap(),
-            Command::Insert { name: "t".into(), columns: vec![], query: "(select 1)".into() }
+            Command::Insert { name: "t".into(), columns: vec![], overwrite: false, query: "(select 1)".into() }
         );
         assert_eq!(parse_command("drop table if exists t;").unwrap(), Command::DropTable { name: "t".into(), if_exists: true });
     }
@@ -426,11 +739,11 @@ mod tests {
         assert!(parse_command("drop table \"a\" \"b\"").unwrap_err().to_string().contains("unexpected text"));
         assert_eq!(
             parse_command("create table s.t as select 1").unwrap(),
-            Command::CreateTableAs { name: "s.t".into(), replace: false, if_not_exists: false, partition_by: vec![], query: "select 1".into() }
+            Command::CreateTableAs { name: "s.t".into(), replace: false, if_not_exists: false, partition_by: vec![], using: None, query: "select 1".into() }
         );
         assert_eq!(
             parse_command("insert into \"s\".\"t\" (a) select 1").unwrap(),
-            Command::Insert { name: "s.t".into(), columns: vec!["a".into()], query: "select 1".into() }
+            Command::Insert { name: "s.t".into(), columns: vec!["a".into()], overwrite: false, query: "select 1".into() }
         );
     }
 

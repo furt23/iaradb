@@ -270,6 +270,19 @@ describe("clusters", () => {
     expect(() => svc.clone("nope")).toThrow(/unknown cluster/);
   });
 
+  it("records the owner on create and clone, and shows it in the views", () => {
+    const { svc, store } = setup({ local: false });
+    const a = svc.create({ name: "dev", owner: "alice@x.com" });
+    const copy = svc.clone(a.id, "bob@x.com");
+    const legacy = svc.create({ name: "old" });
+    expect(store.cluster(a.id)?.owner).toBe("alice@x.com");
+    expect(store.cluster(copy.id)?.owner).toBe("bob@x.com");
+    expect("owner" in legacy).toBe(false);
+    const views = svc.views();
+    expect(views.find((v) => v.id === a.id)).toMatchObject({ owner: "alice@x.com", canManage: false });
+    expect(views.find((v) => v.id === legacy.id)?.owner).toBeUndefined();
+  });
+
   it("logs notebooks moving between clusters, and detaching them", () => {
     const { svc } = setup();
     const a = svc.create({ name: "a" });

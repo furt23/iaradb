@@ -13,6 +13,8 @@ export interface ClusterConfig {
   createdAt: number;
   /** the job run this cluster was made for (it goes away with its machine) */
   job?: string;
+  /** email of the member who created it (unset: made before owners existed, or sign-in is off) */
+  owner?: string;
 }
 
 /** The current machine of a cluster, if any. */
@@ -62,6 +64,9 @@ export interface ClusterView {
   isDefault: boolean;
   /** made for a job run (not offered for notebooks) */
   job?: string;
+  owner?: string;
+  /** the signed-in user may edit and delete it (set per request by the server actions; false from the service) */
+  canManage: boolean;
 }
 
 export const LOCAL_CLUSTER = "local";

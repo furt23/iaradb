@@ -11,7 +11,7 @@ import heapq
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from workhouse.kernel.notebook.analysis import Analysis, analyze
+from workhouse.kernel.notebook.analysis import ANY_WIDGET, Analysis, analyze
 from workhouse.kernel.notebook.model import Cell
 
 
@@ -27,6 +27,8 @@ class CellDeps:
 class DependencyGraph:
     def __init__(self, cells: list[Cell]) -> None:
         self.order = [c.id for c in cells]
+        #: the setup cell runs before every other cell (as marimo's does), whether or not they read its names
+        self.setup = frozenset(c.id for c in cells if c.setup)
         self.analyses = {c.id: analyze(c) for c in cells}
         self.definers: dict[str, list[str]] = {}
         for cid in self.order:
@@ -93,6 +95,10 @@ class DependencyGraph:
             if v not in index:
                 visit(v)
         return out
+
+    def widget_readers(self, name: str) -> list[str]:
+        """Cells that read or define the widget ``name`` (in notebook order): they re-run when its value changes."""
+        return [cid for cid in self.order if name in self.analyses[cid].widgets or ANY_WIDGET in self.analyses[cid].widgets]
 
     def descendants(self, cid: str) -> set[str]:
         seen: set[str] = set()

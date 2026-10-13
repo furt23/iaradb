@@ -1,0 +1,44 @@
+# Build context for docker/*.Dockerfile (the repository root).
+# Keep it small, and keep secrets out of every image.
+
+# dependencies and build output
+**/node_modules
+**/target
+**/.next
+**/.next*
+**/dist
+**/.astro
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/*.tsbuildinfo
+
+# native build artifacts from the Windows host
+**/*.pyd
+**/*.pyd.*
+**/*.pdb
+**/*.so
+
+# large data, reports and local output
+examples
+benchmarks
+docs-gap
+test-briefs
+**/test-results
+**/playwright-report
+bench_ec2.json
+
+# git, tool state and cloud credentials
+.git
+.claude
+.cargo
+.aws
+**/.aws
+
+# secrets: env files never enter an image
+**/.env
+**/.env.*
+**/*.env
+docker/*.env
+docker/cloudflared/

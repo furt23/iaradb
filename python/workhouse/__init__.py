@@ -15,6 +15,7 @@ pyarrow / pandas / polars zero-copy through the Arrow C stream interface.
 
 from __future__ import annotations
 
+import datetime as _datetime
 import os
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
@@ -35,6 +36,7 @@ from workhouse._workhouse import (
     set_num_threads,
 )
 from workhouse import _window
+from workhouse import widgets
 from workhouse._lists import ListNamespace
 from workhouse._structs import List, Struct, StructNamespace, StructUnnest, struct, struct_literal
 from workhouse._window import WindowMethods
@@ -81,10 +83,12 @@ __all__ = [
     "all",
     "row_number",
     "scan_parquet",
+    "scan_delta",
     "scan_csv",
     "scan_ndjson",
     "scan_json",
     "read_parquet",
+    "read_delta",
     "read_csv",
     "read_ndjson",
     "read_json",
@@ -94,6 +98,7 @@ __all__ = [
     "from_dict",
     "sql",
     "workspace",
+    "widgets",
     "set_num_threads",
     "num_threads",
     "set_memory_limit",
@@ -1050,11 +1055,13 @@ class LazyFrame:
         lfs = [(o.lazy() if isinstance(o, DataFrame) else o)._lf for o in _flatten(others)]
         return LazyFrame(self._lf.union(lfs))
 
-    def sql(self, query: str, table_name: str = "self") -> LazyFrame:
-        """Run SQL against this frame (referenced as `self` by default)."""
+    def sql(self, query: str, table_name: str = "self", params: Any = None) -> LazyFrame:
+        """Run SQL against this frame (referenced as `self` by default).
+        ``params`` binds the query's placeholders: a list or tuple for ``$1``,
+        ``$2`` / ``?``, a dict for ``:name`` / ``$name``."""
         ctx = PySessionContext()
         ctx.register_lazy(table_name, self._lf)
-        return LazyFrame(ctx.sql(query))
+        return LazyFrame(ctx.sql(query, params))
 
     # ---- execution -------------------------------------------------------
     def explain(self, optimized: bool = True) -> str:
@@ -1086,6 +1093,28 @@ class LazyFrame:
 
     def fetch(self, n: int = 5) -> DataFrame:
         return self.limit(n).collect()
+
+    def sink_delta(
+        self,
+        path: str,
+        mode: str = "error",
+        partition_by: str | Sequence[str] | None = None,
+        storage_options: StorageOptions | None = None,
+        schema_mode: str | None = None,
+    ) -> dict[str, Any]:
+        """Write the result to a Delta table (a path or ``s3://`` URL) while it
+        is produced, without collecting it. ``mode``: ``"error"`` (the table
+        must not exist), ``"append"``, ``"overwrite"`` (replaces the rows; the
+        old files stay in the log for time travel) or ``"ignore"`` (no write if
+        the table exists). ``partition_by`` applies to a new table; later
+        writes keep the table's partitioning. ``schema_mode="merge"`` adds the
+        result's new columns to the table on append / overwrite. The data
+        files are added by a single commit, so a failing query leaves the table
+        as it was. Returns ``{"version", "files", "rows", "skipped"}``."""
+        if schema_mode not in (None, "merge"):
+            raise ValueError("schema_mode must be None or 'merge'")
+        cols = [partition_by] if isinstance(partition_by, str) else list(partition_by or [])
+        return self._lf.sink_delta(str(path), mode, cols or None, _storage(storage_options), schema_mode == "merge")
 
     def sink_parquet(
         self,
@@ -1322,8 +1351,21 @@ class DataFrame:
     def unique(self) -> DataFrame:
         return self.lazy().unique().collect()
 
-    def sql(self, query: str, table_name: str = "self") -> DataFrame:
-        return self.lazy().sql(query, table_name).collect()
+    def sql(self, query: str, table_name: str = "self", params: Any = None) -> DataFrame:
+        return self.lazy().sql(query, table_name, params).collect()
+
+    # ---- output ----------------------------------------------------------
+    def write_delta(
+        self,
+        path: str,
+        mode: str = "error",
+        partition_by: str | Sequence[str] | None = None,
+        storage_options: StorageOptions | None = None,
+        schema_mode: str | None = None,
+    ) -> None:
+        """Write to a Delta table (a path or ``s3://`` URL); see
+        ``LazyFrame.sink_delta`` for the modes and ``schema_mode``."""
+        self.lazy().sink_delta(path, mode, partition_by, storage_options, schema_mode)
 
     # ---- output ----------------------------------------------------------
     def write_parquet(
@@ -1369,6 +1411,38 @@ def scan_parquet(path: str, storage_options: StorageOptions | None = None) -> La
     """Lazily scan a Parquet file, directory, glob pattern or URL
     (``s3://bucket/prefix/``, ``s3://bucket/**/*.parquet``)."""
     return LazyFrame(_ctx().read_parquet(str(path), _storage(storage_options)))
+
+
+def _delta_millis(timestamp: Any) -> int | None:
+    """A time travel timestamp as milliseconds since the epoch: an int (already
+    milliseconds), a ``datetime`` (naive means UTC) or an ISO 8601 string."""
+    if timestamp is None:
+        return None
+    if isinstance(timestamp, bool):
+        raise TypeError("timestamp must be an int, a datetime or an ISO 8601 string")
+    if isinstance(timestamp, int):
+        return timestamp
+    if isinstance(timestamp, str):
+        timestamp = _datetime.datetime.fromisoformat(timestamp)
+    if isinstance(timestamp, _datetime.datetime):
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=_datetime.timezone.utc)
+        return round(timestamp.timestamp() * 1000)
+    raise TypeError("timestamp must be an int, a datetime or an ISO 8601 string")
+
+
+def scan_delta(
+    path: str,
+    version: int | None = None,
+    timestamp: Any = None,
+    storage_options: StorageOptions | None = None,
+) -> LazyFrame:
+    """Lazily scan a Delta table (a folder or ``s3://`` URL with a ``_delta_log``).
+    ``version`` or ``timestamp`` (a ``datetime``, an ISO 8601 string or
+    milliseconds since the epoch; the newest version committed at or before it)
+    read an older state of the table. Partition columns come from the log, and
+    filters skip files by partition value and by the log's statistics."""
+    return LazyFrame(_ctx().read_delta(str(path), version, _delta_millis(timestamp), _storage(storage_options)))
 
 
 def scan_csv(
@@ -1431,6 +1505,15 @@ def scan_json(
 
 def read_parquet(path: str, storage_options: StorageOptions | None = None) -> DataFrame:
     return scan_parquet(path, storage_options).collect()
+
+
+def read_delta(
+    path: str,
+    version: int | None = None,
+    timestamp: Any = None,
+    storage_options: StorageOptions | None = None,
+) -> DataFrame:
+    return scan_delta(path, version, timestamp, storage_options).collect()
 
 
 def read_csv(path: str, **kwargs: Any) -> DataFrame:
@@ -1502,6 +1585,21 @@ class SessionContext:
         self._ctx.register_parquet(name, str(path), _storage(storage_options), lazy)
         return self
 
+    def register_table(
+        self, name: str, path: str, storage_options: StorageOptions | None = None, lazy: bool = False
+    ) -> SessionContext:
+        """Register a folder of Parquet files or a Delta table (whichever the
+        folder holds, detected when the table loads)."""
+        self._ctx.register_table(name, str(path), _storage(storage_options), lazy)
+        return self
+
+    def register_delta(
+        self, name: str, path: str, storage_options: StorageOptions | None = None, lazy: bool = False
+    ) -> SessionContext:
+        """Register a Delta table (its newest version at load time)."""
+        self._ctx.register_delta(name, str(path), _storage(storage_options), lazy)
+        return self
+
     def register_csv(
         self,
         name: str,
@@ -1562,6 +1660,17 @@ class SessionContext:
     def warehouse(self) -> str | None:
         return self._ctx.warehouse()
 
+    def set_schema_location(
+        self, schema: str, path: str | os.PathLike[str] | None, storage_options: StorageOptions | None = None
+    ) -> SessionContext:
+        """Where ``CREATE TABLE schema.name AS ...`` writes the table: Parquet in
+        ``<path>/name/`` (a folder or ``s3://`` prefix), instead of the warehouse."""
+        self._ctx.set_schema_location(schema, None if path is None else str(path), _storage(storage_options))
+        return self
+
+    def schema_location(self, schema: str) -> str | None:
+        return self._ctx.schema_location(schema)
+
     def tables(self) -> list[str]:
         """Table names: bare for ``main``, ``schema.table`` for the others."""
         return self._ctx.tables()
@@ -1581,11 +1690,22 @@ class SessionContext:
     def table(self, name: str) -> LazyFrame:
         return LazyFrame(self._ctx.table(name))
 
-    def sql(self, query: str) -> LazyFrame:
-        return LazyFrame(self._ctx.sql(query))
+    def sql(self, query: str, params: Any = None) -> LazyFrame:
+        """Run SQL. ``params`` binds the query's placeholders: a list or tuple
+        for ``$1``, ``$2`` / ``?``, a dict for ``:name`` / ``$name``."""
+        return LazyFrame(self._ctx.sql(query, params))
 
     def read_parquet(self, path: str, storage_options: StorageOptions | None = None) -> LazyFrame:
         return LazyFrame(self._ctx.read_parquet(str(path), _storage(storage_options)))
+
+    def read_delta(
+        self,
+        path: str,
+        version: int | None = None,
+        timestamp: Any = None,
+        storage_options: StorageOptions | None = None,
+    ) -> LazyFrame:
+        return LazyFrame(self._ctx.read_delta(str(path), version, _delta_millis(timestamp), _storage(storage_options)))
 
     def read_csv(
         self,
@@ -1621,15 +1741,19 @@ def workspace(path: str | None = None) -> Any:
     return load(path)
 
 
-def sql(query: str, **tables: Any) -> LazyFrame:
-    """Run SQL; keyword arguments are registered as tables.
+def sql(query: str, params: Any = None, **tables: Any) -> LazyFrame:
+    """Run SQL; keyword arguments are registered as tables (``params`` is
+    reserved). ``params`` binds the query's placeholders: a list or tuple for
+    ``$1``, ``$2`` / ``?``, a dict for ``:name`` / ``$name``. Values may be
+    int, float, str, bool, None, bytes, date, datetime and Decimal.
 
-    >>> wh.sql("SELECT a, sum(b) FROM t GROUP BY a", t=my_frame).collect()
+    >>> wh.sql("SELECT a, sum(b) FROM t WHERE a > $1 GROUP BY a", [10], t=my_frame).collect()
+    >>> wh.sql("SELECT * FROM t WHERE d >= :since", {"since": date(2024, 1, 1)}, t=my_frame).collect()
     """
     ctx = PySessionContext()
     for name, obj in tables.items():
         _register(ctx, name, obj)
-    return LazyFrame(ctx.sql(query))
+    return LazyFrame(ctx.sql(query, params))
 
 
 # P1 frame ops (fill/drop nulls and NaN, unique, sample, row index, describe, union by name)

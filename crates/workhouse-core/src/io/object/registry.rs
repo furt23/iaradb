@@ -93,6 +93,9 @@ fn build_s3(url: &ObjectUrl, options: &StorageOptions) -> Result<Arc<dyn ObjectS
     let retry = RetryConfig { max_retries: 5, retry_timeout: std::time::Duration::from_secs(60), ..Default::default() };
     let mut b = AmazonS3Builder::from_env().with_bucket_name(&url.bucket).with_retry(retry);
     for (k, v) in options.iter() {
+        if super::put_if_absent::is_engine_option(k) {
+            continue;
+        }
         let key: AmazonS3ConfigKey = k.parse().map_err(|_| WhError::Storage(format!("unknown storage option '{k}'")))?;
         b = b.with_config(key, v);
     }

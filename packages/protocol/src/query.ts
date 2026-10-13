@@ -67,11 +67,23 @@ export interface AnalyzedNode {
   children: AnalyzedNode[];
 }
 
+/** A saved query's parameter kinds; `date` values travel as ISO `YYYY-MM-DD` strings. */
+export type QueryParamType = "text" | "number" | "boolean" | "date" | "select";
+
+/** Values for a query's `:name` placeholders, with the kind of each (a `date` string becomes a date in the kernel). */
+export interface QueryParams {
+  params?: Record<string, string | number | boolean | null>;
+  param_types?: Record<string, QueryParamType>;
+}
+
 /** A query run with profiling (the Studio's Analyze screen). */
 export interface QueryAnalysis {
   query: string;
   /** where the query came from (the Studio's own field: not set by the kernel) */
   source?: string;
+  /** the parameter values it ran with (the Studio's own fields, kept to run it again) */
+  params?: QueryParams["params"];
+  param_types?: QueryParams["param_types"];
   /** unix milliseconds */
   at: number;
   rows: number;

@@ -1,5 +1,6 @@
 "use client";
 
+import type { QueryParams } from "@workhouse/protocol";
 import { useRouter } from "next/navigation";
 import { useCallback, useState } from "react";
 
@@ -13,10 +14,10 @@ export function useAnalyze() {
   const guard = useGuard();
   const [pending, setPending] = useState(false);
   const analyze = useCallback(
-    async (query: string, source?: string) => {
+    async (query: string, source?: string, values?: QueryParams) => {
       setPending(true);
       try {
-        const done = await guard(async () => unwrap(await analyzeQuery(query, source)));
+        const done = await guard(async () => unwrap(await analyzeQuery(query, source, values)));
         if (done) router.push(`/analyze/${done.id}`);
       } finally {
         setPending(false);

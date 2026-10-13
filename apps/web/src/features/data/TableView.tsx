@@ -23,6 +23,7 @@ import { useNotify } from "@/features/shell/notify";
 import { formatBytes, formatCount } from "@/lib/format";
 import { useElementHeight } from "@/lib/useElementHeight";
 
+import { HistoryTab } from "./HistoryTab";
 import { ColumnsTable } from "./ColumnsTable";
 import { useData, type Load } from "./DataProvider";
 import { sampleQuery, sqlHref } from "./links";
@@ -51,7 +52,7 @@ function Loaded<T>({ load, onRetry, children }: { load: Load<T> | undefined; onR
   return <>{children(load.data)}</>;
 }
 
-type Section = "columns" | "sample";
+type Section = "columns" | "sample" | "history";
 /** the section each table showed last (tabs remount as they are switched) */
 const lastSection = new Map<string, Section>();
 
@@ -61,6 +62,7 @@ export function TableView({ table }: { table: TableRef }) {
   const notify = useNotify();
   const { name } = table;
   const [section, setSection] = useState<Section>(() => lastSection.get(name) ?? "columns");
+  const isDelta = table.format === "delta";
   const info = data.info(name);
   const ready = info?.status === "ready" ? info.data : null;
   const failed = info?.status === "failed";
@@ -86,11 +88,17 @@ export function TableView({ table }: { table: TableRef }) {
             <Typography variant="h3" noWrap>
               {name}
             </Typography>
-            <Chip label={table.format} size="small" variant="outlined" />
+            <Chip label={isDelta ? "Delta" : table.format} size="small" variant="outlined" />
+            {isDelta && typeof ready?.version === "number" && <Chip label={`v${ready.version}`} size="small" color="primary" variant="outlined" />}
           </Box>
           <Typography variant="mono" noWrap component="div" title={table.path} sx={{ color: "text.secondary", fontSize: 12 }}>
             {table.path}
           </Typography>
+          {isDelta && ready?.partitions && ready.partitions.length > 0 && (
+            <Typography variant="caption" component="div" sx={{ color: "text.secondary", mt: 0.5 }}>
+              Partitioned by {ready.partitions.join(", ")}
+            </Typography>
+          )}
           <Box sx={{ display: "flex", gap: 4, mt: 1.5 }}>
             <Stat label="Rows" value={stat((i) => formatCount(i.num_rows))} />
             <Stat label="Columns" value={stat((i) => String(i.columns.length))} />
@@ -122,12 +130,15 @@ export function TableView({ table }: { table: TableRef }) {
         }} sx={{ px: 2, minHeight: 38, borderBottom: 1, borderColor: "divider", "& .MuiTab-root": { minHeight: 38, py: 0, fontSize: 13 } }}>
         <Tab value="columns" label={ready ? `Columns (${ready.columns.length})` : "Columns"} />
         <Tab value="sample" label="Sample data" />
+        {isDelta && <Tab value="history" label="History" />}
       </Tabs>
       <Box ref={body} sx={{ flex: 1, minHeight: 0, overflow: "auto" }}>
         {section === "columns" ? (
           <Loaded load={info} onRetry={() => load(name, true)}>
             {(i) => <ColumnsTable info={i} />}
           </Loaded>
+        ) : section === "history" && isDelta ? (
+          <HistoryTab name={name} version={ready?.version} />
         ) : (
           <Loaded load={data.preview(name)} onRetry={() => load(name, true)}>
             {(output) => <OutputView output={output} kernelKey="workspace" tableHeight={sampleHeight} />}

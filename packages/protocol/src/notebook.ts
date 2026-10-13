@@ -74,11 +74,36 @@ export interface CellState {
   elapsed_ms: number | null;
 }
 
+export type WidgetKind = "text" | "number" | "dropdown" | "multiselect" | "checkbox" | "date";
+
+/** A widget value as JSON: text, number, choice, list of choices, boolean, or an ISO date (null: no date). */
+export type WidgetValue = string | number | boolean | string[] | null;
+
+/** A notebook widget (`wh.widgets.*`): what a cell defined. */
+export interface WidgetDefinition {
+  name: string;
+  kind: WidgetKind;
+  label: string;
+  default: WidgetValue;
+  /** dropdown and multiselect */
+  choices: (string | number)[] | null;
+  min: number | null;
+  max: number | null;
+  step: number | null;
+}
+
+export interface WidgetsState {
+  definitions: WidgetDefinition[];
+  values: Record<string, WidgetValue>;
+}
+
 export interface NotebookView {
   /** relative to the workspace root */
   path: string;
   cells: Cell[];
   states: Record<string, CellState>;
+  /** the widgets the cells defined (absent from older kernels) */
+  widgets?: WidgetsState;
 }
 
 export interface RunResult {

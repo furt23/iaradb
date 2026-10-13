@@ -23,6 +23,7 @@ use workhouse_core::types::parse_data_type;
 use workhouse_core::{JoinType, LazyFrame, Scalar, SessionContext, WhError};
 
 mod analyze;
+mod delta;
 mod file_options;
 mod memory;
 mod runtime;
@@ -97,6 +98,10 @@ fn py_scalar(obj: &Bound<'_, PyAny>) -> PyResult<Scalar> {
     if obj.is_instance_of::<PyString>() {
         return Ok(Scalar::utf8(&obj.extract::<String>()?));
     }
+    if let Ok(b) = obj.cast::<pyo3::types::PyBytes>() {
+        let bytes: &[u8] = b.as_bytes();
+        return Ok(Scalar::new(std::sync::Arc::new(arrow::array::BinaryArray::from_vec(vec![bytes]))));
+    }
     let datetime = py.import("datetime")?;
     if obj.is_instance(&datetime.getattr("datetime")?)? {
         if !obj.getattr("tzinfo")?.is_none() {
@@ -133,6 +138,36 @@ fn py_scalar(obj: &Bound<'_, PyAny>) -> PyResult<Scalar> {
         }
     }
     Err(PyTypeError::new_err(format!("cannot convert Python value of type '{tname}' to a literal")))
+}
+
+/// SQL parameters: a list / tuple (positional), a dict (named) or nothing.
+fn sql_params(obj: Option<&Bound<'_, PyAny>>) -> PyResult<workhouse_core::Params> {
+    use workhouse_core::Params;
+    let Some(obj) = obj.filter(|o| !o.is_none()) else {
+        return Ok(Params::None);
+    };
+    if let Ok(d) = obj.cast::<PyDict>() {
+        let mut map = std::collections::HashMap::new();
+        for (k, v) in d.iter() {
+            let key: String = k
+                .extract()
+                .map_err(|_| PyTypeError::new_err("named SQL parameters need string keys"))?;
+            let value = py_scalar(&v).map_err(|e| PyTypeError::new_err(format!("parameter '{key}': {e}")))?;
+            map.insert(key, value);
+        }
+        return Ok(Params::Named(map));
+    }
+    if obj.is_instance_of::<PyString>() || obj.is_instance_of::<pyo3::types::PyBytes>() {
+        return Err(PyTypeError::new_err("SQL parameters must be a list, tuple or dict, not a string or bytes"));
+    }
+    if obj.is_instance_of::<pyo3::types::PyList>() || obj.is_instance_of::<pyo3::types::PyTuple>() {
+        let mut values = vec![];
+        for (i, v) in obj.try_iter()?.enumerate() {
+            values.push(py_scalar(&v?).map_err(|e| PyTypeError::new_err(format!("parameter {}: {e}", i + 1)))?);
+        }
+        return Ok(Params::Positional(values));
+    }
+    Err(PyTypeError::new_err("SQL parameters must be a list, tuple or dict"))
 }
 
 // ---------------------------------------------------------------------------
@@ -632,6 +667,32 @@ impl PyLazyFrame {
         py.detach(move || lf.sink_parquet(&path, &opts, &storage)).py()
     }
 
+    /// Write the result to a Delta table (a path or object store URL) as it is
+    /// produced; returns `{"version", "files", "rows", "skipped"}`. `mode` is
+    /// `error`, `append`, `overwrite` or `ignore`; `merge_schema` lets an
+    /// append or overwrite add the result's new columns to the table.
+    #[pyo3(signature = (path, mode="error", partition_by=None, storage_options=None, merge_schema=false))]
+    fn sink_delta<'py>(
+        &self,
+        py: Python<'py>,
+        path: &str,
+        mode: &str,
+        partition_by: Option<Vec<String>>,
+        storage_options: Option<&Bound<'_, PyDict>>,
+        merge_schema: bool,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let storage = storage::options(storage_options)?;
+        let mode = workhouse_core::delta::WriteMode::parse(mode).py()?;
+        let (lf, path, partition_by) = (self.inner.clone(), path.to_string(), partition_by.unwrap_or_default());
+        let summary = py.detach(move || workhouse_core::delta::write_table(&lf, &path, &storage, mode, &partition_by, merge_schema)).py()?;
+        let out = PyDict::new(py);
+        out.set_item("version", summary.version)?;
+        out.set_item("files", summary.files)?;
+        out.set_item("rows", summary.rows)?;
+        out.set_item("skipped", summary.skipped)?;
+        Ok(out)
+    }
+
     /// Write the result to CSV as it is produced; returns the rows written.
     #[pyo3(signature = (path, has_header=true, delimiter=",", storage_options=None))]
     fn sink_csv(&self, py: Python<'_>, path: &str, has_header: bool, delimiter: &str, storage_options: Option<&Bound<'_, PyDict>>) -> PyResult<usize> {
@@ -720,6 +781,22 @@ impl PySessionContext {
         let storage = storage::options(storage_options)?;
         let (ctx, name, path) = (self.inner.clone(), name.to_string(), path.to_string());
         py.detach(move || ctx.register_parquet_with(&name, &path, &storage, lazy)).py()
+    }
+
+    /// Register a folder of Parquet files or a Delta table (told apart once, when the table loads).
+    #[pyo3(signature = (name, path, storage_options=None, lazy=false))]
+    fn register_table(&self, py: Python<'_>, name: &str, path: &str, storage_options: Option<&Bound<'_, PyDict>>, lazy: bool) -> PyResult<()> {
+        let storage = storage::options(storage_options)?;
+        let (ctx, name, path) = (self.inner.clone(), name.to_string(), path.to_string());
+        py.detach(move || ctx.register_table_at(&name, &path, &storage, lazy)).py()
+    }
+
+    /// Register a Delta table, at its newest version.
+    #[pyo3(signature = (name, path, storage_options=None, lazy=false))]
+    fn register_delta(&self, py: Python<'_>, name: &str, path: &str, storage_options: Option<&Bound<'_, PyDict>>, lazy: bool) -> PyResult<()> {
+        let storage = storage::options(storage_options)?;
+        let (ctx, name, path) = (self.inner.clone(), name.to_string(), path.to_string());
+        py.detach(move || ctx.register_delta(&name, &path, &storage, None, lazy)).py()
     }
 
     #[pyo3(signature = (name, path, has_header=true, delimiter=",", infer_rows=10000, parallel=true, storage_options=None, lazy=false, options=None))]
@@ -819,6 +896,17 @@ impl PySessionContext {
         self.inner.warehouse().map(|(p, _)| p)
     }
 
+    /// Where `CREATE TABLE schema.t AS ...` writes `t/` (None: the warehouse).
+    #[pyo3(signature = (schema, path, storage_options=None))]
+    fn set_schema_location(&self, schema: &str, path: Option<&str>, storage_options: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
+        self.inner.set_schema_location(schema, path, &storage::options(storage_options)?);
+        Ok(())
+    }
+
+    fn schema_location(&self, schema: &str) -> Option<String> {
+        self.inner.schema_location(schema).map(|(p, _)| p)
+    }
+
     /// The tables' display names: bare in `main`, `schema.table` elsewhere.
     fn tables(&self) -> Vec<String> {
         self.inner.table_names()
@@ -839,9 +927,12 @@ impl PySessionContext {
         lf(py.detach(move || ctx.table(&name)))
     }
 
-    fn sql(&self, py: Python<'_>, query: &str) -> PyResult<PyLazyFrame> {
+    /// `params`: a list or tuple (`$1`, `$2`, `?`) or a dict (`:name`, `$name`).
+    #[pyo3(signature = (query, params=None))]
+    fn sql(&self, py: Python<'_>, query: &str, params: Option<&Bound<'_, PyAny>>) -> PyResult<PyLazyFrame> {
+        let params = sql_params(params)?;
         let (ctx, q) = (self.inner.clone(), query.to_string());
-        lf(py.detach(move || ctx.sql(&q)))
+        lf(py.detach(move || ctx.sql_with(&q, &params)))
     }
 
     #[pyo3(signature = (path, storage_options=None))]
@@ -849,6 +940,28 @@ impl PySessionContext {
         let storage = storage::options(storage_options)?;
         let (ctx, path) = (self.inner.clone(), path.to_string());
         lf(py.detach(move || ctx.read_parquet_with(&path, &storage)))
+    }
+
+    /// A Delta table; `timestamp` is milliseconds since the epoch.
+    #[pyo3(signature = (path, version=None, timestamp=None, storage_options=None))]
+    fn read_delta(
+        &self,
+        py: Python<'_>,
+        path: &str,
+        version: Option<u64>,
+        timestamp: Option<i64>,
+        storage_options: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<PyLazyFrame> {
+        use workhouse_core::delta::VersionSpec;
+        let spec = match (version, timestamp) {
+            (Some(_), Some(_)) => return Err(PyValueError::new_err("give a version or a timestamp, not both")),
+            (Some(v), None) => Some(VersionSpec::Version(v)),
+            (None, Some(t)) => Some(VersionSpec::Timestamp(t)),
+            (None, None) => None,
+        };
+        let storage = storage::options(storage_options)?;
+        let (ctx, path) = (self.inner.clone(), path.to_string());
+        lf(py.detach(move || ctx.read_delta(&path, &storage, spec)))
     }
 
     #[pyo3(signature = (path, has_header=true, delimiter=",", infer_rows=10000, parallel=true, storage_options=None, options=None))]
@@ -902,6 +1015,7 @@ fn _workhouse(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("StorageError", m.py().get_type::<StorageError>())?;
     runtime::register(m)?;
     storage::register(m)?;
+    delta::register(m)?;
     memory::register(m)?;
     m.add_function(wrap_pyfunction!(set_num_threads, m)?)?;
     m.add_function(wrap_pyfunction!(num_threads, m)?)?;

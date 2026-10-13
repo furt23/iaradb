@@ -2,6 +2,7 @@
 
 import ArrowDropDown from "@mui/icons-material/ArrowDropDown";
 import ClearAll from "@mui/icons-material/ClearAll";
+import CodeOutlined from "@mui/icons-material/CodeOutlined";
 import PlayCircleOutline from "@mui/icons-material/PlayCircleOutlineOutlined";
 import RestartAlt from "@mui/icons-material/RestartAlt";
 import StopCircleOutlined from "@mui/icons-material/StopCircleOutlined";
@@ -20,6 +21,8 @@ export interface KernelMenuProps {
   onRestartAndClear(): void;
   onRestartAndRunAll(): void;
   onClearOutputs(): void;
+  /** the notebook's setup code (absent: the notebook has none) */
+  onShowSetup?(): void;
 }
 
 function Item({ icon, children, ...props }: MenuItemProps & { icon: ReactNode }) {
@@ -32,7 +35,7 @@ function Item({ icon, children, ...props }: MenuItemProps & { icon: ReactNode })
 }
 
 /** The kernel's actions: interrupt, restarts, clearing outputs. */
-export function KernelMenu({ running, onInterrupt, onRestart, onRestartAndClear, onRestartAndRunAll, onClearOutputs }: KernelMenuProps) {
+export function KernelMenu({ running, onInterrupt, onRestart, onRestartAndClear, onRestartAndRunAll, onClearOutputs, onShowSetup }: KernelMenuProps) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const run = (fn: () => void) => () => {
     setAnchor(null);
@@ -72,6 +75,12 @@ export function KernelMenu({ running, onInterrupt, onRestart, onRestartAndClear,
         <Item icon={<ClearAll fontSize="small" />} onClick={run(onClearOutputs)}>
           Clear all outputs
         </Item>
+        {onShowSetup && <Divider />}
+        {onShowSetup && (
+          <Item icon={<CodeOutlined fontSize="small" />} onClick={run(onShowSetup)}>
+            Show setup code
+          </Item>
+        )}
       </Menu>
     </>
   );

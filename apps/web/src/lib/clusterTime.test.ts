@@ -16,6 +16,7 @@ const base: ClusterView = {
   lastActivity: 5 * MIN,
   notebooks: [],
   isDefault: false,
+  canManage: false,
 };
 
 describe("clusterTime", () => {

@@ -39,13 +39,15 @@ export function DetailActions({
           Terminate
         </Button>
       )}
-      <Button variant="outlined" startIcon={<EditOutlined />} onClick={onEdit}>
-        Edit
-      </Button>
+      {c.canManage && (
+        <Button variant="outlined" startIcon={<EditOutlined />} onClick={onEdit}>
+          Edit
+        </Button>
+      )}
       <Button variant="outlined" startIcon={<ContentCopyOutlined />} onClick={() => actions.clone(c)}>
         Clone
       </Button>
-      {stopped && (
+      {c.canManage && stopped && (
         <Tooltip title="Delete">
           <IconButton onClick={() => actions.remove(c)} aria-label={`delete ${c.name}`}>
             <DeleteOutline />

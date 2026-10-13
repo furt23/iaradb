@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { NotebookView } from "@workhouse/protocol";
+import type { NotebookView, WidgetValue } from "@workhouse/protocol";
 
 import { isWithin, movedPath } from "@/lib/paths";
 
@@ -48,6 +48,8 @@ export class KernelManager {
   private readonly clusterOf = new WeakMap<KernelClient, string>();
   /** notebooks that moved: old path -> new path and when (late saves of old editors follow them for a while) */
   private readonly renamed = new Map<string, { to: string; at: number }>();
+  /** widget values by notebook: a restarted kernel opens its notebook with them (kernels forget values) */
+  private readonly widgetValues = new Map<string, Record<string, WidgetValue>>();
   private chain: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly cfg: StudioConfig) {
@@ -104,17 +106,24 @@ export class KernelManager {
     return this.get(WORKSPACE_KERNEL);
   }
 
-  /** A kernel of its own for a job run, on the run's cluster (its activity keeps the cluster up). */
-  forJob(runId: string, clusterId: string): KernelClient {
-    const key = jobKernel(runId);
+  /** A kernel of its own for a task of a job run (`id`: `<run>:<task>`), on the run's cluster (its activity keeps the cluster up). */
+  forJob(id: string, clusterId: string): KernelClient {
+    const key = jobKernel(id);
     this.jobClusters.set(key, clusterId);
     return this.get(key);
   }
 
-  endJob(runId: string): void {
-    const key = jobKernel(runId);
+  endJob(id: string): void {
+    const key = jobKernel(id);
     this.restart(key);
     this.jobClusters.delete(key);
+  }
+
+  /** What the notebook's widgets hold now (from the kernel), for when its kernel restarts. */
+  rememberWidgets(path: string, values: Record<string, WidgetValue>): void {
+    const at = this.currentPath(path);
+    // merged: after a restart the kernel only reports the widgets its cells have defined again
+    this.widgetValues.set(at, { ...this.widgetValues.get(at), ...values });
   }
 
   /** Run notebook file operations (saves, renames, deletes) one at a time. */
@@ -156,7 +165,7 @@ export class KernelManager {
       const source = await readNotebookSource(path); // no kernel for a notebook that does not exist
       clusters.ensureAttached(path);
       kernel = this.get(notebookKernel(path));
-      view = await kernel.request("notebook.open", { path, source });
+      view = await kernel.request("notebook.open", { path, source, widgets: this.widgetValues.get(path) });
     }
     this.opened.add(kernel);
     return { kernel, view };
@@ -172,7 +181,7 @@ export class KernelManager {
     clusters.ensureAttached(path);
     const kernel = this.get(key);
     if (!this.opened.has(kernel)) {
-      await kernel.request("notebook.open", { path, source });
+      await kernel.request("notebook.open", { path, source, widgets: this.widgetValues.get(path) });
       this.opened.add(kernel);
     }
     return kernel;
@@ -200,6 +209,11 @@ export class KernelManager {
       this.kernels.delete(key);
       this.kernels.set(notebookKernel(next), kernel);
       this.renamed.set(path!, { to: next, at: Date.now() });
+      const widgets = this.widgetValues.get(path!);
+      if (widgets) {
+        this.widgetValues.delete(path!);
+        this.widgetValues.set(next, widgets);
+      }
       if (kernel.alive && this.opened.has(kernel)) await kernel.request("notebook.rename", { path: next });
     }
   }

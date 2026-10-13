@@ -1,7 +1,7 @@
 import type { Cell, CellStatus, NotebookView } from "@workhouse/protocol";
 import { describe, expect, it } from "vitest";
 
-import { initialState, isStale, makeCell, newCellId, nextResultName, notebookReducer, totalElapsed, type NotebookAction, type NotebookState } from "./notebookState";
+import { fullIndex, initialState, isStale, makeCell, newCellId, nextResultName, notebookReducer, setupCell, setupError, totalElapsed, visibleCells, type NotebookAction, type NotebookState } from "./notebookState";
 
 const st = (cell_id: string, status: CellStatus, elapsed_ms: number | null = null): NotebookAction => ({
   type: "cell.state",
@@ -146,5 +146,65 @@ describe("newCellId", () => {
     for (const id of ids) expect(id).toMatch(/^[a-z0-9]{8}$/);
     expect(new Set(ids).size).toBe(100);
     expect(makeCell("python", []).id).toMatch(/^[a-z0-9]{8}$/);
+  });
+});
+
+describe("notebook state with a setup cell", () => {
+  const setup: Cell = { ...cell("setup", "import marimo as mo\nws = None"), name: "setup", setup: true };
+  const withSetup = (): NotebookState =>
+    initialState({ path: "nb.py", cells: [setup, cell("a", "x = 1"), cell("b", "y = x")], states: {} });
+  const ids = (s: NotebookState) => s.cells.map((c) => c.id);
+
+  it("hides the setup cell and finds it", () => {
+    const s = withSetup();
+    expect(visibleCells(s.cells).map((c) => c.id)).toEqual(["a", "b"]);
+    expect(setupCell(s.cells)?.id).toBe("setup");
+    const plain = state();
+    expect(visibleCells(plain.cells)).toBe(plain.cells);
+  });
+
+  it("adds cells by visible position: at the top they go after the setup cell", () => {
+    let s = notebookReducer(withSetup(), { type: "add", index: 0, cell: cell("t", "") });
+    expect(ids(s)).toEqual(["setup", "t", "a", "b"]);
+    s = notebookReducer(s, { type: "add", index: 3, cell: cell("e", "") });
+    expect(ids(s)).toEqual(["setup", "t", "a", "b", "e"]);
+    s = notebookReducer(s, { type: "add", index: 2, cell: cell("m", "") });
+    expect(ids(s)).toEqual(["setup", "t", "a", "m", "b", "e"]);
+    expect(fullIndex([setup], 0)).toBe(1);
+    expect(fullIndex([setup], 5)).toBe(1);
+  });
+
+  it("moves cells past each other but never past the setup cell", () => {
+    let s = withSetup();
+    expect(notebookReducer(s, { type: "move", id: "a", delta: -1 })).toBe(s);
+    s = notebookReducer(s, { type: "move", id: "a", delta: 1 });
+    expect(ids(s)).toEqual(["setup", "b", "a"]);
+    expect(notebookReducer(s, { type: "move", id: "a", delta: 1 })).toBe(s);
+    expect(notebookReducer(s, { type: "move", id: "setup", delta: 1 })).toBe(s);
+  });
+
+  it("reorders visible cells only, and cannot delete the setup cell", () => {
+    let s = withSetup();
+    expect(notebookReducer(s, { type: "reorder", id: "a", over: "setup" })).toBe(s);
+    expect(notebookReducer(s, { type: "remove", id: "setup" })).toBe(s);
+    s = notebookReducer(s, { type: "reorder", id: "b", over: "a" });
+    expect(ids(s)).toEqual(["setup", "b", "a"]);
+  });
+
+  it("edits the setup code like any cell's", () => {
+    const s = notebookReducer(withSetup(), { type: "edit", id: "setup", patch: { code: "import marimo as mo" } });
+    expect(s.dirty).toBe(true);
+    expect(setupCell(s.cells)?.code).toBe("import marimo as mo");
+  });
+
+  it("reports the first line of a setup failure, until the code is edited", () => {
+    let s = withSetup();
+    expect(setupError(s)).toBeNull();
+    const error = { type: "error" as const, ename: "ModuleNotFoundError", evalue: "No module named 'foo'\nsecond line", traceback: "" };
+    s = notebookReducer(s, { type: "run", cells: s.cells, at: 0 });
+    s = notebookReducer(s, { type: "cell.state", data: { cell_id: "setup", status: "error", stale: false, output: error, streams: [], elapsed_ms: 1 } });
+    expect(setupError(s)).toBe("ModuleNotFoundError: No module named 'foo'");
+    s = notebookReducer(s, { type: "edit", id: "setup", patch: { code: "import foo" } });
+    expect(setupError(s)).toBeNull();
   });
 });
