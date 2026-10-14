@@ -29,3 +29,4 @@ docker/*.env
 !docker/*.env.example
 docker/cloudflared/*
 !docker/cloudflared/config.yml.example
+.data
