@@ -25,7 +25,7 @@ packages/ui             Studio UI components
 
 1. SQL is parsed with sqlparser. The DataFrame API builds the same logical plan.
 2. The optimizer rewrites the plan: constant folding, predicate and projection pushdown, limit and top-k pushdown into scans, and subquery decorrelation. Correlated `EXISTS` and `IN` become semi or anti joins, and correlated scalar subqueries become an aggregation joined back. Decorrelation handles equality correlations only.
-3. Joins are ordered greedily from cardinality estimates. For Parquet the estimates come from row group counts, min/max statistics and distinct counts.
+3. Joins of up to 12 relations are ordered by dynamic programming over cardinality estimates, larger ones greedily. Equalities are grouped into classes, so `a = b AND b = c` also lets `a` join `c` directly. For Parquet the estimates come from row group counts, min/max statistics and distinct counts.
 4. The physical plan is cut into pipelines at hash join builds, hash aggregations and sorts.
 
 ## Execution
@@ -38,7 +38,8 @@ packages/ui             Studio UI components
 
 ### Joins and aggregation
 
-- Joins: inner, left, right, full, semi and anti, with extra non-equality predicates. The hash table is built in parallel. For outer, semi and anti joins the smaller side is the build side.
+- Joins: inner, left, right, full, semi and anti, with extra non-equality predicates. The hash table is built in parallel. Integer keys (several are packed into one) use a radix-partitioned table whose directory carries a small bloom filter per bucket, so most probes for missing keys cost one memory access. For outer, semi and anti joins the smaller side is the build side.
+- `ORDER BY ... LIMIT k` over a filtered Parquet scan (k up to 10,000) sorts on the filter and sort columns only, then reads the other columns of the k rows by position.
 - Aggregation starts with thread-local hash tables. It switches to radix partitioning when there are too many distinct keys for local aggregation to shrink the data.
 
 ### Windows and recursion

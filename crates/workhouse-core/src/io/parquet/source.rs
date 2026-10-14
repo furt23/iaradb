@@ -198,6 +198,12 @@ impl ParquetSource {
     pub fn morsel_file(&self, morsel: usize) -> usize {
         self.morsels[morsel].file
     }
+
+    /// Where a morsel starts: (file, row group, first row in the row group).
+    pub fn morsel_start(&self, morsel: usize) -> (usize, usize, usize) {
+        let m = &self.morsels[morsel];
+        (m.file, m.row_group, m.range.map_or(0, |r| r.0))
+    }
 }
 
 impl Source for ParquetSource {

@@ -8,7 +8,7 @@
 //!
 //! The limit is `WORKHOUSE_MEMORY_LIMIT`: bytes (`2147483648`), with a unit
 //! (`2GB`, `512MB`) or a share of the machine's RAM (`60%`). Without it,
-//! Linux machines use 75% of their RAM; elsewhere there is no limit.
+//! machines use 75% of their RAM by default.
 
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -169,10 +169,67 @@ pub fn parse_limit(s: &str, total: Option<usize>) -> Option<usize> {
 
 /// Physical memory of the machine, when it can be read without extra dependencies.
 pub fn total_memory() -> Option<usize> {
-    let info = std::fs::read_to_string("/proc/meminfo").ok()?;
-    let line = info.lines().find(|l| l.starts_with("MemTotal:"))?;
-    let kb: usize = line.split_whitespace().nth(1)?.parse().ok()?;
-    Some(kb * 1024)
+    #[cfg(target_os = "linux")]
+    {
+        let info = std::fs::read_to_string("/proc/meminfo").ok()?;
+        let line = info.lines().find(|l| l.starts_with("MemTotal:"))?;
+        let kb: usize = line.split_whitespace().nth(1)?.parse().ok()?;
+        Some(kb * 1024)
+    }
+    #[cfg(windows)]
+    {
+        #[repr(C)]
+        struct MemoryStatusEx {
+            length: u32,
+            memory_load: u32,
+            total_phys: u64,
+            avail_phys: u64,
+            total_page_file: u64,
+            avail_page_file: u64,
+            total_virtual: u64,
+            avail_virtual: u64,
+            avail_extended_virtual: u64,
+        }
+        unsafe extern "system" {
+            fn GlobalMemoryStatusEx(status: *mut MemoryStatusEx) -> i32;
+        }
+        unsafe {
+            let mut status = std::mem::zeroed::<MemoryStatusEx>();
+            status.length = std::mem::size_of::<MemoryStatusEx>() as u32;
+            if GlobalMemoryStatusEx(&mut status) != 0 {
+                Some(status.total_phys as usize)
+            } else {
+                None
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::ffi::c_void;
+        unsafe extern "C" {
+            fn sysctlbyname(
+                name: *const std::ffi::c_char,
+                oldp: *mut c_void,
+                oldlenp: *mut usize,
+                newp: *const c_void,
+                newlen: usize,
+            ) -> i32;
+        }
+        let mut mem: u64 = 0;
+        let mut len = std::mem::size_of::<u64>();
+        let name = c"hw.memsize";
+        unsafe {
+            if sysctlbyname(name.as_ptr(), &mut mem as *mut _ as *mut c_void, &mut len, std::ptr::null(), 0) == 0 {
+                Some(mem as usize)
+            } else {
+                None
+            }
+        }
+    }
+    #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
+    {
+        None
+    }
 }
 
 fn configured_limit() -> usize {
@@ -220,5 +277,15 @@ mod tests {
         drop(b);
         assert_eq!(POOL.used(), 0);
         assert_eq!(POOL.peak(), 1095);
+    }
+
+    #[test]
+    fn total_memory_detects_physical_ram() {
+        println!("DETECTED: total_memory: {:?}, pool().limit(): {}", total_memory(), pool().limit());
+        if cfg!(any(target_os = "linux", windows, target_os = "macos")) {
+            let total = total_memory();
+            assert!(total.is_some(), "total_memory should detect RAM on supported platforms");
+            assert!(total.unwrap() > 1024 * 1024 * 1024, "machine should have at least 1 GB RAM");
+        }
     }
 }

@@ -20,6 +20,7 @@ mod dialect;
 mod distinct_on;
 mod files;
 mod grouping_sets;
+mod join_order;
 mod json;
 mod lists;
 mod maintenance;
@@ -700,13 +701,16 @@ impl<'a> SqlPlanner<'a> {
     /// (e.g. `(lineitem ⋈ supplier ⋈ nation) ⋈ (orders ⋈ customer ⋈ nation)`)
     /// and, thanks to NDV estimates from file statistics, avoids
     /// many-to-many joins on low-cardinality keys.
-    fn order_joins(&mut self, rels: Vec<LogicalPlan>, conjuncts: &[Expr]) -> Result<LogicalPlan> {
+    /// Returns the join tree and the conjuncts to filter it with: `conjuncts`,
+    /// with the equalities between relations replaced by those the tree's
+    /// joins need (see [`join_order`]).
+    fn order_joins(&mut self, rels: Vec<LogicalPlan>, conjuncts: Vec<Expr>) -> Result<(LogicalPlan, Vec<Expr>)> {
         use crate::physical::planner::{estimate_rows, join_cardinality};
         if rels.is_empty() {
-            return LogicalPlan::one_row();
+            return Ok((LogicalPlan::one_row()?, conjuncts));
         }
         if rels.len() == 1 {
-            return Ok(rels.into_iter().next().unwrap());
+            return Ok((rels.into_iter().next().unwrap(), conjuncts));
         }
         let plain: Vec<&Expr> = conjuncts.iter().filter(|c| !c.contains_subquery()).collect();
         let rel_of = |e: &Expr| -> Vec<usize> {
@@ -755,6 +759,14 @@ impl<'a> SqlPlanner<'a> {
             };
             nodes.push(Node { plan: r, rels: vec![i], rows });
         }
+        if nodes.len() <= join_order::MAX_RELATIONS {
+            let rels = nodes.iter().map(|n| join_order::Relation { plan: n.plan.clone(), rows: n.rows }).collect();
+            if let Some(o) = join_order::order(rels, &plain)? {
+                let mut conjuncts: Vec<Expr> = conjuncts.iter().filter(|c| !o.replaced.contains(c)).cloned().collect();
+                conjuncts.extend(o.equalities);
+                return Ok((o.plan, conjuncts));
+            }
+        }
         while nodes.len() > 1 {
             let mut best: Option<(usize, usize, f64)> = None;
             for i in 0..nodes.len() {
@@ -799,7 +811,7 @@ impl<'a> SqlPlanner<'a> {
             let plan = LogicalPlan::join(Arc::new(a.plan), Arc::new(b.plan), vec![], None, JoinType::Inner)?;
             nodes.insert(i, Node { plan, rels: rels_union, rows: est.max(1.0) });
         }
-        Ok(nodes.pop().unwrap().plan)
+        Ok((nodes.pop().unwrap().plan, conjuncts))
     }
 
     // -----------------------------------------------------------------------
@@ -834,7 +846,7 @@ impl<'a> SqlPlanner<'a> {
             Some(w) => split_conjunction(&no_windows(self.sql_expr(w, Scope::new(&combined, outer))?, "WHERE")?),
             None => vec![],
         };
-        let mut plan = self.order_joins(rels, &conjuncts)?;
+        let (mut plan, conjuncts) = self.order_joins(rels, conjuncts)?;
         // plain predicates first: subquery decorrelation then sees (and can
         // exploit) the already filtered outer relation
         let (plain, with_subquery): (Vec<Expr>, Vec<Expr>) = conjuncts.into_iter().partition(|c| !c.contains_subquery());
@@ -1224,14 +1236,27 @@ impl<'a> SqlPlanner<'a> {
         let key_cols: Vec<Column> = outer_keys.iter().flat_map(|k| k.column_refs()).collect();
         let mut sources = vec![];
         key_sources(&crate::optimizer::pushed_down(&outer_plan), &key_cols, &mut sources);
-        let (source, source_est) = sources
+        // the smallest source, or a much cheaper one to compute (fewer rows
+        // scanned) that is selective itself and not much larger: a whole
+        // join just to narrow the keys can cost more than the subquery it saves
+        let sources: Vec<(LogicalPlan, f64, f64)> = sources
             .into_iter()
             .map(|p| {
                 let e = crate::physical::planner::estimate_rows(&p);
-                (p, e)
+                let cost = scanned_rows(&p);
+                (p, e, cost)
             })
-            .reduce(|best, c| if c.1 <= best.1 { c } else { best })
-            .expect("the outer plan itself");
+            .collect();
+        let smallest = sources.iter().map(|s| (s.1, s.2)).reduce(|a, b| if b.0 <= a.0 { b } else { a }).expect("the outer plan itself");
+        let cheap = sources
+            .iter()
+            .filter(|s| s.1 <= smallest.0 * 10.0 && s.1 <= s.2 * 0.1 && s.2 * 2.0 <= smallest.1)
+            .map(|s| s.2)
+            .fold(f64::INFINITY, f64::min);
+        let (source, source_est, _) = sources
+            .into_iter()
+            .find(|s| if cheap.is_finite() { s.2 == cheap && s.1 <= smallest.0 * 10.0 && s.1 <= s.2 * 0.1 } else { s.1 == smallest.0 })
+            .expect("a chosen source");
         let inner_est = crate::optimizer::estimate_after_pushdown(&agg_input);
         let agg_input = if source_est * 4.0 < inner_est {
             let keys_proj = LogicalPlan::project(
@@ -1665,6 +1690,14 @@ fn distinct(plan: LogicalPlan) -> Result<LogicalPlan> {
 
 /// `plan` and its sub-plans that provide all of `cols` with a superset of
 /// the plan's distinct values for them (through filters and joins).
+/// Rows the scans of a plan read (before their filters).
+fn scanned_rows(plan: &LogicalPlan) -> f64 {
+    match plan {
+        LogicalPlan::Scan(s) => s.source.num_rows().unwrap_or(1_000_000) as f64,
+        p => p.inputs().iter().map(|i| scanned_rows(i)).sum(),
+    }
+}
+
 fn key_sources(plan: &LogicalPlan, cols: &[Column], out: &mut Vec<LogicalPlan>) {
     out.push(plan.clone());
     match plan {

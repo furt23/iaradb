@@ -2,9 +2,10 @@
 //!
 //! Build: the build side is materialised, key columns are normalised (integer
 //! keys - also multi-column ones - are packed into a single i64 when their
-//! value ranges allow it, everything else uses the Arrow row format), hashed,
-//! and inserted into a chained hash table *in parallel* using an atomic swap
-//! on the bucket heads (no locks).
+//! value ranges allow it, everything else uses the Arrow row format) and
+//! indexed: integer keys by a partitioned open-addressing table
+//! ([`crate::exec::join_table`]), row-format keys by a chained hash table
+//! filled *in parallel* with an atomic swap on the bucket heads (no locks).
 //! Probe: a streaming operator inside the probe-side pipeline; each morsel
 //! batch is hashed and matched against the shared, read-only table.
 
@@ -21,15 +22,21 @@ use arrow::row::{RowConverter, Rows, SortField};
 use rayon::prelude::*;
 
 use crate::error::{Result, WhError};
+use crate::exec::batch_mem;
 use crate::exec::join_spill::{PartitionedSpill, grace_partitions};
+use crate::exec::join_table::IntTable;
 use crate::exec::memory::{self, Reservation};
 use crate::exec::pipeline::{Emit, Operator, Sink};
 use crate::exec::spill::SpillFile;
-use crate::hash::{hash_bytes, hash_u64};
+use crate::hash::hash_bytes;
 use crate::logical::JoinType;
 use crate::physical::expr::{PhysExpr, null_as_false};
 
 const OUT_CHUNK: usize = 1 << 13;
+/// Hash table bytes per build row (directory, entry, normalised key).
+const TABLE_ROW_BYTES: usize = 40;
+/// Buffers a view column of a build table may reference without compaction.
+const MAX_TABLE_BUFFERS: usize = 32;
 
 fn int_like(dt: &DataType) -> bool {
     matches!(
@@ -76,16 +83,21 @@ struct Packing {
 }
 
 enum BuildKeys {
-    Int { values: ScalarBuffer<i64>, packing: Option<Packing> },
-    Rows { conv: RowConverter, rows: Rows, hashes: Vec<u64> },
+    Int { table: IntTable, packing: Option<Packing> },
+    Rows { conv: RowConverter, rows: Rows, hashes: Vec<u64>, chains: Chains },
+}
+
+/// A chained hash table over row-format keys: bucket heads and the next row
+/// of each row's chain (row + 1; 0 ends a chain).
+struct Chains {
+    heads: Vec<u32>,
+    next: Vec<u32>,
+    mask: usize,
 }
 
 pub struct JoinHashTable {
     pub batch: RecordBatch,
     keys: BuildKeys,
-    heads: Vec<u32>,
-    next: Vec<u32>,
-    mask: usize,
     matched: Option<Vec<AtomicBool>>,
     /// memory accounted for the table (released with it)
     memory: Option<Reservation>,
@@ -106,91 +118,27 @@ impl JoinHashTable {
         let n = batch.num_rows();
         let valid = combined_nulls(&key_cols);
         let all_int = key_cols.iter().all(|c| int_like(c.data_type()));
-        let keys = if all_int {
-            let ints = key_cols.iter().map(to_i64).collect::<Result<Vec<_>>>()?;
-            if ints.len() == 1 {
-                let v = ints[0].as_primitive::<arrow::datatypes::Int64Type>().values().clone();
-                BuildKeys::Int { values: v, packing: None }
-            } else {
-                // try to pack all key columns into 64 bits
-                let mut cols = vec![];
-                let mut total_bits = 0u32;
-                for c in &ints {
-                    let p = c.as_primitive::<arrow::datatypes::Int64Type>();
-                    let (mn, mx) = match (arrow::compute::min(p), arrow::compute::max(p)) {
-                        (Some(a), Some(b)) => (a, b),
-                        _ => (0, 0),
-                    };
-                    let range = (mx as i128 - mn as i128) as u128 + 1;
-                    let bits = 128 - (range - 1).leading_zeros().min(128);
-                    cols.push((mn, mx, bits.max(1)));
-                    total_bits += bits.max(1);
-                }
-                if total_bits <= 63 {
-                    let mut shift = 0u32;
-                    let mut packing = Packing { cols: vec![] };
-                    for (mn, mx, bits) in cols.iter().rev() {
-                        packing.cols.push((*mn, *mx, shift));
-                        shift += bits;
-                    }
-                    packing.cols.reverse();
-                    let kb = pack(&ints, &packing, n);
-                    let KeyBatch::Int { values, .. } = kb else { unreachable!() };
-                    BuildKeys::Int { values, packing: Some(packing) }
-                } else {
-                    rows_keys(&key_cols)?
-                }
-            }
-        } else {
-            rows_keys(&key_cols)?
-        };
-
-        let buckets = (n * 2).next_power_of_two().max(16);
-        let mask = buckets - 1;
-        let heads: Vec<AtomicU32> = (0..buckets).map(|_| AtomicU32::new(0)).collect();
-        let mut next = vec![0u32; n];
-        {
-            let next_ptr = SendPtr(next.as_mut_ptr());
-            let valid_ref = valid.as_ref();
-            let insert = |i: usize, h: u64| {
-                if valid_ref.is_some_and(|v| v.is_null(i)) {
-                    return;
-                }
-                let b = h as usize & mask;
-                let old = heads[b].swap(i as u32 + 1, Ordering::Relaxed);
-                let p = &next_ptr;
-                // SAFETY: every row index is written by exactly one task
-                unsafe { *p.0.add(i) = old };
-            };
-            match &keys {
-                BuildKeys::Int { values, .. } => {
-                    values.par_iter().enumerate().with_min_len(1 << 14).for_each(|(i, &k)| insert(i, hash_u64(k as u64)))
-                }
-                BuildKeys::Rows { hashes, .. } => {
-                    hashes.par_iter().enumerate().with_min_len(1 << 14).for_each(|(i, &h)| insert(i, h))
-                }
+        let mut ints = None;
+        if all_int {
+            let cols = key_cols.iter().map(to_i64).collect::<Result<Vec<_>>>()?;
+            if cols.len() == 1 {
+                ints = Some((cols[0].as_primitive::<arrow::datatypes::Int64Type>().values().clone(), None));
+            } else if let Some(packing) = packing_of(&cols) {
+                let KeyBatch::Int { values, .. } = pack(&cols, &packing, n) else { unreachable!() };
+                ints = Some((values, Some(packing)));
             }
         }
-        let heads: Vec<u32> = heads.into_iter().map(|a| a.into_inner()).collect();
+        let keys = match ints {
+            Some((values, packing)) => BuildKeys::Int { table: IntTable::build(&values, valid.as_ref()), packing },
+            None => rows_keys(&key_cols, valid.as_ref())?,
+        };
         if crate::exec::pipeline::profiling() {
-            let (mut used, mut longest, mut total) = (0usize, 0usize, 0usize);
-            for &h in &heads {
-                let mut len = 0usize;
-                let mut cur = h;
-                while cur != 0 && len <= n {
-                    len += 1;
-                    cur = next[(cur - 1) as usize];
-                }
-                if len > 0 {
-                    used += 1;
-                }
-                longest = longest.max(len);
-                total += len;
+            if let BuildKeys::Rows { chains, .. } = &keys {
+                chains.report(n);
             }
-            eprintln!("[workhouse]   join table: {n} rows, {} buckets, {used} used, longest chain {longest}, chained rows {total}", heads.len());
         }
         let matched = track_matches.then(|| (0..n).map(|_| AtomicBool::new(false)).collect());
-        Ok(Self { batch, keys, heads, next, mask, matched, memory: None })
+        Ok(Self { batch, keys, matched, memory: None })
     }
 
     /// Keep `r` (the memory the table was built in) for as long as the table lives.
@@ -257,34 +205,19 @@ impl JoinHashTable {
     #[inline]
     fn for_each_match(&self, kb: &KeyBatch, mut on_match: impl FnMut(usize, usize) -> bool) {
         match (&self.keys, kb) {
-            (BuildKeys::Int { values: bv, .. }, KeyBatch::Int { values, valid }) => {
-                for (i, (&k, &ok)) in values.iter().zip(valid.iter()).enumerate() {
-                    if !ok {
-                        continue;
-                    }
-                    let mut cur = self.heads[hash_u64(k as u64) as usize & self.mask];
-                    while cur != 0 {
-                        let b = (cur - 1) as usize;
-                        // SAFETY: chain entries are valid build row indices
-                        if unsafe { *bv.get_unchecked(b) } == k && !on_match(i, b) {
-                            break;
-                        }
-                        cur = unsafe { *self.next.get_unchecked(b) };
-                    }
-                }
-            }
-            (BuildKeys::Rows { rows: br, hashes: bh, .. }, KeyBatch::Rows { rows, hashes, valid }) => {
+            (BuildKeys::Int { table, .. }, KeyBatch::Int { values, valid }) => table.probe(values, valid, on_match),
+            (BuildKeys::Rows { rows: br, hashes: bh, chains, .. }, KeyBatch::Rows { rows, hashes, valid }) => {
                 for (i, &h) in hashes.iter().enumerate() {
                     if valid.as_ref().is_some_and(|v| v.is_null(i)) {
                         continue;
                     }
-                    let mut cur = self.heads[h as usize & self.mask];
+                    let mut cur = chains.heads[h as usize & chains.mask];
                     while cur != 0 {
                         let b = (cur - 1) as usize;
                         if bh[b] == h && br.row(b) == rows.row(i) && !on_match(i, b) {
                             break;
                         }
-                        cur = self.next[b];
+                        cur = chains.next[b];
                     }
                 }
             }
@@ -293,7 +226,7 @@ impl JoinHashTable {
     }
 }
 
-fn rows_keys(cols: &[ArrayRef]) -> Result<BuildKeys> {
+fn rows_keys(cols: &[ArrayRef], valid: Option<&NullBuffer>) -> Result<BuildKeys> {
     let conv = RowConverter::new(cols.iter().map(|c| SortField::new(c.data_type().clone())).collect())?;
     let rows = conv.convert_columns(cols)?;
     let hashes: Vec<u64> = (0..rows.num_rows())
@@ -301,7 +234,76 @@ fn rows_keys(cols: &[ArrayRef]) -> Result<BuildKeys> {
         .with_min_len(1 << 14)
         .map(|i| hash_bytes(rows.row(i).as_ref()))
         .collect();
-    Ok(BuildKeys::Rows { conv, rows, hashes })
+    let chains = Chains::build(&hashes, valid);
+    Ok(BuildKeys::Rows { conv, rows, hashes, chains })
+}
+
+impl Chains {
+    fn build(hashes: &[u64], valid: Option<&NullBuffer>) -> Self {
+        let n = hashes.len();
+        let buckets = (n * 2).next_power_of_two().max(16);
+        let mask = buckets - 1;
+        let heads: Vec<AtomicU32> = (0..buckets).map(|_| AtomicU32::new(0)).collect();
+        let mut next = vec![0u32; n];
+        let next_ptr = SendPtr(next.as_mut_ptr());
+        hashes.par_iter().enumerate().with_min_len(1 << 14).for_each(|(i, &h)| {
+            if valid.is_some_and(|v| v.is_null(i)) {
+                return;
+            }
+            let old = heads[h as usize & mask].swap(i as u32 + 1, Ordering::Relaxed);
+            let p = &next_ptr;
+            // SAFETY: every row index is written by exactly one task
+            unsafe { *p.0.add(i) = old };
+        });
+        Self { heads: heads.into_iter().map(|a| a.into_inner()).collect(), next, mask }
+    }
+
+    fn report(&self, n: usize) {
+        let (mut used, mut longest, mut total) = (0usize, 0usize, 0usize);
+        for &h in &self.heads {
+            let mut len = 0usize;
+            let mut cur = h;
+            while cur != 0 && len <= n {
+                len += 1;
+                cur = self.next[(cur - 1) as usize];
+            }
+            if len > 0 {
+                used += 1;
+            }
+            longest = longest.max(len);
+            total += len;
+        }
+        eprintln!("[workhouse]   join table: {n} rows, {} buckets, {used} used, longest chain {longest}, chained rows {total}", self.heads.len());
+    }
+}
+
+/// How to pack integer key columns into one i64 (None: their value ranges
+/// need more than 63 bits).
+fn packing_of(ints: &[ArrayRef]) -> Option<Packing> {
+    let mut cols = vec![];
+    let mut total_bits = 0u32;
+    for c in ints {
+        let p = c.as_primitive::<arrow::datatypes::Int64Type>();
+        let (mn, mx) = match (arrow::compute::min(p), arrow::compute::max(p)) {
+            (Some(a), Some(b)) => (a, b),
+            _ => (0, 0),
+        };
+        let range = (mx as i128 - mn as i128) as u128 + 1;
+        let bits = 128 - (range - 1).leading_zeros().min(128);
+        cols.push((mn, mx, bits.max(1)));
+        total_bits += bits.max(1);
+    }
+    if total_bits > 63 {
+        return None;
+    }
+    let mut shift = 0u32;
+    let mut packing = Packing { cols: vec![] };
+    for (mn, mx, bits) in cols.iter().rev() {
+        packing.cols.push((*mn, *mx, shift));
+        shift += bits;
+    }
+    packing.cols.reverse();
+    Some(packing)
 }
 
 fn pack(ints: &[ArrayRef], p: &Packing, n: usize) -> KeyBatch {
@@ -378,8 +380,10 @@ impl Sink for JoinBuildSink {
         if self.spilling.load(Ordering::Relaxed) {
             return self.spill_batch(&batch);
         }
-        // the table holds the rows about twice: concatenated copy, keys and chains
-        if local.reservation.try_grow(batch.get_array_memory_size() * 2) {
+        // the rows (concatenated) and their entries in the hash table
+        let batch = batch_mem::compact(batch)?;
+        let bytes = batch_mem::batch_bytes(&batch) + batch.num_rows() * TABLE_ROW_BYTES;
+        if local.reservation.try_grow(bytes) {
             local.batches.push((morsel, batch));
             return Ok(());
         }
@@ -399,9 +403,12 @@ impl Sink for JoinBuildSink {
             }
             return Ok(BuildSide::Spilled(files));
         }
-        let mut held = memory::pool().reservation();
-        held.grow(locals.iter().map(|l| l.reservation.size()).sum());
+        // the workers' reservations pass to the table (released first: the
+        // pool would briefly count them twice)
+        let total: usize = locals.iter().map(|l| l.reservation.size()).sum();
         let mut all: Vec<(usize, RecordBatch)> = locals.into_iter().flat_map(|l| l.batches).collect();
+        let mut held = memory::pool().reservation();
+        held.grow(total);
         all.sort_by_key(|(m, _)| *m);
         let batches: Vec<RecordBatch> = all.into_iter().map(|(_, b)| b).collect();
         let t0 = std::time::Instant::now();
@@ -443,19 +450,28 @@ pub fn concat_parallel(schema: &SchemaRef, batches: &[RecordBatch]) -> Result<Re
     )?)
 }
 
-/// Concatenate view arrays, compacting their strings into fresh buffers
-/// (in parallel over ~64K-row pieces): the inputs reference many decoded
-/// page buffers, and every array taken from the result would carry them all.
+/// Concatenate view arrays. Arrays taken from the result share all of its
+/// buffers (and every take clones and drops the whole list, contending on
+/// the buffers' reference counts across threads), so the result keeps few:
+/// unless the inputs already reference few buffers that they use, their
+/// strings are copied into one fresh buffer per piece, the pieces (one per
+/// thread, in parallel) then concatenated.
 fn concat_views(arrays: &[&dyn Array]) -> std::result::Result<ArrayRef, arrow::error::ArrowError> {
+    let refs: usize = arrays.iter().map(|a| batch_mem::view_buffers(*a)).sum();
+    if refs <= MAX_TABLE_BUFFERS && !batch_mem::views_wasteful(arrays) {
+        return arrow::compute::concat(arrays);
+    }
+    let rows: usize = arrays.iter().map(|a| a.len()).sum();
+    let piece_rows = (rows / rayon::current_num_threads().max(1)).max(1 << 16);
     let mut groups: Vec<Vec<&dyn Array>> = vec![];
     let mut cur = vec![];
-    let mut rows = 0;
+    let mut acc = 0;
     for &a in arrays {
         cur.push(a);
-        rows += a.len();
-        if rows >= 1 << 16 {
+        acc += a.len();
+        if acc >= piece_rows {
             groups.push(std::mem::take(&mut cur));
-            rows = 0;
+            acc = 0;
         }
     }
     if !cur.is_empty() {
@@ -916,7 +932,7 @@ impl NestedLoopJoin {
     /// Hold the build side's memory: the join cannot spill, so a build side
     /// the pool has no room for is an error (not an out-of-memory crash).
     pub fn reserve_build(build: &RecordBatch) -> Result<memory::Reservation> {
-        let need = build.get_array_memory_size();
+        let need = batch_mem::batch_bytes(build);
         let mut held = memory::pool().reservation();
         if !held.try_grow(need) {
             return Err(WhError::Execution(format!(

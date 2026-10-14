@@ -251,6 +251,11 @@ fn eval_binary(left: &PhysExpr, op: Operator, right: &PhysExpr, batch: &RecordBa
                 let res = crate::physical::nested_cmp::compare(op, &l.into_array(m)?, &r.into_array(m)?)?;
                 return Ok(wrap(Arc::new(res), scalar));
             }
+            if matches!(op, Operator::Plus | Operator::Minus | Operator::Multiply) {
+                if let Some(res) = crate::physical::decimal::try_eval(op, &l, &r)? {
+                    return Ok(ColumnarValue::Array(res));
+                }
+            }
             let res: ArrayRef = match op {
                 Operator::Eq => Arc::new(cmp::eq(&l, &r)?),
                 Operator::NotEq => Arc::new(cmp::neq(&l, &r)?),

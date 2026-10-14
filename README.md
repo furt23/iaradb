@@ -42,12 +42,13 @@ Wheels will be published to PyPI. Until then, build from source: see [docs/devel
 
 ## Performance
 
-TPC-H, all 22 queries over the same Parquet files (Ryzen 5 5600G, 16 GB RAM):
+TPC-H, all 22 queries over the same Parquet files, and ClickBench (AWS m7i.4xlarge, 16 vCPUs, 64 GB RAM):
 
-| | Workhouse | DuckDB 1.5.6 | Polars 1.44.2 |
+| | Workhouse | DuckDB 1.5.6 | Polars 2.0.0 |
 |---|---:|---:|---:|
-| SF1, total | **1.02 s** | 1.50 s | 1.99 s |
-| SF10, total | **9.87 s** | 13.94 s | 21.54 s |
+| TPC-H SF10, total | **5.88 s** | 7.69 s | 8.11 s |
+| TPC-H SF100, total | **60.6 s** | 82.1 s | 90.0 s |
+| ClickBench, 32 queries, total | **17.6 s** | 18.0 s | 20.3 s |
 
 Per-query numbers and how to reproduce them: [docs/benchmarks.md](docs/benchmarks.md).
 

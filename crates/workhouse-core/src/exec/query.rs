@@ -246,6 +246,19 @@ pub fn with_query<T>(f: impl FnOnce(&Arc<QueryHandle>) -> T) -> T {
     f(&h)
 }
 
+/// Run `f` on this thread as part of query `h` (work a query hands to
+/// another thread, like a source that executes a plan of its own).
+pub fn joined<T>(h: Option<Arc<QueryHandle>>, f: impl FnOnce() -> T) -> T {
+    struct Restore(Option<Arc<QueryHandle>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            CURRENT.with(|c| *c.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = Restore(CURRENT.with(|c| std::mem::replace(&mut *c.borrow_mut(), h)));
+    f()
+}
+
 /// Progress of every running query.
 pub fn running() -> Vec<QueryStats> {
     registry().lock().iter().map(|h| h.stats()).collect()

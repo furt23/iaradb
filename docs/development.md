@@ -15,13 +15,27 @@ Wheels will be published to PyPI; until then, build from source.
 
 ### Without Visual Studio
 
-<!-- TODO: verified commands -->
-Use llvm-mingw and Rust's `x86_64-pc-windows-gnullvm` target:
+Use the GNU host toolchain, which bundles a MinGW linker:
 
 ```bash
-rustup target add x86_64-pc-windows-gnullvm
-maturin develop --release --target x86_64-pc-windows-gnullvm
+rustup toolchain install stable-x86_64-pc-windows-gnu
+rustup target add x86_64-pc-windows-gnullvm --toolchain stable-x86_64-pc-windows-gnu
 ```
+
+Point the gnullvm target at the bundled MinGW in `.cargo/config.toml` (or `%USERPROFILE%\.cargo\config.toml`); replace `<user>` with your user name:
+
+```toml
+[target.x86_64-pc-windows-gnullvm]
+linker = "C:/Users/<user>/.rustup/toolchains/stable-x86_64-pc-windows-gnu/lib/rustlib/x86_64-pc-windows-gnu/bin/self-contained/x86_64-w64-mingw32-gcc.exe"
+```
+
+Build with that toolchain:
+
+```bash
+rustup run stable-x86_64-pc-windows-gnu maturin develop --release --target x86_64-pc-windows-gnullvm
+```
+
+The resulting `_workhouse.pyd` loads `libunwind.dll` at runtime. Copy it from an [llvm-mingw](https://github.com/mstorsjo/llvm-mingw/releases) release (`x86_64-w64-mingw32/bin/libunwind.dll`) next to `python/workhouse/_workhouse.pyd`, or put that folder on `PATH`.
 
 ## Build the engine
 

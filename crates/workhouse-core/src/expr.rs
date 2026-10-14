@@ -382,7 +382,7 @@ impl ScalarFunc {
             "power" | "pow" => Power,
             "upper" | "ucase" | "to_uppercase" => Upper,
             "lower" | "lcase" | "to_lowercase" => Lower,
-            "length" | "len" | "char_length" | "character_length" | "len_chars" => Length,
+            "length" | "len" | "char_length" | "character_length" | "len_chars" | "strlen" => Length,
             "trim" | "strip" | "strip_chars" => Trim,
             "ltrim" | "lstrip" | "strip_chars_start" => LTrim,
             "rtrim" | "rstrip" | "strip_chars_end" => RTrim,

@@ -292,9 +292,10 @@ impl Sink for SortSink {
         if batch.num_rows() == 0 {
             return Ok(());
         }
+        let batch = if self.fetch.is_none() { crate::exec::batch_mem::compact(batch)? } else { batch };
         if self.fetch.is_none() {
             // sorting holds the rows about twice (concatenated, then taken in order)
-            let bytes = batch.get_array_memory_size() * 2;
+            let bytes = crate::exec::batch_mem::batch_bytes(&batch) * 2;
             if !l.reservation.try_grow(bytes) {
                 if !l.batches.is_empty() {
                     self.spill_run(l)?;

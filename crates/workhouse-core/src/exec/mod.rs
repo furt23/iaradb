@@ -1,15 +1,19 @@
 //! Execution: pipelines, operators and sinks.
 
+pub mod acc_decimal;
+pub mod acc_distinct;
 pub mod acc_list;
 pub mod acc_misc;
 pub mod acc_quantile;
 pub mod acc_stats;
 pub mod accumulators;
 pub mod agg_spill;
+pub mod batch_mem;
 pub mod aggregate;
 pub mod groupby;
 pub mod join;
 pub mod join_spill;
+pub mod join_table;
 pub mod measured;
 pub mod memory;
 pub mod merge;

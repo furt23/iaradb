@@ -63,7 +63,7 @@ pub fn group_bytes(group_types: &[DataType], aggs: &[AggregateExpr]) -> usize {
     keys + states + 16
 }
 
-/// Bytes held by evaluated arrays (shared buffers counted once per array).
+/// Bytes used by evaluated arrays (see [`crate::exec::batch_mem`]).
 pub fn arrays_bytes(cols: &[ArrayRef]) -> usize {
-    cols.iter().map(|c| c.get_array_memory_size()).sum()
+    crate::exec::batch_mem::arrays_bytes(cols)
 }

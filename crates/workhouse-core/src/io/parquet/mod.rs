@@ -25,6 +25,7 @@ mod decode;
 pub mod file;
 mod footer;
 mod hive_write;
+pub mod late;
 pub mod meta_cache;
 mod partitioned;
 mod prune;
@@ -281,6 +282,14 @@ impl TableProvider for ParquetTable {
             out.extend((0..p.schema().fields().len()).map(|j| p.stats(j)));
         }
         Some(out)
+    }
+
+    fn late_rows(&self) -> Option<Arc<dyn crate::io::LateRows>> {
+        if self.partitions.is_some() || self.conform || !self.file_stats.is_empty() {
+            return None;
+        }
+        let files = self.files.all().ok()?;
+        Some(Arc::new(late::ParquetRows::new(files, self.schema.clone())))
     }
 
     fn create_source(&self, projection: Option<&[usize]>, filters: &[Expr], fetch: Option<usize>) -> Result<Arc<dyn Source>> {

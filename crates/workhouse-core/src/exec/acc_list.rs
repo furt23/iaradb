@@ -50,7 +50,7 @@ impl Chunk {
     }
 
     fn bytes(&self) -> usize {
-        self.gids.len() * 4 + self.cols.iter().map(|c| c.get_array_memory_size()).sum::<usize>()
+        self.gids.len() * 4 + self.cols.iter().map(|c| crate::exec::batch_mem::array_bytes(c.as_ref())).sum::<usize>()
     }
 
     /// The rows at `rows`, with group ids `gids[rows]`.

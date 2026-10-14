@@ -78,6 +78,19 @@ pub trait TableProvider: Send + Sync + Debug {
         filters: &[Expr],
         fetch: Option<usize>,
     ) -> Result<Arc<dyn Source>>;
+    /// Rows addressable by position, for late materialization (None: this
+    /// kind of table cannot).
+    fn late_rows(&self) -> Option<Arc<dyn LateRows>> {
+        None
+    }
+}
+
+/// A table whose rows can be read by position: a scan emitting each row's
+/// position (a last UInt64 column), and the other columns of given rows.
+pub trait LateRows: Send + Sync {
+    fn positioned_source(&self, projection: &[usize], filters: &[Expr]) -> Result<Arc<dyn Source>>;
+    /// Columns `projection` of the rows at `positions`, in that order.
+    fn fetch(&self, projection: &[usize], positions: &[u64]) -> Result<arrow::record_batch::RecordBatch>;
 }
 
 /// Numbers, dates, times and timestamps as Float64 on their native scale

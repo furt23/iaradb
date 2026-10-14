@@ -6,6 +6,7 @@
 //!    pruning hints into scans)
 //! 3. limit pushdown (Sort + Limit => TopK, limits into scans)
 //! 4. projection pushdown (column pruning down to the file readers)
+//! 5. aggregate rewrites (`SUM(x + c)` as `SUM(x) + c * COUNT(x)`)
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -23,6 +24,7 @@ pub fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
     let plan = simplify_plan(&plan)?;
     let plan = push_down_semi_joins(&plan)?;
     let plan = push_down_limit(&plan, None)?;
+    let plan = rewrite_aggregates(&plan)?;
     let n = plan.schema().len();
     let plan = prune_columns(&plan, &(0..n).collect())?;
     Ok(plan)
@@ -41,6 +43,18 @@ pub fn estimate_after_pushdown(plan: &LogicalPlan) -> f64 {
         Ok(p) => crate::physical::planner::estimate_rows(&p),
         Err(_) => crate::physical::planner::estimate_rows(plan),
     }
+}
+
+mod sum_shift;
+
+fn rewrite_aggregates(plan: &LogicalPlan) -> Result<LogicalPlan> {
+    let plan = map_inputs(plan, &mut |p| rewrite_aggregates(p))?;
+    if let LogicalPlan::Aggregate(a) = &plan {
+        if let Some(p) = sum_shift::rewrite(a)? {
+            return Ok(p);
+        }
+    }
+    Ok(plan)
 }
 
 fn map_inputs(plan: &LogicalPlan, f: &mut dyn FnMut(&LogicalPlan) -> Result<LogicalPlan>) -> Result<LogicalPlan> {

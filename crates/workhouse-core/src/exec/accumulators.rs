@@ -11,7 +11,6 @@ use arrow::buffer::{NullBuffer, ScalarBuffer};
 use arrow::compute::{cast, interleave};
 use arrow::datatypes::*;
 use arrow::row::{RowConverter, SortField};
-use hashbrown::{HashMap, HashSet};
 
 use crate::error::{Result, WhError};
 use crate::expr::AggFunc;
@@ -885,88 +884,7 @@ impl Accumulator for MedianAcc {
 // COUNT(DISTINCT)
 // ---------------------------------------------------------------------------
 
-pub enum DistinctSet {
-    Int(HashSet<(u32, i64)>),
-    Bytes(RowConverter, HashSet<(u32, Box<[u8]>)>),
-}
-
-pub struct CountDistinctAcc {
-    set: DistinctSet,
-}
-
-impl CountDistinctAcc {
-    pub fn try_new(dt: &DataType) -> Result<Self> {
-        let int_like = dt.is_integer() || matches!(dt, DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _));
-        Ok(Self {
-            set: if int_like {
-                DistinctSet::Int(HashSet::new())
-            } else {
-                DistinctSet::Bytes(RowConverter::new(vec![SortField::new(dt.clone())])?, HashSet::new())
-            },
-        })
-    }
-}
-
-impl Accumulator for CountDistinctAcc {
-    fn update(&mut self, values: &[ArrayRef], gids: &[u32], _num_groups: usize) -> Result<()> {
-        let a = &values[0];
-        match &mut self.set {
-            DistinctSet::Int(s) => {
-                let c = cast(a, &DataType::Int64)?;
-                let c = c.as_primitive::<Int64Type>();
-                for (i, &g) in gids.iter().enumerate() {
-                    if c.is_valid(i) {
-                        s.insert((g, c.value(i)));
-                    }
-                }
-            }
-            DistinctSet::Bytes(conv, s) => {
-                let rows = conv.convert_columns(std::slice::from_ref(a))?;
-                let nulls = a.logical_nulls();
-                for (i, &g) in gids.iter().enumerate() {
-                    if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
-                        continue;
-                    }
-                    s.insert((g, rows.row(i).as_ref().into()));
-                }
-            }
-        }
-        Ok(())
-    }
-    fn merge(&mut self, other: &dyn Accumulator, src: &[u32], dst: &[u32], _num_groups: usize) -> Result<()> {
-        let o = downcast::<CountDistinctAcc>(other)?;
-        let map: HashMap<u32, u32> = src.iter().copied().zip(dst.iter().copied()).collect();
-        match (&mut self.set, &o.set) {
-            (DistinctSet::Int(a), DistinctSet::Int(b)) => {
-                for (g, v) in b {
-                    if let Some(d) = map.get(g) {
-                        a.insert((*d, *v));
-                    }
-                }
-            }
-            (DistinctSet::Bytes(_, a), DistinctSet::Bytes(_, b)) => {
-                for (g, v) in b {
-                    if let Some(d) = map.get(g) {
-                        a.insert((*d, v.clone()));
-                    }
-                }
-            }
-            _ => return Err(WhError::Execution("distinct set mismatch".into())),
-        }
-        Ok(())
-    }
-    fn finish(&mut self, num_groups: usize) -> Result<ArrayRef> {
-        let mut counts = vec![0i64; num_groups];
-        match &self.set {
-            DistinctSet::Int(s) => s.iter().for_each(|(g, _)| counts[*g as usize] += 1),
-            DistinctSet::Bytes(_, s) => s.iter().for_each(|(g, _)| counts[*g as usize] += 1),
-        }
-        Ok(Arc::new(Int64Array::from(counts)))
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
+pub use super::acc_distinct::CountDistinctAcc;
 
 // ---------------------------------------------------------------------------
 // FIRST / LAST (first/last non-null value seen per group)
@@ -1116,6 +1034,7 @@ pub fn create_accumulator(
             UInt32 => Box::new(MeanAcc::<UInt32Type>::new()),
             UInt64 => Box::new(MeanAcc::<UInt64Type>::new()),
             Float32 => Box::new(MeanAcc::<Float32Type>::new()),
+            Decimal128(_, s) => Box::new(super::acc_decimal::DecimalMeanAcc::new(*s)),
             _ => Box::new(MeanAcc::<Float64Type>::new()),
         },
         AggFunc::Median => Box::new(MedianAcc { vals: vec![] }),

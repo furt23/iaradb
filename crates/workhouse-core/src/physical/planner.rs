@@ -303,8 +303,20 @@ pub fn predicate_selectivity_in(p: &Expr, input: Option<&LogicalPlan>) -> f64 {
     }
 }
 
-fn selectivity(pred: &Expr) -> f64 {
-    selectivity_in(pred, None)
+
+/// Selectivity of a predicate over several inputs once the parts of it that
+/// were derived for each input alone (see
+/// [`crate::optimizer::derive_side_predicate`]) have filtered them: e.g.
+/// `(n1 = 'A' AND n2 = 'B') OR (n1 = 'B' AND n2 = 'A')` removes little more
+/// than `n1 IN ('A', 'B')` and `n2 IN ('A', 'B')` already did.
+pub fn residual_selectivity(pred: &Expr, inputs: &[&crate::schema::PlanSchema]) -> f64 {
+    let full = predicate_selectivity(pred);
+    let applied: f64 = inputs
+        .iter()
+        .filter_map(|s| crate::optimizer::derive_side_predicate(pred, s))
+        .map(|d| predicate_selectivity(&d))
+        .product();
+    (full / applied.max(1e-12)).clamp(full, 1.0)
 }
 
 /// `column <op> literal` as (column, lower bound, upper bound).
@@ -498,7 +510,7 @@ pub fn cardinality(plan: &LogicalPlan) -> (f64, f64) {
         LogicalPlan::Join(j) => {
             let (lb, ls) = cardinality(&j.left);
             let (rb, rs) = cardinality(&j.right);
-            let fsel = j.filter.as_ref().map(selectivity).unwrap_or(1.0);
+            let fsel = j.filter.as_ref().map(|f| residual_selectivity(f, &[j.left.schema(), j.right.schema()])).unwrap_or(1.0);
             match j.join_type {
                 JoinType::Inner if j.on.is_empty() => (lb * ls * rb * rs, fsel),
                 JoinType::Inner => (join_cardinality(&j.left, &j.right, &j.on, lb * ls, rb * rs), fsel),
@@ -683,6 +695,9 @@ pub fn create_physical_plan(plan: &LogicalPlan) -> Result<PhysicalPlan> {
         }
         LogicalPlan::Join(j) => plan_join(j, plan)?,
         LogicalPlan::Sort(s) => {
+            if let Some(p) = crate::physical::late::plan(s, &compile)? {
+                return Ok(p);
+            }
             let input = create_physical_plan(&s.input)?;
             let keys = s
                 .exprs
@@ -818,6 +833,9 @@ fn plan_join(j: &crate::logical::Join, _plan: &LogicalPlan) -> Result<PhysicalPl
         t => (false, t),
     };
     let (probe_l, build_l) = if swap { (&j.right, &j.left) } else { (&j.left, &j.right) };
+    if crate::exec::pipeline::profiling() {
+        eprintln!("[workhouse] plan {:?} join on {} keys: left est {l_est:.0}, right est {r_est:.0}, swap {swap}", j.join_type, j.on.len());
+    }
     let probe = create_physical_plan(probe_l)?;
     let build = create_physical_plan(build_l)?;
     let joined = joined_schema(&probe.schema(), &build.schema());

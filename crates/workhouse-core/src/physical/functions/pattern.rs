@@ -131,6 +131,8 @@ pub fn extract(args: &[ColumnarValue], m: usize) -> Result<ArrayRef> {
     let a = subject(args, m)?;
     let s = a.as_string::<i32>();
     let mut b = StringBuilder::with_capacity(s.len(), s.value_data().len());
+    // capture slots reused across rows (no allocation per row)
+    let mut locs = re.capture_locations();
     for v in s.iter() {
         let Some(text) = v else {
             b.append_null();
@@ -139,7 +141,7 @@ pub fn extract(args: &[ColumnarValue], m: usize) -> Result<ArrayRef> {
         let hit = if group == 0 {
             re.find(text).map(|x| x.as_str())
         } else {
-            re.captures(text).and_then(|c| c.get(group)).map(|x| x.as_str())
+            re.captures_read(&mut locs, text).and_then(|_| locs.get(group)).map(|(x, y)| &text[x..y])
         };
         match hit {
             Some(h) => b.append_value(h),
@@ -153,10 +155,42 @@ pub fn extract(args: &[ColumnarValue], m: usize) -> Result<ArrayRef> {
 pub fn replace(args: &[ColumnarValue], m: usize) -> Result<ArrayRef> {
     let Some((re, o)) = setup(args, 3)? else { return Ok(new_null_array(&arrow::datatypes::DataType::Utf8, m)) };
     let Some(rep) = const_str(args.get(2))? else { return Ok(new_null_array(&arrow::datatypes::DataType::Utf8, m)) };
-    let rep = replacement(&rep, &o);
     let a = subject(args, m)?;
     let s = a.as_string::<i32>();
     let mut b = StringBuilder::with_capacity(s.len(), s.value_data().len());
+    if !o.global && !o.raw_repl {
+        // the first match: its capture slots reused across rows, the
+        // replacement written straight into the output
+        let pieces = pieces(&rep, &o);
+        let mut locs = re.capture_locations();
+        let mut out = String::new();
+        for v in s.iter() {
+            let Some(text) = v else {
+                b.append_null();
+                continue;
+            };
+            let Some(m) = re.captures_read(&mut locs, text) else {
+                b.append_value(text);
+                continue;
+            };
+            out.clear();
+            out.push_str(&text[..m.start()]);
+            for p in &pieces {
+                match p {
+                    Piece::Text(t) => out.push_str(t),
+                    Piece::Group(g) => {
+                        if let Some((x, y)) = locs.get(*g) {
+                            out.push_str(&text[x..y]);
+                        }
+                    }
+                }
+            }
+            out.push_str(&text[m.end()..]);
+            b.append_value(&out);
+        }
+        return Ok(Arc::new(b.finish()));
+    }
+    let rep = replacement(&rep, &o);
     for v in s.iter() {
         match v {
             None => b.append_null(),
@@ -167,6 +201,42 @@ pub fn replace(args: &[ColumnarValue], m: usize) -> Result<ArrayRef> {
         }
     }
     Ok(Arc::new(b.finish()))
+}
+
+enum Piece {
+    Text(String),
+    Group(usize),
+}
+
+/// A SQL replacement (`\1` back-references, `\\` for a backslash) as
+/// literal text and group references.
+fn pieces(rep: &str, o: &Opts) -> Vec<Piece> {
+    if o.literal {
+        return vec![Piece::Text(rep.to_string())];
+    }
+    let mut out = vec![];
+    let mut text = String::new();
+    let mut it = rep.chars().peekable();
+    while let Some(c) = it.next() {
+        match (c, it.peek().copied()) {
+            ('\\', Some(d)) if d.is_ascii_digit() => {
+                it.next();
+                if !text.is_empty() {
+                    out.push(Piece::Text(std::mem::take(&mut text)));
+                }
+                out.push(Piece::Group(d as usize - '0' as usize));
+            }
+            ('\\', Some('\\')) => {
+                it.next();
+                text.push('\\');
+            }
+            (c, _) => text.push(c),
+        }
+    }
+    if !text.is_empty() {
+        out.push(Piece::Text(text));
+    }
+    out
 }
 
 /// Translate the user's replacement into the `regex` crate's syntax.

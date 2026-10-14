@@ -223,7 +223,8 @@ impl Sink for WindowSink {
             return self.spill_batch(&batch);
         }
         // the input, its sorted layout and the window columns
-        let bytes = batch.get_array_memory_size() * 3;
+        let batch = crate::exec::batch_mem::compact(batch)?;
+        let bytes = crate::exec::batch_mem::batch_bytes(&batch) * 3;
         if !local.reservation.try_grow(bytes) {
             if self.spill.is_some() {
                 self.spilling.store(true, Ordering::Relaxed);

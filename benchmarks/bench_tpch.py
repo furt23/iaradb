@@ -53,6 +53,14 @@ def setup_polars(data: str):
     return lambda q: PQ[q](t).collect().to_arrow()
 
 
+def setup_polars_streaming(data: str):
+    from tpch_polars import QUERIES as PQ
+    from tpch_polars import tables
+
+    t = tables(data)
+    return lambda q: PQ[q](t).collect(engine="streaming").to_arrow()
+
+
 def setup_polars_sql(data: str):
     import polars as pl
 
@@ -62,7 +70,13 @@ def setup_polars_sql(data: str):
     return lambda q: ctx.execute(QUERIES[q]).collect().to_arrow()
 
 
-SETUP = {"workhouse": setup_workhouse, "duckdb": setup_duckdb, "polars": setup_polars, "polars-sql": setup_polars_sql}
+SETUP = {
+    "workhouse": setup_workhouse,
+    "duckdb": setup_duckdb,
+    "polars": setup_polars,
+    "polars-streaming": setup_polars_streaming,
+    "polars-sql": setup_polars_sql,
+}
 
 
 def main() -> None:
