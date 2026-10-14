@@ -1,6 +1,7 @@
 "use client";
 
 import AccountTreeOutlined from "@mui/icons-material/AccountTreeOutlined";
+import AutoFixHighOutlined from "@mui/icons-material/AutoFixHighOutlined";
 import EventRepeatOutlined from "@mui/icons-material/EventRepeatOutlined";
 import FolderOutlined from "@mui/icons-material/FolderOutlined";
 import HistoryOutlined from "@mui/icons-material/HistoryOutlined";
@@ -30,6 +31,7 @@ export interface RailAccount {
 const ICONS: Record<SectionId, ReactNode> = {
   workspace: <FolderOutlined />,
   data: <StorageOutlined />,
+  wrangle: <AutoFixHighOutlined />,
   sql: <TerminalOutlined />,
   history: <HistoryOutlined />,
   jobs: <EventRepeatOutlined />,

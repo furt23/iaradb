@@ -5,6 +5,7 @@ export * from "./query";
 export * from "./results";
 export * from "./stream";
 export * from "./workspace";
+export * from "./wrangle";
 
 /**
  * Version of the kernel protocol these types describe. Version 2: the

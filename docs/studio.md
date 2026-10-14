@@ -136,9 +136,17 @@ Run with parameters… starts a run with other values for that run only; they wi
 
 The Compute section creates and manages AWS clusters and the Local kernels. See [storage-and-cloud.md](storage-and-cloud.md#clusters-on-aws).
 
+## Data Wrangler
+
+The Data Wrangler builds a cleaning recipe on a table or a query result: open the Wrangler section, the Wrangle tab of a table in Data, or the Wrangle tab of a result.
+
+- Steps: filter, fill or drop nulls, remove duplicates, trim, change case, replace (text or regex), split, rename, cast, drop columns, round, one-hot encode, sort. Steps can be switched off, and selecting one shows the data up to it.
+- The recipe runs in the kernel as one SQL query over all rows. The grid shows its first 500 rows; the bar under each column header and the column statistics (nulls, distinct values, min, max, mean, median, most frequent values) count all rows.
+- Code shows that query, and the same query from Python (`ws.sql(...)`).
+
 ## Navigation
 
-- The left rail switches between Workspace, Data, SQL editor, Query history, Jobs, Compute and Git.
+- The left rail switches between Workspace, Data, Wrangler, SQL editor, Query history, Jobs, Compute and Git.
 - Ctrl+K opens any notebook, query, table or page by name. Ctrl+B toggles the side panel.
 - Notebooks open in tabs. A pane can be split, up to four panes, and tabs can be dragged between panes.
 

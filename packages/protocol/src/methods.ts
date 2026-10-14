@@ -8,6 +8,7 @@ import type { Cell, CellKind, CellOutput, CellState, NotebookView, RunResult, Va
 import type { ExplainResult, QueryAnalysis, QueryParams, QueryProfile } from "./query";
 import type { ChartData, ChartSpec, ResultPage, SortKey } from "./results";
 import type { DeltaCommit, HistoryEntry, KernelInfo, TableInfo, TableRef } from "./workspace";
+import type { WranglePreview, WrangleProfile, WrangleSource, WrangleStep } from "./wrangle";
 
 type Empty = Record<string, never>;
 
@@ -67,6 +68,9 @@ export interface KernelMethods {
   /** runs the query with profiling; the rows are counted, not returned */
   "sql.analyze": [{ query: string } & QueryParams, QueryAnalysis];
   "history.list": [{ limit?: number }, HistoryEntry[]];
+  /** a Data Wrangler recipe over a table or result: first rows, counts over all rows, its code */
+  "wrangle.preview": [{ source: WrangleSource; steps: WrangleStep[] }, WranglePreview];
+  "wrangle.profile": [{ source: WrangleSource; steps: WrangleStep[]; column: string }, WrangleProfile];
   shutdown: [Empty, { ok: boolean }];
 }
 

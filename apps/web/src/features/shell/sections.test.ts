@@ -11,6 +11,8 @@ describe("sections", () => {
     expect(sectionOf("/files/x.txt")).toBe("workspace");
     expect(sectionOf("/data")).toBe("data");
     expect(sectionOf("/data/lineitem")).toBe("data");
+    expect(sectionOf("/wrangle")).toBe("wrangle");
+    expect(sectionOf("/wrangle/lineitem")).toBe("wrangle");
     expect(sectionOf("/sql")).toBe("sql");
     expect(sectionOf("/history")).toBe("history");
     expect(sectionOf("/analyze")).toBe("history");
@@ -20,9 +22,10 @@ describe("sections", () => {
     expect(sectionOf("/database")).toBe("workspace");
   });
 
-  it("gives the files panel to the workspace and the catalog to data", () => {
+  it("gives the files panel to the workspace and the catalog to data and wrangle", () => {
     expect(section("workspace").panel).toBe("files");
     expect(section("data").panel).toBe("catalog");
+    expect(section("wrangle").panel).toBe("catalog");
     expect(section("git").panel).toBeNull();
   });
 });

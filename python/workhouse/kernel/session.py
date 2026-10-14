@@ -36,7 +36,7 @@ QUEUED = frozenset(
 ASSIST = frozenset({"assist.complete", "assist.signature", "assist.lint"})
 #: reads that may take a while (aggregating a large result): answered on a
 #: small pool of threads, so the reader stays free for ``interrupt``
-BACKGROUND = frozenset({"result.chart"})
+BACKGROUND = frozenset({"result.chart", "wrangle.profile"})
 
 
 #: largest chunk returned by ``file.read``
@@ -161,6 +161,15 @@ class KernelSession:
         df = self.ws.table(name).limit(limit).collect()
         return {"type": "table", "result": self.results.put(df.to_arrow(), name)}
 
+    def wrangle(self, what: str, p: dict[str, Any]) -> dict[str, Any]:
+        from workhouse.kernel import wrangle
+
+        self.ws.refresh()
+        with self.interruptor.interruptible():
+            if what == "preview":
+                return wrangle.preview(self.ws, self.results, p["source"], p.get("steps", []))
+            return wrangle.profile(self.ws, self.results, p["source"], p.get("steps", []), p["column"])
+
     def handlers(self) -> dict[str, Handler]:
         nb = self.notebook
         return {
@@ -195,4 +204,6 @@ class KernelSession:
             "sql.explain": lambda p, e: self.sql_explain(p),
             "sql.analyze": lambda p, e: analyze_query(self.ws, p["query"], self.history, self.interruptor, bind_params(p)),
             "history.list": lambda p, e: self.history.recent(int(p.get("limit", 200))),
+            "wrangle.preview": lambda p, e: self.wrangle("preview", p),
+            "wrangle.profile": lambda p, e: self.wrangle("profile", p),
         }

@@ -18,6 +18,7 @@ import { ChartView } from "./chart/ChartView";
 import { PlanTree } from "./PlanTree";
 import { ProfileView } from "./ProfileView";
 import { ResultTable } from "./ResultTable";
+import { WranglerView } from "@/features/wrangler";
 
 function ExportButton({ kernelKey, output, format }: { kernelKey: string; output: TableOutput; format: "csv" | "parquet" }) {
   const guard = useGuard();
@@ -44,7 +45,7 @@ export interface ChartProps {
 
 /** A table result with a chart of it, and its run profile and plan when it has them. */
 export function TableOutputView({ kernelKey, output, height, chart, onChart }: { kernelKey: string; output: TableOutput; height?: number } & ChartProps) {
-  const [tab, setTab] = useState<"result" | "chart" | "profile" | "plan">(chart ? "chart" : "result");
+  const [tab, setTab] = useState<"result" | "chart" | "wrangle" | "profile" | "plan">(chart ? "chart" : "result");
   const [local, setLocal] = useState<ChartSpec | null>(null);
   const { result, profile, plan } = output;
   const spec = onChart ? (chart ?? null) : local;
@@ -54,6 +55,7 @@ export function TableOutputView({ kernelKey, output, height, chart, onChart }: {
         <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ minHeight: 34, "& .MuiTab-root": { minHeight: 34, py: 0, px: 1.5, fontSize: 12.5 } }}>
           <Tab value="result" label="Result" />
           <Tab value="chart" label="Chart" />
+          <Tab value="wrangle" label="Wrangle" />
           {profile && <Tab value="profile" label="Profile" />}
           {plan && <Tab value="plan" label="Plan" />}
         </Tabs>
@@ -72,6 +74,11 @@ export function TableOutputView({ kernelKey, output, height, chart, onChart }: {
       </Box>
       {tab === "result" && <ResultTable kernelKey={kernelKey} meta={result} height={height} />}
       {tab === "chart" && <ChartView kernelKey={kernelKey} meta={result} spec={spec} onSpec={onChart ?? setLocal} />}
+      {tab === "wrangle" && (
+        <Box sx={{ height: Math.max(460, height ?? 460) }}>
+          <WranglerView kernelKey={kernelKey} source={{ result_id: result.id }} label="this result" height="100%" />
+        </Box>
+      )}
       {tab === "profile" && profile && <ProfileView profile={profile} />}
       {tab === "plan" && plan && <PlanTree plan={plan} />}
     </Box>

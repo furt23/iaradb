@@ -22,6 +22,7 @@ import { OutputView } from "@/features/results/OutputView";
 import { useNotify } from "@/features/shell/notify";
 import { formatBytes, formatCount } from "@/lib/format";
 import { useElementHeight } from "@/lib/useElementHeight";
+import { WranglerView } from "@/features/wrangler";
 
 import { HistoryTab } from "./HistoryTab";
 import { ColumnsTable } from "./ColumnsTable";
@@ -52,7 +53,7 @@ function Loaded<T>({ load, onRetry, children }: { load: Load<T> | undefined; onR
   return <>{children(load.data)}</>;
 }
 
-type Section = "columns" | "sample" | "history";
+type Section = "columns" | "sample" | "history" | "wrangle";
 /** the section each table showed last (tabs remount as they are switched) */
 const lastSection = new Map<string, Section>();
 
@@ -130,6 +131,7 @@ export function TableView({ table }: { table: TableRef }) {
         }} sx={{ px: 2, minHeight: 38, borderBottom: 1, borderColor: "divider", "& .MuiTab-root": { minHeight: 38, py: 0, fontSize: 13 } }}>
         <Tab value="columns" label={ready ? `Columns (${ready.columns.length})` : "Columns"} />
         <Tab value="sample" label="Sample data" />
+        <Tab value="wrangle" label="Wrangle" />
         {isDelta && <Tab value="history" label="History" />}
       </Tabs>
       <Box ref={body} sx={{ flex: 1, minHeight: 0, overflow: "auto" }}>
@@ -139,6 +141,8 @@ export function TableView({ table }: { table: TableRef }) {
           </Loaded>
         ) : section === "history" && isDelta ? (
           <HistoryTab name={name} version={ready?.version} />
+        ) : section === "wrangle" ? (
+          <WranglerView kernelKey="workspace" source={{ table: name }} label={name} />
         ) : (
           <Loaded load={data.preview(name)} onRetry={() => load(name, true)}>
             {(output) => <OutputView output={output} kernelKey="workspace" tableHeight={sampleHeight} />}
