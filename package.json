@@ -1,14 +1,14 @@
 {
-  "name": "workhouse-studio",
+  "name": "iara-studio",
   "private": true,
-  "description": "Workhouse Studio: a workspace for the Workhouse engine (notebooks, catalog, SQL, Git)",
+  "description": "Iara Studio: a workspace for the Iara engine (notebooks, catalog, SQL, Git)",
   "packageManager": "pnpm@11.13.0",
   "scripts": {
-    "dev": "pnpm --filter @workhouse/web dev",
-    "build": "pnpm --filter @workhouse/web build",
-    "start": "pnpm --filter @workhouse/web start",
+    "dev": "pnpm --filter @iara/web dev",
+    "build": "pnpm --filter @iara/web build",
+    "start": "pnpm --filter @iara/web start",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "e2e": "pnpm --filter @workhouse/web e2e"
+    "e2e": "pnpm --filter @iara/web e2e"
   }
 }

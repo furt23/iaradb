@@ -4,9 +4,10 @@ import ChevronRight from "@mui/icons-material/ChevronRight";
 import ExpandMore from "@mui/icons-material/ExpandMore";
 import Box from "@mui/material/Box";
 import ButtonBase from "@mui/material/ButtonBase";
-import type { FrameInfo } from "@workhouse/protocol";
+import type { FrameInfo } from "@iara/protocol";
 import { useState } from "react";
 
+import { useTranslation } from "@/i18n";
 import { formatCount, typeLabel } from "@/lib/format";
 
 const MONO = "'JetBrains Mono Variable', monospace";
@@ -18,6 +19,7 @@ export function frameShape(f: FrameInfo): string {
 }
 
 function Frame({ frame }: { frame: FrameInfo }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const inline = frame.columns.map((c) => `${c.name}: ${typeLabel(c.type)}`).join(", ");
   return (
@@ -43,7 +45,7 @@ function Frame({ frame }: { frame: FrameInfo }) {
       {open && (
         <Box
           role="list"
-          aria-label={`columns of ${frame.name ?? "result"}`}
+          aria-label={t("columns of {{name}}", { name: frame.name ?? "result" })}
           sx={{ display: "grid", gridTemplateColumns: "max-content 1fr", columnGap: 2, rowGap: 0.25, pl: 4.5, pr: 1, pb: 0.75, maxHeight: 260, overflow: "auto", fontSize: 12 }}
         >
           {frame.columns.map((c) => (
@@ -55,7 +57,7 @@ function Frame({ frame }: { frame: FrameInfo }) {
             </Box>
           ))}
           {frame.kind === "LazyFrame" && (
-            <Box sx={{ gridColumn: "1 / -1", color: "text.disabled", pt: 0.5 }}>Not run yet: .preview() shows its first rows</Box>
+            <Box sx={{ gridColumn: "1 / -1", color: "text.disabled", pt: 0.5 }}>{t("Not run yet: .preview() shows its first rows")}</Box>
           )}
         </Box>
       )}
@@ -65,9 +67,10 @@ function Frame({ frame }: { frame: FrameInfo }) {
 
 /** The frames a cell made, one line each, expanding to their columns and types. */
 export function FrameList({ frames }: { frames: FrameInfo[] }) {
+  const { t } = useTranslation();
   if (!frames.length) return null;
   return (
-    <Box aria-label="frames" sx={{ py: 0.25 }}>
+    <Box aria-label={t("frames")} sx={{ py: 0.25 }}>
       {frames.map((f, i) => (
         <Frame key={f.name ?? `result-${i}`} frame={f} />
       ))}

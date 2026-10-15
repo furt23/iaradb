@@ -1,4 +1,4 @@
-# Workhouse API gap vs PySpark and Polars
+# Iara API gap vs PySpark and Polars
 
 > **Re-check (2026-10-11).** The tables below predate commit `8eb0499`. Verified status of what is still open:
 > - Frame:
@@ -24,11 +24,11 @@
 > - Done: P1 items 1–7 (frame ops), 8–9 (JSON and CSV options), 10–15 and 19 (scalars, regex, dates), 17–18 (aggregates), and the list work (P1 16 and 20: `array_agg`, `collect_list`/`collect_set`, `explode`/`unnest`; the `split` item; the list namespace). Also `ROLLUP`/`CUBE`/`GROUPING SETS`, trig, `now()` and `random()`.
 > - Next: structs and nested JSON.
 
-Scope: Workhouse Python (`python/workhouse/__init__.py`, `_window.py`) and the SQL/Rust function registry (`crates/workhouse-core/src`: `expr.rs` enums `AggFunc`, `ScalarFunc`, `WindowFunc`; `physical/functions.rs`; `sql/mod.rs`; `io/`).
+Scope: Iara Python (`python/iara/__init__.py`, `_window.py`) and the SQL/Rust function registry (`crates/iara-core/src`: `expr.rs` enums `AggFunc`, `ScalarFunc`, `WindowFunc`; `physical/functions.rs`; `sql/mod.rs`; `io/`).
 
 Reference versions: Polars 1.44.2 (installed, introspected with `dir()`). PySpark: not installed; names taken from the official docs index (`pyspark.sql.functions` and `pyspark.sql.DataFrame`). Status marks are based on the code read. Items marked "unverified" were only seen in a keyword grep.
 
-## 1. Workhouse inventory
+## 1. Iara inventory
 
 - **DataFrame (eager):** filter, select, with_columns, sort, join (inner/left/right/full/semi/anti/cross), group_by, unique, head, slice, sql, lazy, to_arrow/pandas/polars/dicts, write_parquet, write_csv.
 - **LazyFrame:** the above plus limit, drop, rename, union, sink_parquet, sink_csv, explain, profile, fetch, collect, to_reader, stream, iter_batches.
@@ -50,7 +50,7 @@ Status: P = present, Pa = partial, M = missing.
 
 ### DataFrame / LazyFrame ops
 
-| Op | Polars | PySpark | Workhouse |
+| Op | Polars | PySpark | Iara |
 |---|---|---|---|
 | filter, select, with_columns, sort, group_by, head, slice, rename, drop, unique | yes | yes | P |
 | join inner/left/right/full/semi/anti/cross | yes | yes | P |
@@ -87,7 +87,7 @@ Status: P = present, Pa = partial, M = missing.
 
 ### Expr (general)
 
-| Op | Polars | PySpark | Workhouse |
+| Op | Polars | PySpark | Iara |
 |---|---|---|---|
 | arithmetic, comparisons, boolean | yes | yes | P |
 | alias, cast, is_in, is_between | yes | yes | P |
@@ -110,7 +110,7 @@ Status: P = present, Pa = partial, M = missing.
 
 ### String
 
-| Op | Polars | PySpark | Workhouse |
+| Op | Polars | PySpark | Iara |
 |---|---|---|---|
 | contains (regex) | yes | rlike | Pa (literal flag only) |
 | regex replace / extract / extract_all / count / like | yes | regexp_* | M (no regex functions in the registry) |
@@ -130,7 +130,7 @@ Status: P = present, Pa = partial, M = missing.
 
 ### Datetime
 
-| Op | Polars | PySpark | Workhouse |
+| Op | Polars | PySpark | Iara |
 |---|---|---|---|
 | year, month, day, hour, minute, second, quarter, week, weekday, ordinal_day | yes | yes | P |
 | truncate / date_trunc | yes | date_trunc | P |
@@ -147,7 +147,7 @@ Status: P = present, Pa = partial, M = missing.
 
 ### List, array, struct, map
 
-| Op | Polars | PySpark | Workhouse |
+| Op | Polars | PySpark | Iara |
 |---|---|---|---|
 | list namespace (len, get, first, last, contains, sort, unique, join, sum, mean, min, max, explode, slice, concat) | yes (43 methods) | array_* functions | M (no list/array namespace) |
 | struct namespace (field, unnest, rename_fields, with_fields) | yes | named_struct, struct | M |
@@ -157,7 +157,7 @@ Status: P = present, Pa = partial, M = missing.
 
 ### Math and conditionals
 
-| Op | Polars | PySpark | Workhouse |
+| Op | Polars | PySpark | Iara |
 |---|---|---|---|
 | abs, ceil, floor, round, sqrt, exp, ln, log10, log2, power | yes | yes | P |
 | sign, mod, cbrt, trig, radians, degrees | yes | yes | M |
@@ -169,7 +169,7 @@ Status: P = present, Pa = partial, M = missing.
 
 ### Aggregates
 
-| Op | Polars | PySpark | Workhouse |
+| Op | Polars | PySpark | Iara |
 |---|---|---|---|
 | count, sum, mean, min, max, median, std, var, first, last, n_unique | yes | yes | P |
 | approx_count_distinct / approx_n_unique | yes | yes | P (SQL) |
@@ -188,7 +188,7 @@ Status: P = present, Pa = partial, M = missing.
 
 ### Window
 
-| Op | Polars | PySpark | Workhouse |
+| Op | Polars | PySpark | Iara |
 |---|---|---|---|
 | row_number, rank, dense_rank, percent_rank, cume_dist, ntile | (rank) | yes | P (SQL), Pa in Python (rank, row_number) |
 | lag, lead, first_value, last_value, nth_value | (shift) | yes | P (SQL), Python shift/diff |
@@ -200,7 +200,7 @@ Status: P = present, Pa = partial, M = missing.
 
 ### IO
 
-| Op | Polars | PySpark | Workhouse |
+| Op | Polars | PySpark | Iara |
 |---|---|---|---|
 | read/scan parquet, csv | yes | yes | P |
 | csv: quote char, null values, skip rows, columns subset, schema override, compression | yes | yes | Pa (header, separator, infer length only) |
@@ -214,7 +214,7 @@ Status: P = present, Pa = partial, M = missing.
 
 ### SQL functions
 
-Workhouse SQL covers the scalar and aggregate list in section 1. Missing SQL functions that Spark users expect: regexp_*, lpad/rpad, split_part, repeat, initcap, concat_ws, date_add/date_sub/date_diff/add_months/last_day/make_date, array_* and struct/map constructors, json functions, md5/sha2, bitwise ops, percentile_approx, collect_list/array_agg, string_agg, count_if, bool_and/bool_or, max_by/min_by, UNNEST/EXPLODE, PIVOT/UNPIVOT (not in sqlparser output). Verify before relying on `now` and `current_date`, which did not show up in the registry grep.
+Iara SQL covers the scalar and aggregate list in section 1. Missing SQL functions that Spark users expect: regexp_*, lpad/rpad, split_part, repeat, initcap, concat_ws, date_add/date_sub/date_diff/add_months/last_day/make_date, array_* and struct/map constructors, json functions, md5/sha2, bitwise ops, percentile_approx, collect_list/array_agg, string_agg, count_if, bool_and/bool_or, max_by/min_by, UNNEST/EXPLODE, PIVOT/UNPIVOT (not in sqlparser output). Verify before relying on `now` and `current_date`, which did not show up in the registry grep.
 
 ## 3. Should add (ranked)
 
@@ -222,15 +222,15 @@ Effort: S = under a day, M = a few days, L = a week or more. Code hints point at
 
 ### P1: common in real data work and cheap
 
-1. **fill_null / fill_nan on DataFrame** (Polars `fill_null`, `fill_nan`; Spark `fillna`). Python: `df.fill_null(value, columns=None)`. SQL: `COALESCE` per column already works, so add a helper. Code: `python/workhouse/__init__.py` DataFrame and LazyFrame. Effort S.
+1. **fill_null / fill_nan on DataFrame** (Polars `fill_null`, `fill_nan`; Spark `fillna`). Python: `df.fill_null(value, columns=None)`. SQL: `COALESCE` per column already works, so add a helper. Code: `python/iara/__init__.py` DataFrame and LazyFrame. Effort S.
 2. **drop_nulls(subset) / drop_nans** (Polars `drop_nulls`; Spark `dropna`). Python: `df.drop_nulls(subset=None)`. SQL: `WHERE col IS NOT NULL` form. Code: Python layer, plus `physical/` filter if a native op is wanted. Effort S.
-3. **unique(subset, keep) / drop_duplicates(subset)** (Polars `unique(subset=, keep=)`, Spark `dropDuplicates`). Python: `lf.unique(subset=[...], keep="first")`. SQL: `DISTINCT ON`, already parsed. Code: `crates/workhouse-core/src/logical.rs` and `exec/`. Effort M.
+3. **unique(subset, keep) / drop_duplicates(subset)** (Polars `unique(subset=, keep=)`, Spark `dropDuplicates`). Python: `lf.unique(subset=[...], keep="first")`. SQL: `DISTINCT ON`, already parsed. Code: `crates/iara-core/src/logical.rs` and `exec/`. Effort M.
 4. **sample(n / fraction, seed)** (Polars `sample`, Spark `sample`). Python: `df.sample(n=None, fraction=None, seed=None)`. SQL: `TABLESAMPLE`. Code: `logical.rs` and `exec/ops.rs`. Effort M.
 5. **with_row_index / monotonically_increasing_id** (Polars `with_row_index`, Spark `monotonically_increasing_id`). Python: `df.with_row_index(name="index", offset=0)`. SQL: `ROW_NUMBER() OVER ()`. Code: `window.rs` and a Python wrapper. Effort S.
 6. **describe / summary** (Polars `describe`, Spark `summary`). Python: `df.describe()` returns a DataFrame of count, null_count, mean, std, min, quartiles, max. Code: Python layer built on existing aggregates. Effort M.
 7. **union_by_name** (Polars `concat(how="diagonal")`, Spark `unionByName`). Python: `lf.union(other, by_name=True)`. SQL: `UNION ALL BY NAME`. Code: `logical.rs` union, `physical/planner.rs`. Effort S.
-8. **JSON and NDJSON IO** (Polars `read_json`, `read_ndjson`, `scan_ndjson`, `write_ndjson`, `sink_ndjson`; Spark `read.json`). Python: `read_ndjson(path)`, `scan_ndjson(path)`, `df.write_ndjson(path)`. SQL: `read_json(...)`. Code: new `crates/workhouse-core/src/io/json/` next to `io/csv/`, and `crates/workhouse-python`. Effort L.
-9. **CSV options** (Polars `read_csv` kwargs, Spark `csv` options). Python: `read_csv(path, quote_char, null_values, skip_rows, columns, schema, compression)`. Code: `io/csv/source.rs`, `io/csv/write.rs`, `python/workhouse/__init__.py` `scan_csv`. Effort M.
+8. **JSON and NDJSON IO** (Polars `read_json`, `read_ndjson`, `scan_ndjson`, `write_ndjson`, `sink_ndjson`; Spark `read.json`). Python: `read_ndjson(path)`, `scan_ndjson(path)`, `df.write_ndjson(path)`. SQL: `read_json(...)`. Code: new `crates/iara-core/src/io/json/` next to `io/csv/`, and `crates/iara-python`. Effort L.
+9. **CSV options** (Polars `read_csv` kwargs, Spark `csv` options). Python: `read_csv(path, quote_char, null_values, skip_rows, columns, schema, compression)`. Code: `io/csv/source.rs`, `io/csv/write.rs`, `python/iara/__init__.py` `scan_csv`. Effort M.
 10. **Expr.clip, sign, mod, is_nan** (Polars `clip`, `sign`, `%`, `is_nan`; Spark `sign`, `pmod`, `isnan`). Python: `e.clip(lo, hi)`, `e.sign()`, `e.is_nan()`. SQL: `SIGN`, `MOD`, `CLIP` via `GREATEST(LEAST())`. Code: `expr.rs` `ScalarFunc`, `physical/functions.rs`, `_window.py` style helpers in `__init__.py`. Effort S.
 11. **Date arithmetic functions** (Spark `date_add`, `date_sub`, `datediff`, `add_months`, `last_day`, `make_date`; Polars `dt.offset_by`, `dt.month_end`). Python: `e.dt.offset_by("1mo")`, `e.dt.month_end()`. SQL: `DATE_ADD(d, n)`, `DATEDIFF(a, b)`, `ADD_MONTHS(d, n)`, `LAST_DAY(d)`, `MAKE_DATE(y, m, d)`. Code: `scalar.rs` plus `physical/functions.rs` Date32 arithmetic. Effort M.
 12. **String parse to date/time with format** (Polars `str.to_date(format)`, `str.to_datetime`, `str.strptime`; Spark `to_date(col, fmt)`, `to_timestamp`). Python: `e.str.to_datetime("%Y-%m-%d %H:%M")`. SQL: `TO_DATE(s, fmt)`, `TO_TIMESTAMP(s, fmt)`. Code: `physical/functions.rs` using chrono parse. Effort M.
@@ -247,8 +247,8 @@ Effort: S = under a day, M = a few days, L = a week or more. Code hints point at
 
 21. **pivot / unpivot (melt)** (Polars `pivot`, `unpivot`, `melt`; Spark `pivot`, `unpivot`). Python: `df.pivot(on="k", index="id", values="v", aggregate="sum")`, `df.unpivot(index=["id"], on=[...])`. SQL: `PIVOT`, `UNPIVOT`. Code: `logical.rs` plus rewrite to `group_by` + `CASE`. Effort M/L.
 22. **asof join and join_where** (Polars `join_asof`, `join_where`). Python: `lf.join_asof(other, on="ts", by="id", strategy="backward")`. SQL: `ASOF JOIN`. Code: `exec/join.rs`. Effort L.
-23. **list namespace** (Polars `Expr.list.*`: len, get, first, last, contains, sort, unique, join, sum, mean, min, max, concat, slice, set operations). Python: `e.list.len()`, `e.list.contains(x)`. SQL: `ARRAY_LENGTH`, `ARRAY_CONTAINS`, `ARRAY_SORT`, `ARRAY_DISTINCT`, `ARRAY_JOIN`. Code: new `python/workhouse/_list.py` namespace, `physical/functions.rs`. Effort L.
-24. **struct namespace and struct()** (Polars `struct.field`, `struct.unnest`, `struct.rename_fields`; Spark `struct`, `named_struct`). Python: `pl.struct(a, b)`, `e.struct.field("a")`, `e.struct.unnest()`. SQL: `STRUCT(a, b)`, `named_struct`. Code: `types.rs`, `physical/functions.rs`, new `python/workhouse/_struct.py`. Effort L.
+23. **list namespace** (Polars `Expr.list.*`: len, get, first, last, contains, sort, unique, join, sum, mean, min, max, concat, slice, set operations). Python: `e.list.len()`, `e.list.contains(x)`. SQL: `ARRAY_LENGTH`, `ARRAY_CONTAINS`, `ARRAY_SORT`, `ARRAY_DISTINCT`, `ARRAY_JOIN`. Code: new `python/iara/_list.py` namespace, `physical/functions.rs`. Effort L.
+24. **struct namespace and struct()** (Polars `struct.field`, `struct.unnest`, `struct.rename_fields`; Spark `struct`, `named_struct`). Python: `pl.struct(a, b)`, `e.struct.field("a")`, `e.struct.unnest()`. SQL: `STRUCT(a, b)`, `named_struct`. Code: `types.rs`, `physical/functions.rs`, new `python/iara/_struct.py`. Effort L.
 25. **Expr.replace / replace_strict (mapping)** (Polars `replace`, `replace_strict`). Python: `e.replace({"a": 1})`. SQL: `CASE WHEN` generated. Code: `__init__.py` building `when/then` chain. Effort S.
 26. **value_counts, mode, n_unique on frame, top_k / bottom_k, arg_max / arg_min** (Polars `value_counts`, `top_k`, `bottom_k`, `arg_max`, `arg_min`, `mode`; Spark no direct). Python: `e.value_counts()`, `df.top_k(3, by="x")`. SQL: `ORDER BY ... LIMIT`. Code: Python wrappers plus `AggFunc` additions. Effort S each.
 27. **Trig, cbrt, log1p, radians, degrees, hypot** (Polars, Spark). Python: `e.sin()`, `e.cbrt()`. SQL: `SIN`, `COS`, `TAN`, `CBRT`, `LOG1P`, `RADIANS`, `DEGREES`. Code: `expr.rs` `ScalarFunc`, `physical/functions.rs` `unary_f64`. Effort S.
@@ -278,5 +278,5 @@ Effort: S = under a day, M = a few days, L = a week or more. Code hints point at
 ## 4. Notes
 
 - The biggest structural gaps are list/struct types (blocks explode, collect_list, list namespace, struct namespace) and regex (blocks many string tasks). Fixing these two unlocks most of the P1 and P2 items.
-- Unverified in code: `now`, `current_date`, trig names, `corr`, `ROLLUP`/`CUBE` parsing. Confirm before writing the Workhouse roadmap around them.
+- Unverified in code: `now`, `current_date`, trig names, `corr`, `ROLLUP`/`CUBE` parsing. Confirm before writing the Iara roadmap around them.
 - PySpark was not installed, so its list comes from the docs index. The docs page was truncated after the first 100k characters, so the Pandas API on Spark section is not covered. The DataFrame list is complete.

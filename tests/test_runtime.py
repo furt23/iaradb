@@ -9,16 +9,16 @@ import numpy as np
 import pyarrow as pa
 import pytest
 
-import workhouse as wh
+import iara as ia
 
 N = 200_000
 
 
 @pytest.fixture(scope="module")
-def ctx() -> wh.SessionContext:
+def ctx() -> ia.SessionContext:
     rng = np.random.default_rng(7)
     facts = pa.table({"k": rng.integers(0, 10, N), "v": rng.random(N)})
-    c = wh.SessionContext()
+    c = ia.SessionContext()
     c.register("facts", facts)
     return c
 
@@ -44,7 +44,7 @@ def run_in_thread(fn):
 def wait_for_running(timeout: float = 5.0) -> list[dict]:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        running = wh.running_queries()
+        running = ia.running_queries()
         if running and running[0]["pipelines"]:
             return running
         time.sleep(0.01)
@@ -56,26 +56,26 @@ def test_interrupt_cancels_running_query(ctx):
     running = wait_for_running()
     assert running[0]["cancelled"] is False
     t0 = time.monotonic()
-    assert wh.interrupt() >= 1
+    assert ia.interrupt() >= 1
     t.join(timeout=10)
     assert not t.is_alive(), "query did not stop after interrupt"
     assert time.monotonic() - t0 < 5
-    assert isinstance(out.get("error"), wh.QueryCancelled)
-    assert isinstance(out["error"], wh.WorkhouseError)
-    assert wh.running_queries() == []
+    assert isinstance(out.get("error"), ia.QueryCancelled)
+    assert isinstance(out["error"], ia.IaraError)
+    assert ia.running_queries() == []
 
 
 def test_cancel_query_by_id(ctx):
     t, out = run_in_thread(lambda: ctx.sql(EXPLODING).collect())
     qid = wait_for_running()[0]["id"]
-    assert wh.cancel_query(qid)
+    assert ia.cancel_query(qid)
     t.join(timeout=10)
-    assert isinstance(out.get("error"), wh.QueryCancelled)
-    assert not wh.cancel_query(qid), "finished queries are no longer cancellable"
+    assert isinstance(out.get("error"), ia.QueryCancelled)
+    assert not ia.cancel_query(qid), "finished queries are no longer cancellable"
 
 
 def test_interrupt_does_not_affect_later_queries(ctx):
-    wh.interrupt()  # nothing running: a no-op
+    ia.interrupt()  # nothing running: a no-op
     assert ctx.sql("select count(*) from facts").collect().item() == N
 
 
@@ -84,7 +84,7 @@ def test_progress_reports_pipelines(ctx):
     running = wait_for_running()
     p = running[0]["pipelines"][0]
     assert {"source", "operators", "sink", "morsels_total", "morsels_done", "rows_in", "rows_out", "elapsed_ms", "finished"} <= p.keys()
-    wh.interrupt()
+    ia.interrupt()
     t.join(timeout=10)
 
 

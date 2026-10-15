@@ -2,7 +2,7 @@
 
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
-import type { CellOutput, ErrorOutput, StreamChunk } from "@workhouse/protocol";
+import type { CellOutput, ErrorOutput, StreamChunk } from "@iara/protocol";
 import { type ComponentPropsWithoutRef, useMemo } from "react";
 import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";

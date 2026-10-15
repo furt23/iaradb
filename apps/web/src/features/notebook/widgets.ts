@@ -1,6 +1,6 @@
-/** Pure helpers of the widget bar (see workhouse.widgets). */
+/** Pure helpers of the widget bar (see iara.widgets). */
 
-import type { WidgetDefinition, WidgetValue } from "@workhouse/protocol";
+import type { WidgetDefinition, WidgetValue } from "@iara/protocol";
 
 /** How long typing in a text or number widget waits before the value is sent. */
 export const WIDGET_DEBOUNCE_MS = 400;

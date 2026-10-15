@@ -9,6 +9,7 @@ import TextField from "@mui/material/TextField";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { useTranslation } from "@/i18n";
 import { useGuard } from "@/features/shell/notify";
 import { unwrap } from "@/lib/action";
 import { joinPath } from "@/lib/paths";
@@ -16,6 +17,7 @@ import { createNotebook } from "@/server/actions/notebooks";
 
 /** A new notebook, in `folder` by default ("" = the workspace root). */
 export function NewNotebookDialog({ open, onClose, folder = "notebooks" }: { open: boolean; onClose(): void; folder?: string }) {
+  const { t } = useTranslation();
   const [name, setName] = useState(joinPath(folder, "untitled.py"));
   useEffect(() => {
     if (open) setName(joinPath(folder, "untitled.py"));
@@ -37,23 +39,23 @@ export function NewNotebookDialog({ open, onClose, folder = "notebooks" }: { ope
 
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
-      <DialogTitle>New notebook</DialogTitle>
+      <DialogTitle>{t("New notebook")}</DialogTitle>
       <DialogContent>
         <TextField
           autoFocus
           fullWidth
-          label="Path in the workspace"
+          label={t("Path in the workspace")}
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && create()}
-          helperText="A marimo notebook (.py): runnable as a script, readable in Git diffs"
+          helperText={t("A marimo notebook (.py): runnable as a script, readable in Git diffs")}
           sx={{ mt: 1 }}
         />
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose}>{t("Cancel")}</Button>
         <Button variant="contained" onClick={create} disabled={busy || !name.trim()}>
-          Create
+          {t("Create")}
         </Button>
       </DialogActions>
     </Dialog>

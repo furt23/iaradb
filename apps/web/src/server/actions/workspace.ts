@@ -1,6 +1,6 @@
 "use server";
 
-import type { KernelInfo } from "@workhouse/protocol";
+import type { KernelInfo } from "@iara/protocol";
 
 import { requireUser } from "../auth/session";
 import { kernels } from "../kernel/manager";

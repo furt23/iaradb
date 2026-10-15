@@ -5,7 +5,7 @@ import { expect, test } from "@playwright/test";
 
 import { fileUrl, newQuery } from "./helpers";
 
-const workspace = () => process.env.WORKHOUSE_E2E_WORKSPACE!;
+const workspace = () => process.env.IARA_E2E_WORKSPACE!;
 
 test("SQL files open in the workbench, run, save as you type and follow renames", async ({ page }) => {
   await newQuery(page, "queries/e2e_regions.sql");

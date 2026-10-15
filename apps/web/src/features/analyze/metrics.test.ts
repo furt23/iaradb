@@ -1,4 +1,4 @@
-import type { AnalyzedNode } from "@workhouse/protocol";
+import type { AnalyzedNode } from "@iara/protocol";
 import { describe, expect, it } from "vitest";
 
 import { heat, hottestMs, metricRows, planNodes, timeShare } from "./metrics";

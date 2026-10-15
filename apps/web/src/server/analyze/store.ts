@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import type { QueryAnalysis } from "@workhouse/protocol";
+import type { QueryAnalysis } from "@iara/protocol";
 
 import { preview } from "@/features/analyze/preview";
 import type { AnalysisSummary, StoredAnalysis } from "@/features/analyze/types";

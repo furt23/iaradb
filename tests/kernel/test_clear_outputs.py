@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from workhouse.kernel.session import KernelSession
+from iara.kernel.session import KernelSession
 
 
 @pytest.fixture()

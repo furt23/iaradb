@@ -9,7 +9,7 @@ from typing import Any
 import pyarrow as pa
 import pytest
 
-from workhouse.kernel.session import KernelSession
+from iara.kernel.session import KernelSession
 
 
 @pytest.fixture()
@@ -30,12 +30,12 @@ def step(**op: Any) -> dict[str, Any]:
 
 def python_rows(session: KernelSession, out: dict[str, Any], src: dict[str, Any]) -> list[dict[str, Any]]:
     """Run the exported Python as a notebook would (``ws``, and ``df`` for a result)."""
-    import workhouse as wh
+    import iara as ia
 
     # what a notebook cell sees: the setup cell's `ws`
     scope: dict[str, Any] = {"ws": session.ws}
     if "result_id" in src:
-        scope["df"] = wh.from_arrow(session.results.get(src["result_id"]))
+        scope["df"] = ia.from_arrow(session.results.get(src["result_id"]))
     exec(out["python"], scope)  # noqa: S102
     return scope["wrangled"].collect().to_arrow().to_pylist()
 
@@ -222,7 +222,7 @@ def test_the_python_export_gives_the_same_rows_as_the_sql(session: KernelSession
 def test_the_python_export_of_a_catalog_table(session: KernelSession):
     src = {"table": "sales"}
     out = call(session, "wrangle.preview", source=src, steps=[step(kind="filter", column="grp", op="equals", value="3")])
-    assert out["python"].startswith("from workhouse import functions as F\n") and 'ws.table("sales")' in out["python"]
+    assert out["python"].startswith("from iara import functions as F\n") and 'ws.table("sales")' in out["python"]
     assert ".filter(F.col(" in out["python"]
     assert python_rows(session, out, src) == sql_rows(session, out, src)
     assert call(session, "wrangle.preview", source=src, steps=[])["python"] == 'wrangled = ws.table("sales")'

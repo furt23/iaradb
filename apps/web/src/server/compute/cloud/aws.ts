@@ -48,7 +48,7 @@ async function retry<T>(fn: () => Promise<T>, retryOn: string[], attempts = 12, 
   }
 }
 
-/** Tags of the shared resources of this Studio's team (security group, role); throws on an invalid `WORKHOUSE_TEAM`. */
+/** Tags of the shared resources of this Studio's team (security group, role); throws on an invalid `IARA_TEAM`. */
 function sharedTags(team: string | null): Tag[] {
   return [{ Key: TAG_COMPONENT, Value: "clusters" }, ...teamTags(team)];
 }
@@ -76,7 +76,7 @@ export class AwsCloud implements CloudApi {
   async artifactsBucket(): Promise<string> {
     if (this.bucket) return this.bucket;
     const account = (await this.sts.send(new GetCallerIdentityCommand({}))).Account;
-    const name = `workhouse-artifacts-${account}-${this.region}`;
+    const name = `iara-artifacts-${account}-${this.region}`;
     try {
       await this.s3.send(new HeadBucketCommand({ Bucket: name }));
     } catch (e) {
@@ -121,7 +121,7 @@ export class AwsCloud implements CloudApi {
       const made = await this.ec2.send(
         new CreateSecurityGroupCommand({
           GroupName: name,
-          Description: "Workhouse clusters: SSH from the Studio only",
+          Description: "Iara clusters: SSH from the Studio only",
           VpcId: vpc,
           TagSpecifications: [{ ResourceType: "security-group", Tags: sharedTags(team) }],
         }),
@@ -132,7 +132,7 @@ export class AwsCloud implements CloudApi {
     const ssh = (group.IpPermissions ?? []).filter((p) => p.FromPort === 22 && p.ToPort === 22);
     const current = new Set(ssh.flatMap((p) => (p.IpRanges ?? []).map((r) => r.CidrIp!)));
     const wanted = new Set(cidrs);
-    const rule = (list: string[]): IpPermission[] => [{ IpProtocol: "tcp", FromPort: 22, ToPort: 22, IpRanges: list.map((c) => ({ CidrIp: c, Description: "workhouse studio" })) }];
+    const rule = (list: string[]): IpPermission[] => [{ IpProtocol: "tcp", FromPort: 22, ToPort: 22, IpRanges: list.map((c) => ({ CidrIp: c, Description: "iara studio" })) }];
     const stale = [...current].filter((c) => !wanted.has(c));
     const missing = [...wanted].filter((c) => !current.has(c));
     if (stale.length) await this.ec2.send(new RevokeSecurityGroupIngressCommand({ GroupId: id, IpPermissions: rule(stale) }));
@@ -150,7 +150,7 @@ export class AwsCloud implements CloudApi {
       await this.iam.send(new GetRoleCommand({ RoleName: role }));
     } catch (e) {
       if (errorName(e) !== "NoSuchEntityException") throw e;
-      await this.iam.send(new CreateRoleCommand({ RoleName: role, Path: "/workhouse/", AssumeRolePolicyDocument: JSON.stringify(TRUST_POLICY), Tags: tags }));
+      await this.iam.send(new CreateRoleCommand({ RoleName: role, Path: "/iara/", AssumeRolePolicyDocument: JSON.stringify(TRUST_POLICY), Tags: tags }));
       created = true;
     }
     await this.iam.send(new PutRolePolicyCommand({ RoleName: role, PolicyName: "data-access", PolicyDocument: JSON.stringify(rolePolicy(artifacts, dataBuckets)) }));
@@ -158,7 +158,7 @@ export class AwsCloud implements CloudApi {
       await this.iam.send(new GetInstanceProfileCommand({ InstanceProfileName: role }));
     } catch (e) {
       if (errorName(e) !== "NoSuchEntityException") throw e;
-      await this.iam.send(new CreateInstanceProfileCommand({ InstanceProfileName: role, Path: "/workhouse/", Tags: tags }));
+      await this.iam.send(new CreateInstanceProfileCommand({ InstanceProfileName: role, Path: "/iara/", Tags: tags }));
       await this.iam.send(new AddRoleToInstanceProfileCommand({ InstanceProfileName: role, RoleName: role }));
       created = true;
     }
@@ -170,7 +170,7 @@ export class AwsCloud implements CloudApi {
   async launch(spec: LaunchSpec): Promise<string> {
     const ami = (await this.ssm.send(new GetParameterCommand({ Name: AMI_PARAM }))).Parameter?.Value;
     const tags: Tag[] = [
-      { Key: "Name", Value: `workhouse-${spec.clusterName}` },
+      { Key: "Name", Value: `iara-${spec.clusterName}` },
       { Key: TAG_CLUSTER, Value: spec.clusterId },
       { Key: TAG_COMPONENT, Value: "cluster" },
       ...teamTags(teamId()),
@@ -222,7 +222,7 @@ export class AwsCloud implements CloudApi {
   }
 
   async studioCidrs(): Promise<string[]> {
-    const fixed = process.env.WORKHOUSE_STUDIO_CIDRS;
+    const fixed = process.env.IARA_STUDIO_CIDRS;
     if (fixed) return fixed.split(",").map((c) => c.trim()).filter(Boolean);
     const ip = (await (await fetch("https://checkip.amazonaws.com", { signal: AbortSignal.timeout(10_000) })).text()).trim();
     if (!/^\d+\.\d+\.\d+\.\d+$/.test(ip)) throw new Error("could not find this machine's public address");

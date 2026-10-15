@@ -1,11 +1,11 @@
 /**
- * The catalog in `workhouse.toml` (pure): its tables and schemas, read without
+ * The catalog in `iara.toml` (pure): its tables and schemas, read without
  * a kernel, and changed in the file while keeping the rest of it (comments
  * included). A name is `table` (schema `main`) or `schema.table`. Writers emit
  * `[tables.tpch.lineitem]`; readers also take `[tables."tpch.lineitem"]`.
  */
 
-import type { TableRef } from "@workhouse/protocol";
+import type { TableRef } from "@iara/protocol";
 import { parse } from "smol-toml";
 
 export const MAIN_SCHEMA = "main";
@@ -94,7 +94,7 @@ function entriesOf(key: string, spec: unknown): CatalogTable[] {
 }
 
 /**
- * The tables of a parsed workhouse.toml, as the kernel reads them: `[tables.x]`
+ * The tables of a parsed iara.toml, as the kernel reads them: `[tables.x]`
  * is in main, `[tables.s.x]` (or `[tables."s.x"]`) is in schema `s`.
  */
 export function tablesOf(cfg: unknown): CatalogTable[] {
@@ -116,7 +116,7 @@ export function bySchemaOrder(a: string, b: string): number {
   return a.localeCompare(b);
 }
 
-/** The schemas of a workhouse.toml text: declared ones (with their description) and those used by a table. */
+/** The schemas of a iara.toml text: declared ones (with their description) and those used by a table. */
 export function schemasOf(text: string): CatalogSchema[] {
   const cfg = parse(text);
   const declared = isRecord(cfg.schemas) ? cfg.schemas : {};

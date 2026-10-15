@@ -2,7 +2,7 @@
 
 import Box from "@mui/material/Box";
 import { DataGrid, type GridColDef, type GridPaginationModel, type GridSortModel } from "@mui/x-data-grid";
-import type { CellValue, ResultMeta, ResultPage } from "@workhouse/protocol";
+import type { CellValue, ResultMeta, ResultPage } from "@iara/protocol";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useNotify } from "@/features/shell/notify";

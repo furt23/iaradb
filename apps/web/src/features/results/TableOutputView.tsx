@@ -6,8 +6,9 @@ import Button from "@mui/material/Button";
 import Tab from "@mui/material/Tab";
 import Tabs from "@mui/material/Tabs";
 import Typography from "@mui/material/Typography";
-import type { ChartSpec, TableOutput } from "@workhouse/protocol";
+import type { ChartSpec, TableOutput } from "@iara/protocol";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { useGuard, useNotify } from "@/features/shell/notify";
 import { unwrap } from "@/lib/action";
@@ -51,6 +52,7 @@ export interface ChartProps {
 
 /** A table result with a chart of it, and its run profile and plan when it has them. */
 export function TableOutputView({ kernelKey, output, height, chart, onChart }: { kernelKey: string; output: TableOutput; height?: number } & ChartProps) {
+  const { t } = useTranslation();
   const [tab, setTab] = useState<"result" | "chart" | "wrangle" | "profile" | "plan">(chart ? "chart" : "result");
   const [local, setLocal] = useState<ChartSpec | null>(null);
   const { result, profile, plan } = output;
@@ -59,12 +61,13 @@ export function TableOutputView({ kernelKey, output, height, chart, onChart }: {
     <Box>
       <Box sx={{ display: "flex", alignItems: "center", gap: 1, px: 1, borderBottom: 1, borderColor: "divider" }}>
         <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ minHeight: 34, "& .MuiTab-root": { minHeight: 34, py: 0, px: 1.5, fontSize: 12.5 } }}>
-          <Tab value="result" label="Result" />
-          <Tab value="chart" label="Chart" />
-          <Tab value="wrangle" label="Wrangle" />
-          {profile && <Tab value="profile" label="Profile" />}
-          {plan && <Tab value="plan" label="Plan" />}
+          <Tab value="result" label={t("Result")} />
+          <Tab value="chart" label={t("Chart")} />
+          <Tab value="wrangle" label={t("Wrangle")} />
+          {profile && <Tab value="profile" label={t("Profile")} />}
+          {plan && <Tab value="plan" label={t("Plan")} />}
         </Tabs>
+
         <Typography variant="body2" sx={{ color: "text.secondary", px: 1 }}>
           {rowsLabel(result)} × {result.columns.length} columns
           {profile && ` · ${formatDuration(profile.elapsed_ms)}`}

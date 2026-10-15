@@ -6,10 +6,10 @@ import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 
 // a throwaway repository whose workspace is a subdirectory
-const repo = fs.mkdtempSync(path.join(os.tmpdir(), "workhouse-git-"));
+const repo = fs.mkdtempSync(path.join(os.tmpdir(), "iara-git-"));
 const workspace = path.join(repo, "analytics");
 fs.mkdirSync(path.join(workspace, "notebooks"), { recursive: true });
-process.env.WORKHOUSE_WORKSPACE = workspace;
+process.env.IARA_WORKSPACE = workspace;
 
 const run = (...args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" });
 

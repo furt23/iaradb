@@ -19,7 +19,7 @@ export interface FileNode {
   children?: FileNode[];
 }
 
-const IGNORED = new Set([".git", "node_modules", ".venv", "__pycache__", ".workhouse", ".pytest_cache", ".next", ".ipynb_checkpoints"]);
+const IGNORED = new Set([".git", "node_modules", ".venv", "__pycache__", ".iara", ".pytest_cache", ".next", ".ipynb_checkpoints"]);
 const MAX_ENTRIES = 3000;
 const MAX_DEPTH = 8;
 const MAX_TEXT_BYTES = 1 << 20;

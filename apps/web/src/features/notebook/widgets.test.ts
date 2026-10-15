@@ -1,4 +1,4 @@
-import type { NotebookView, WidgetDefinition, WidgetsState } from "@workhouse/protocol";
+import type { NotebookView, WidgetDefinition, WidgetsState } from "@iara/protocol";
 import { describe, expect, it } from "vitest";
 
 import { initialState, notebookReducer } from "./notebookState";

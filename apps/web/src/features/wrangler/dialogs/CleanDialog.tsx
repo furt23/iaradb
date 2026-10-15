@@ -13,7 +13,7 @@ import Select from "@mui/material/Select";
 import Tab from "@mui/material/Tab";
 import Tabs from "@mui/material/Tabs";
 import TextField from "@mui/material/TextField";
-import type { ColumnInfo } from "@workhouse/protocol";
+import type { ColumnInfo } from "@iara/protocol";
 import { useEffect, useState } from "react";
 
 import type { FillNullStrategy, WranglerStep } from "../types";

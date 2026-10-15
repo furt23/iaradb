@@ -33,7 +33,7 @@ test("tables open in tabs next to the catalog, with columns, statistics and samp
 });
 
 test("a table created with SQL joins the catalog, and leaves it when dropped", async ({ page }) => {
-  const toml = () => fs.readFileSync(path.join(process.env.WORKHOUSE_E2E_WORKSPACE!, "workhouse.toml"), "utf8");
+  const toml = () => fs.readFileSync(path.join(process.env.IARA_E2E_WORKSPACE!, "iara.toml"), "utf8");
   await page.goto("/sql?q=" + encodeURIComponent("create table e2e_rich partitioned by (o_orderstatus) as select o_orderkey, o_orderstatus, o_totalprice from orders where o_totalprice > 400000"));
   await page.getByRole("button", { name: "Run", exact: true }).click();
   await expect(page.getByText("1 rows × 4 columns")).toBeVisible();

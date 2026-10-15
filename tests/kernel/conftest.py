@@ -11,7 +11,7 @@ import pytest
 def _no_active_workspace():
     """In-process kernel sessions make their workspace the active one."""
     yield
-    from workhouse.workspaces import set_active
+    from iara.workspaces import set_active
 
     set_active(None)
 
@@ -25,7 +25,7 @@ def workspace(tmp_path: Path) -> Path:
         tmp_path / "data" / "sales.parquet",
     )
     (tmp_path / "data" / "regions.csv").write_text("grp,region\n0,north\n1,south\n2,east\n3,west\n")
-    (tmp_path / "workhouse.toml").write_text(
+    (tmp_path / "iara.toml").write_text(
         '[workspace]\nname = "demo"\n\n'
         '[tables.sales]\npath = "data/sales.parquet"\n\n'
         '[tables.regions]\npath = "data/regions.csv"\n'

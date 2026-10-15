@@ -2,7 +2,7 @@ import "server-only";
 
 import path from "node:path";
 
-import { ENGINE_VERSION } from "@workhouse/protocol";
+import { ENGINE_VERSION } from "@iara/protocol";
 
 import { readConfigText } from "../workspace/sources";
 import { sshExec } from "../kernel/launchers/ssh2";
@@ -21,7 +21,7 @@ import { dataDir, Store } from "./store";
  */
 
 function localCompute(): boolean {
-  const flag = process.env.WORKHOUSE_LOCAL_COMPUTE;
+  const flag = process.env.IARA_LOCAL_COMPUTE;
   if (flag !== undefined) return flag !== "0" && flag.toLowerCase() !== "false";
   return !process.env.RENDER;
 }
@@ -57,10 +57,10 @@ function create(): ClusterService {
   return svc;
 }
 
-const globalForClusters = globalThis as unknown as { __workhouseClusters?: ClusterService };
+const globalForClusters = globalThis as unknown as { __iaraClusters?: ClusterService };
 
 /** Survives module reloads in development. */
-export const clusters: ClusterService = (globalForClusters.__workhouseClusters ??= create());
+export const clusters: ClusterService = (globalForClusters.__iaraClusters ??= create());
 
 export function cloudConfigured(): boolean {
   return cloudApi() !== null;

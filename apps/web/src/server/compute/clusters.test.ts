@@ -52,14 +52,14 @@ class FakeCloud implements CloudApi {
     return "artifacts";
   }
   async engineWheel(version: string) {
-    return this.published ? `s3://artifacts/engine/${version}/workhouse.whl` : null;
+    return this.published ? `s3://artifacts/engine/${version}/iara.whl` : null;
   }
   async ensureNetwork() {
     return "sg-1";
   }
   async ensureRole(buckets: string[]) {
     this.roleBuckets = buckets;
-    return "workhouse-cluster";
+    return "iara-cluster";
   }
   async launch(spec: LaunchSpec) {
     this.launched.push(spec);
@@ -119,7 +119,7 @@ describe("clusters", () => {
     expect(rec.runtime).toMatchObject({ state: "running", instanceId: "i-1", publicIp: "198.51.100.9", hostKey: "SHA256-host" });
     expect(cloud.roleBuckets).toEqual(["sales-data"]);
     expect(cloud.launched[0]).toMatchObject({ instanceType: "m7i-flex.large", securityGroupId: "sg-1", volumeGb: 40 });
-    expect(cloud.launched[0].userData).toContain("s3://artifacts/engine/0.1.0/workhouse.whl");
+    expect(cloud.launched[0].userData).toContain("s3://artifacts/engine/0.1.0/iara.whl");
     // the machine's watchdog waits a little longer than the Studio's reaper
     expect(cloud.launched[0].userData).toContain(`-ge ${20 * 60} ]`);
   });
@@ -131,7 +131,7 @@ describe("clusters", () => {
     svc.start(c.id);
     await svc.settled(c.id);
     expect(store.cluster(c.id)!.runtime).toMatchObject({ state: "error" });
-    expect(store.cluster(c.id)!.runtime.error).toMatch(/workhouse.cloud publish/);
+    expect(store.cluster(c.id)!.runtime.error).toMatch(/iara.cloud publish/);
     expect(cloud.launched).toHaveLength(0);
   });
 
@@ -256,7 +256,7 @@ describe("clusters", () => {
     svc.start(c.id);
     await svc.settled(c.id);
     expect(svc.eventsOf(c.id).slice(0, 2).map((e) => e.kind)).toEqual(["error", "start"]);
-    expect(svc.eventsOf(c.id)[0].message).toMatch(/workhouse.cloud publish/);
+    expect(svc.eventsOf(c.id)[0].message).toMatch(/iara.cloud publish/);
   });
 
   it("clones a cluster's machine and limits, without starting it", () => {

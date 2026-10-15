@@ -2,16 +2,16 @@ import { describe, expect, it } from "vitest";
 
 import { authMode, isPublicPath, missingAuth0Config, studioUser } from "./access";
 
-const env = { WORKHOUSE_ALLOWED_EMAILS: " A@x.com, b@x.com ", WORKHOUSE_ADMIN_EMAILS: "a@x.com" };
+const env = { IARA_ALLOWED_EMAILS: " A@x.com, b@x.com ", IARA_ADMIN_EMAILS: "a@x.com" };
 
 describe("authMode", () => {
   it("is off by default and on with an Auth0 domain", () => {
     expect(authMode({})).toBe("off");
     expect(authMode({ AUTH0_DOMAIN: "t.us.auth0.com" })).toBe("auth0");
   });
-  it("follows WORKHOUSE_AUTH", () => {
-    expect(authMode({ WORKHOUSE_AUTH: "off", AUTH0_DOMAIN: "t.us.auth0.com" })).toBe("off");
-    expect(authMode({ WORKHOUSE_AUTH: "auth0" })).toBe("auth0");
+  it("follows IARA_AUTH", () => {
+    expect(authMode({ IARA_AUTH: "off", AUTH0_DOMAIN: "t.us.auth0.com" })).toBe("off");
+    expect(authMode({ IARA_AUTH: "auth0" })).toBe("auth0");
   });
 });
 

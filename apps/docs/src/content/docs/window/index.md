@@ -5,11 +5,11 @@ description: Partitioned and ordered analytical window calculations.
 
 Window functions compute values across rows related to the current row without collapsing the rows into a single group.
 
-In Workhouse, windowing is applied to expressions using the `.over()` method.
+In Iara, windowing is applied to expressions using the `.over()` method.
 
 ```python
-import workhouse
-from workhouse import functions as F
+import iara
+from iara import functions as F
 ```
 
 ---
@@ -40,7 +40,7 @@ Expr.over(
 
 ### Example: Group Mean & Demeaning
 ```python
->>> df = workhouse.from_dict({
+>>> df = iara.from_dict({
 ...     "group": ["A", "A", "B", "B"],
 ...     "val": [10.0, 20.0, 100.0, 200.0]
 ... })

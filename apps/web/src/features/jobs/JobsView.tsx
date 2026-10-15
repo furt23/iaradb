@@ -18,6 +18,7 @@ import TableRow from "@mui/material/TableRow";
 import Typography from "@mui/material/Typography";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { PageBody, PageHeader } from "@/features/shell/PageHeader";
 import { useGuard, useNotify } from "@/features/shell/notify";
@@ -32,6 +33,7 @@ import { usePolling } from "./usePolling";
 
 /** Jobs: notebooks and queries that run by hand or on a schedule. */
 export function JobsView({ targets, newTarget }: { targets: string[]; newTarget: string | null }) {
+  const { t } = useTranslation();
   const { data, error, reload } = usePolling(jobsOverview, (d) => d.jobs.some((j) => j.lastRun && !isFinished(j.lastRun.status)));
   const [editing, setEditing] = useState<{ job: JobSpec | null; target?: string } | null>(null);
   const [removing, setRemoving] = useState<JobView | null>(null);
@@ -69,11 +71,11 @@ export function JobsView({ targets, newTarget }: { targets: string[]; newTarget:
   return (
     <Box sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       <PageHeader
-        title="Jobs"
-        subtitle="Notebooks and queries that run on a schedule (UTC) or by hand, on a cluster of their own"
+        title={t("Jobs")}
+        subtitle={t("Notebooks and queries that run on a schedule (UTC) or by hand, on a cluster of their own")}
         actions={
           <Button variant="contained" color="secondary" startIcon={<Add />} onClick={() => setEditing({ job: null })}>
-            New job
+            {t("New job")}
           </Button>
         }
       />
@@ -88,10 +90,10 @@ export function JobsView({ targets, newTarget }: { targets: string[]; newTarget:
           <Box sx={{ textAlign: "center", py: 8, color: "text.secondary" }}>
             <EventRepeatOutlined sx={{ fontSize: 40, color: "text.disabled" }} />
             <Typography variant="h4" sx={{ color: "text.primary", mt: 1 }}>
-              No jobs yet
+              {t("No jobs yet")}
             </Typography>
             <Typography variant="body2" sx={{ maxWidth: 440, mx: "auto", mt: 0.5 }}>
-              A job runs a notebook or a query file without anyone watching: every morning, every hour, or when you start it. Jobs are files in jobs/, versioned with the workspace.
+              {t("A job runs a notebook or a query file without anyone watching: every morning, every hour, or when you start it. Jobs are files in jobs/, versioned with the workspace.")}
             </Typography>
           </Box>
         )}
@@ -100,14 +102,15 @@ export function JobsView({ targets, newTarget }: { targets: string[]; newTarget:
             <Table size="small" aria-label="jobs">
               <TableHead>
                 <TableRow>
-                  <TableCell>Job</TableCell>
-                  <TableCell>Schedule</TableCell>
-                  <TableCell>Cluster</TableCell>
-                  <TableCell>Last run</TableCell>
+                  <TableCell>{t("Job")}</TableCell>
+                  <TableCell>{t("Schedule")}</TableCell>
+                  <TableCell>{t("Cluster")}</TableCell>
+                  <TableCell>{t("Last run")}</TableCell>
                   <TableCell />
                 </TableRow>
               </TableHead>
               <TableBody>
+
                 {jobs.map((j) => (
                   <JobRow key={j.id} job={j} actions={actions} />
                 ))}

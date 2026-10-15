@@ -2,7 +2,7 @@ import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import type { Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
-import { accents, fonts, night, paper } from "@workhouse/ui";
+import { accents, fonts, night, paper } from "@iara/ui";
 
 /** A diagnostic's range: a clear wavy underline and a faint tint. */
 function lintRange(color: string, tint: string) {
@@ -53,7 +53,7 @@ export function editorTheme(mode: "dark" | "light"): Extension {
       ".cm-signature-active": { color: dark ? accents.ochre : accents.ochreInk, fontWeight: "700", textDecoration: "underline" },
       ".cm-lintRange-error": lintRange(dark ? "#FF6B6B" : "#D32F2F", dark ? "rgba(255,107,107,0.12)" : "rgba(211,47,47,0.08)"),
       ".cm-lintRange-warning": lintRange(dark ? "#F5C46B" : "#B7801A", dark ? "rgba(245,196,107,0.10)" : "rgba(183,128,26,0.08)"),
-      ".cm-lintRange-info": lintRange(dark ? accents.verdigris : accents.verdigrisInk, "transparent"),
+      ".cm-lintRange-info": lintRange(dark ? accents.cobalt : accents.cobaltInk, "transparent"),
       ".cm-lintPoint:after": { borderBottomColor: dark ? "#FF6B6B" : "#D32F2F" },
       ".cm-tooltip-lint": { padding: 0 },
       ".cm-diagnostic": { fontFamily: fonts.mono, fontSize: "12px", padding: "4px 10px", whiteSpace: "pre-wrap", maxWidth: "560px" },
@@ -61,8 +61,8 @@ export function editorTheme(mode: "dark" | "light"): Extension {
     { dark },
   );
   const c = dark
-    ? { kw: "#C792EA", str: "#9CE3B2", num: "#F5C46B", fn: accents.verdigris, type: "#7FD1E8", comment: night.textFaint, op: "#89DDFF", def: accents.ochre }
-    : { kw: "#7B30C2", str: "#1F7A4D", num: "#B7801A", fn: accents.verdigrisInk, type: "#0E7490", comment: paper.textFaint, op: "#0F5DA8", def: accents.ochreInk };
+    ? { kw: "#C792EA", str: "#9CE3B2", num: "#F5C46B", fn: accents.cobalt, type: "#7FD1E8", comment: night.textFaint, op: "#89DDFF", def: accents.ochre }
+    : { kw: "#7B30C2", str: "#1F7A4D", num: "#B7801A", fn: accents.cobaltInk, type: "#0E7490", comment: paper.textFaint, op: "#0F5DA8", def: accents.ochreInk };
   const highlight = HighlightStyle.define([
     { tag: [t.keyword, t.controlKeyword, t.operatorKeyword, t.moduleKeyword], color: c.kw },
     { tag: [t.string, t.special(t.string), t.regexp], color: c.str },

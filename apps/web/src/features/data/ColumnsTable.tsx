@@ -7,7 +7,7 @@ import TableCell from "@mui/material/TableCell";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import Tooltip from "@mui/material/Tooltip";
-import type { TableInfo } from "@workhouse/protocol";
+import type { TableInfo } from "@iara/protocol";
 
 import { formatCount, typeLabel } from "@/lib/format";
 

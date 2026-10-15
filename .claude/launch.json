@@ -4,7 +4,7 @@
     {
       "name": "studio",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "@workhouse/web", "dev"],
+      "runtimeArgs": ["--filter", "@iara/web", "dev"],
       "port": 3870
     }
   ]

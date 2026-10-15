@@ -3,7 +3,7 @@
 import Box from "@mui/material/Box";
 import ButtonBase from "@mui/material/ButtonBase";
 import Paper from "@mui/material/Paper";
-import type { Cell, CellKind, CellState, ChartSpec, QueryProfile } from "@workhouse/protocol";
+import type { Cell, CellKind, CellState, ChartSpec, QueryProfile } from "@iara/protocol";
 import { memo, useMemo, useState } from "react";
 
 import { CodeEditor } from "@/features/editor/CodeEditor";

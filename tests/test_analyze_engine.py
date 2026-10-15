@@ -10,7 +10,7 @@ import numpy as np
 import pyarrow as pa
 import pytest
 
-import workhouse as wh
+import iara as ia
 
 N = 200_000
 GROUPS = 40
@@ -31,8 +31,8 @@ def tables() -> dict[str, pa.Table]:
 
 
 @pytest.fixture(scope="module")
-def ctx(tables) -> wh.SessionContext:
-    c = wh.SessionContext()
+def ctx(tables) -> ia.SessionContext:
+    c = ia.SessionContext()
     for name, t in tables.items():
         c.register(name, t)
     return c
@@ -134,13 +134,13 @@ def test_analyze_can_be_interrupted(ctx):
     t = threading.Thread(target=target)
     t.start()
     deadline = time.monotonic() + 5
-    while time.monotonic() < deadline and not (wh.running_queries() and wh.running_queries()[0]["pipelines"]):
+    while time.monotonic() < deadline and not (ia.running_queries() and ia.running_queries()[0]["pipelines"]):
         time.sleep(0.01)
-    assert wh.interrupt() >= 1
+    assert ia.interrupt() >= 1
     t.join(timeout=10)
     assert not t.is_alive(), "analyze did not stop after interrupt"
-    assert isinstance(out.get("error"), wh.QueryCancelled)
-    assert wh.running_queries() == []
+    assert isinstance(out.get("error"), ia.QueryCancelled)
+    assert ia.running_queries() == []
 
 
 def test_plain_queries_are_unaffected(ctx, duck):
@@ -168,5 +168,5 @@ def test_sql_explain_does_not_run_the_query(ctx):
 
 
 def test_only_queries_can_be_explained(ctx):
-    with pytest.raises(wh.WorkhouseError):
+    with pytest.raises(ia.IaraError):
         ctx.sql("explain analyze create table x as select 1")

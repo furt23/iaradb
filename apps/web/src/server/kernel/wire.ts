@@ -1,6 +1,6 @@
 /** Parsing of the kernel's JSON-lines messages (pure; unit tested). */
 
-import type { KernelEventName } from "@workhouse/protocol";
+import type { KernelEventName } from "@iara/protocol";
 
 export type WireMessage =
   | { kind: "result"; id: number | null; result: unknown }

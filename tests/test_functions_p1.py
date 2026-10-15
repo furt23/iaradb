@@ -16,8 +16,8 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pytest
 
-import workhouse as wh
-from workhouse import functions as F
+import iara as ia
+from iara import functions as F
 
 sys.path.insert(0, os.path.dirname(__file__))
 from compare import diff  # noqa: E402
@@ -60,8 +60,8 @@ def table() -> pa.Table:
 
 
 def check(table: pa.Table, ours: str, duck: str | None = None) -> None:
-    """Run `SELECT <ours> FROM t` in Workhouse and `SELECT <duck>` in DuckDB."""
-    res = wh.sql(f"SELECT {ours} AS r FROM t ORDER BY id", t=table).collect().to_arrow()
+    """Run `SELECT <ours> FROM t` in Iara and `SELECT <duck>` in DuckDB."""
+    res = ia.sql(f"SELECT {ours} AS r FROM t ORDER BY id", t=table).collect().to_arrow()
     con = duckdb.connect()
     con.register("t", table)
     exp = con.execute(f"SELECT {duck or ours} AS r FROM t ORDER BY id").arrow().read_all()
@@ -70,7 +70,7 @@ def check(table: pa.Table, ours: str, duck: str | None = None) -> None:
 
 
 def values(table: pa.Table, expr: str) -> list:
-    out = wh.sql(f"SELECT {expr} AS r FROM t ORDER BY id", t=table).collect().to_arrow()
+    out = ia.sql(f"SELECT {expr} AS r FROM t ORDER BY id", t=table).collect().to_arrow()
     return out.column(0).to_pylist()
 
 
@@ -164,18 +164,18 @@ def test_initcap_and_count(table):
 
 def test_edge_cases():
     t = pa.table({"s": pa.array([], pa.string()), "d": pa.array([], pa.date32())})
-    assert wh.sql("SELECT lpad(s, 3, '0') AS a, last_day(d) AS b, regexp_like(s, 'a') AS c FROM t", t=t).collect().to_arrow().num_rows == 0
-    one = wh.sql("SELECT make_date(2023, 2, 29) AS a, last_day(DATE '2024-02-10') AS b, zfill('-42', 6) AS c").collect().to_arrow()
+    assert ia.sql("SELECT lpad(s, 3, '0') AS a, last_day(d) AS b, regexp_like(s, 'a') AS c FROM t", t=t).collect().to_arrow().num_rows == 0
+    one = ia.sql("SELECT make_date(2023, 2, 29) AS a, last_day(DATE '2024-02-10') AS b, zfill('-42', 6) AS c").collect().to_arrow()
     assert one.to_pylist() == [{"a": None, "b": D(2024, 2, 29), "c": "-00042"}]
     with pytest.raises(Exception):
-        wh.sql("SELECT regexp_like('a', '(')").collect()
+        ia.sql("SELECT regexp_like('a', '(')").collect()
 
 
 # ---- Python Expr API vs Polars --------------------------------------------
 
 
 def both(table: pa.Table, build_wh, build_pl) -> None:
-    res = wh.from_arrow(table).select(build_wh()).to_arrow()
+    res = ia.from_arrow(table).select(build_wh()).to_arrow()
     exp = pl.from_arrow(table).select(build_pl()).to_arrow()
     d = diff(res, exp)
     assert d is None, d
@@ -204,7 +204,7 @@ def test_expr_dates(table):
     both(table, lambda: w("tss").str.to_datetime("%Y-%m-%d %H:%M:%S", strict=False).alias("r"),
          lambda: p("tss").str.to_datetime("%Y-%m-%d %H:%M:%S", strict=False).alias("r"))
     with pytest.raises(Exception):
-        wh.from_arrow(table).select(F.col("ds").str.to_date("%Y-%m-%d"))
+        ia.from_arrow(table).select(F.col("ds").str.to_date("%Y-%m-%d"))
 
 
 def test_expr_strings(table):

@@ -13,7 +13,7 @@ import duckdb
 import pyarrow as pa
 import pytest
 
-import workhouse as wh
+import iara as ia
 
 CUT = 4 << 20
 ROWS = 600_000  # about 20 MiB: four cuts
@@ -48,7 +48,7 @@ def build(path: Path, escapes: bool) -> None:
 def test_multiline_fields_at_range_boundaries(tmp_path: Path, escapes: bool) -> None:
     p = tmp_path / "big.csv"
     build(p, escapes)
-    got = wh.read_csv(str(p)).sort("id").to_arrow()
+    got = ia.read_csv(str(p)).sort("id").to_arrow()
     want = ddb(f"select * from read_csv('{p.as_posix()}', header=true, strict_mode=true) order by id")
     assert got.num_rows == want.num_rows == ROWS
     assert got.column("text").to_pylist() == want.column("text").to_pylist()
@@ -58,6 +58,6 @@ def test_multiline_fields_at_range_boundaries(tmp_path: Path, escapes: bool) -> 
 def test_stray_quote_reads_the_file_whole(tmp_path: Path) -> None:
     p = tmp_path / "stray.csv"
     p.write_text('id,text,n\n0,5" pipe,0\n' + "".join(f"{i},row {i},{i}\n" for i in range(1, 1000)))
-    got = wh.read_csv(str(p)).sort("id").to_arrow()
+    got = ia.read_csv(str(p)).sort("id").to_arrow()
     assert got.num_rows == 1000
     assert got.column("text")[0].as_py() == '5" pipe'

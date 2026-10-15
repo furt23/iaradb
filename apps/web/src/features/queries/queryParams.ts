@@ -1,6 +1,6 @@
 /** Parameters of a saved query: finding `:name` placeholders, their specs and their values (pure). */
 
-import type { QueryParams } from "@workhouse/protocol";
+import type { QueryParams } from "@iara/protocol";
 
 import type { ParamSpec, ParamSpecs } from "./queryHeader";
 

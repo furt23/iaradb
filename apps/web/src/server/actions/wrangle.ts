@@ -1,6 +1,6 @@
 "use server";
 
-import type { WranglePreview, WrangleProfile, WrangleSource, WrangleStep } from "@workhouse/protocol";
+import type { WranglePreview, WrangleProfile, WrangleSource, WrangleStep } from "@iara/protocol";
 
 import { requireUser } from "../auth/session";
 import { parseKernelKey } from "../kernel/keys";

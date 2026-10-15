@@ -1,6 +1,6 @@
 ---
 title: Conditional Expressions (when / then / otherwise)
-description: Multi-branch if-then-else expressions in Workhouse.
+description: Multi-branch if-then-else expressions in Iara.
 ---
 
 ### `F.when`
@@ -24,9 +24,9 @@ F.when(cond1).then(val1).when(cond2).then(val2).otherwise(default_val)
 
 ### Example: Tier Categorization
 ```python
->>> import workhouse
->>> from workhouse import functions as F
->>> df = workhouse.from_dict({
+>>> import iara
+>>> from iara import functions as F
+>>> df = iara.from_dict({
 ...     "customer": ["Alice", "Bob", "Charlie", "David"],
 ...     "spend": [1500.0, 450.0, 50.0, 0.0]
 ... })

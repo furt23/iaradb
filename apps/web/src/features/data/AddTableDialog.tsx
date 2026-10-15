@@ -10,6 +10,7 @@ import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { useGuard, useNotify } from "@/features/shell/notify";
 import { unwrap } from "@/lib/action";
@@ -20,7 +21,7 @@ import { useData } from "./DataProvider";
 import { tableHref } from "./links";
 
 /**
- * Name a dataset in workhouse.toml, in a schema (main by default); the new
+ * Name a dataset in iara.toml, in a schema (main by default); the new
  * table opens in the Data section.
  */
 export function AddTableDialog({
@@ -35,6 +36,7 @@ export function AddTableDialog({
   /** the schema to add to (default: main) */
   schema?: string;
 }) {
+  const { t } = useTranslation();
   const [name, setName] = useState("");
   const [path, setPath] = useState("");
   const [format, setFormat] = useState<"auto" | "parquet" | "csv" | "json">("auto");
@@ -45,6 +47,7 @@ export function AddTableDialog({
   const guard = useGuard();
   const notify = useNotify();
   const router = useRouter();
+
 
   useEffect(() => {
     if (!open) return;
@@ -62,7 +65,7 @@ export function AddTableDialog({
     guard(async () => {
       const qualified = target === MAIN_SCHEMA ? name : `${target}.${name}`;
       const ref = unwrap(await addTable(qualified, path, format === "auto" ? undefined : format));
-      notify(`Added ${ref.name} to workhouse.toml`, "success");
+      notify(`Added ${ref.name} to iara.toml`, "success");
       invalidate();
       onClose();
       router.push(tableHref(ref.name));
@@ -72,11 +75,11 @@ export function AddTableDialog({
   const badName = name !== "" && !isIdentifier(name);
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
-      <DialogTitle>Add a table</DialogTitle>
+      <DialogTitle>{t("Add a table")}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
           <TextField
-            label="Path"
+            label={t("Path")}
             value={path}
             onChange={(e) => {
               setPath(e.target.value);
@@ -84,11 +87,11 @@ export function AddTableDialog({
               if (!named) setName(suggestTableName(e.target.value));
             }}
             autoFocus={!initialPath}
-            helperText="Relative to the workspace, or an s3:// URL: a file, a directory or a glob (data/events/*.parquet)"
+            helperText={t("Relative to the workspace, or an s3:// URL: a file, a directory or a glob (data/events/*.parquet)")}
           />
           <Stack direction="row" spacing={2}>
             <TextField
-              label="Name"
+              label={t("Name")}
               value={name}
               onChange={(e) => {
                 setName(e.target.value);
@@ -96,10 +99,10 @@ export function AddTableDialog({
               }}
               autoFocus={Boolean(initialPath)}
               error={badName}
-              helperText={badName ? "Letters, digits and underscores" : "How queries refer to it"}
+              helperText={badName ? t("Letters, digits and underscores") : t("How queries refer to it")}
               sx={{ flex: 1 }}
             />
-            <TextField select label="Schema" value={target} onChange={(e) => setTarget(e.target.value)} sx={{ minWidth: 160 }}>
+            <TextField select label={t("Schema")} value={target} onChange={(e) => setTarget(e.target.value)} sx={{ minWidth: 160 }}>
               {(schemas.includes(target) ? schemas : [...schemas, target]).map((s) => (
                 <MenuItem key={s} value={s}>
                   {s}
@@ -107,8 +110,8 @@ export function AddTableDialog({
               ))}
             </TextField>
           </Stack>
-          <TextField select label="Format" value={format} onChange={(e) => setFormat(e.target.value as typeof format)}>
-            <MenuItem value="auto">From the extension</MenuItem>
+          <TextField select label={t("Format")} value={format} onChange={(e) => setFormat(e.target.value as typeof format)}>
+            <MenuItem value="auto">{t("From the extension")}</MenuItem>
             <MenuItem value="parquet">Parquet</MenuItem>
             <MenuItem value="csv">CSV</MenuItem>
             <MenuItem value="json">JSON</MenuItem>
@@ -116,9 +119,9 @@ export function AddTableDialog({
         </Stack>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose}>{t("Cancel")}</Button>
         <Button variant="contained" onClick={submit} disabled={!name || !path || badName}>
-          Add
+          {t("Add")}
         </Button>
       </DialogActions>
     </Dialog>

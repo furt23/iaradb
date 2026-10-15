@@ -84,9 +84,9 @@ The `.filter()` method restricts an aggregate calculation to rows matching a boo
 Works both as `F.col("x").sum().filter(p)` and `F.col("x").filter(p).sum()`.
 
 ```python
->>> import workhouse
->>> from workhouse import functions as F
->>> df = workhouse.from_dict({
+>>> import iara
+>>> from iara import functions as F
+>>> df = iara.from_dict({
 ...     "amount": [10.0, 50.0, 100.0, 20.0],
 ...     "status": ["OK", "FAILED", "OK", "OK"],
 ... })

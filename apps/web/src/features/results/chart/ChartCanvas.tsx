@@ -3,7 +3,7 @@
 import { BarChart } from "@mui/x-charts/BarChart";
 import { LineChart } from "@mui/x-charts/LineChart";
 import { ScatterChart } from "@mui/x-charts/ScatterChart";
-import type { ChartData, ChartSpec } from "@workhouse/protocol";
+import type { ChartData, ChartSpec } from "@iara/protocol";
 import { useMemo } from "react";
 
 import { formatCompact } from "@/lib/format";

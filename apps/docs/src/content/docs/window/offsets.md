@@ -29,9 +29,9 @@ Expr.diff(n: int = 1) -> Expr
 
 ### Example: Timeseries Day-over-Day Changes
 ```python
->>> import workhouse
->>> from workhouse import functions as F
->>> df = workhouse.from_dict({
+>>> import iara
+>>> from iara import functions as F
+>>> df = iara.from_dict({
 ...     "ticker": ["AAPL", "AAPL", "AAPL"],
 ...     "price": [150.0, 155.0, 153.0]
 ... })

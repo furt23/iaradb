@@ -1,4 +1,4 @@
-/** Notebooks, cells and their outputs (see workhouse.kernel.notebook). */
+/** Notebooks, cells and their outputs (see iara.kernel.notebook). */
 
 import type { PlanNode, QueryProfile } from "./query";
 import type { ColumnInfo, ResultMeta } from "./results";
@@ -90,7 +90,7 @@ export type WidgetKind = "text" | "number" | "dropdown" | "multiselect" | "check
 /** A widget value as JSON: text, number, choice, list of choices, boolean, or an ISO date (null: no date). */
 export type WidgetValue = string | number | boolean | string[] | null;
 
-/** A notebook widget (`wh.widgets.*`): what a cell defined. */
+/** A notebook widget (`ia.widgets.*`): what a cell defined. */
 export interface WidgetDefinition {
   name: string;
   kind: WidgetKind;

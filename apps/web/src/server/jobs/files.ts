@@ -107,10 +107,10 @@ export function retargetTargets(toml: string, moves: ReadonlyMap<string, string>
     const to = moves.get(decodedTarget(line[2]) ?? "");
     if (to !== undefined) lines[i] = lines[i].replace(TARGET_LINE, (_, key: string) => `${key}${JSON.stringify(to)}`);
   }
-  // the first line is the comment the Studio writes for a one-task job: "# A Workhouse job: runs <target> ..."
+  // the first line is the comment the Studio writes for a one-task job: "# A Iara job: runs <target> ..."
   for (const [from, to] of moves) {
-    const note = `# A Workhouse job: runs ${from}`;
-    if (lines[0]?.startsWith(`${note} `)) lines[0] = `# A Workhouse job: runs ${to}${lines[0].slice(note.length)}`;
+    const note = `# A Iara job: runs ${from}`;
+    if (lines[0]?.startsWith(`${note} `)) lines[0] = `# A Iara job: runs ${to}${lines[0].slice(note.length)}`;
   }
   return lines.join("\n");
 }

@@ -11,8 +11,8 @@ import duckdb
 import pyarrow as pa
 import pytest
 
-import workhouse as wh
-from workhouse.workspaces import parse_config
+import iara as ia
+from iara.workspaces import parse_config
 
 sys.path.insert(0, os.path.dirname(__file__))
 from compare import diff  # noqa: E402
@@ -37,7 +37,7 @@ CHECK = "select year, region, count(*) as n, sum(amount) as total from t group b
 
 def test_duckdb_reads_what_we_partition(sales: pa.Table, tmp_path: Path) -> None:
     out = tmp_path / "sales"
-    assert wh.from_arrow(sales).lazy().sink_parquet(out, partition_by=["year", "region"]) == N
+    assert ia.from_arrow(sales).lazy().sink_parquet(out, partition_by=["year", "region"]) == N
     assert (out / "year=2021").is_dir()
     con = duckdb.connect()
     con.register("src", sales)
@@ -53,7 +53,7 @@ def test_we_read_what_duckdb_partitions(sales: pa.Table, tmp_path: Path) -> None
     con.register("src", sales)
     out = (tmp_path / "duck").as_posix()
     con.execute(f"copy (select * from src) to '{out}' (format parquet, partition_by (year, region))")
-    ctx = wh.SessionContext()
+    ctx = ia.SessionContext()
     ctx.register_parquet("t", out)
     expected = con.execute(CHECK.replace(" t ", " src ")).arrow().read_all()
     assert diff(ctx.sql(CHECK).collect().to_arrow(), expected, ordered=True) is None
@@ -74,7 +74,7 @@ def test_workspace_tables_created_by_sql_join_the_catalog(sales: pa.Table, tmp_p
     assert [t.name for t in ws.tables] == ["by_year"]
 
     # a frame from a notebook cell feeds an INSERT; the main session sees the new rows
-    extra = wh.from_dict({"id": [-1], "amount": [1.0], "year": [2030]})
+    extra = ia.from_dict({"id": [-1], "amount": [1.0], "year": [2030]})
     ws.sql("insert into by_year select id, year, amount from extra", extra=extra)
     assert ws.sql("select count(*) as n from by_year where year = 2030").collect().to_pydict()["n"] == [1]
 
@@ -85,15 +85,15 @@ def test_workspace_tables_created_by_sql_join_the_catalog(sales: pa.Table, tmp_p
     ws.sql("drop table by_year")
     assert changes[-1] == {"name": "by_year", "entry": None, "kind": "table"}
     assert ws.tables == []
-    with pytest.raises(wh.WorkhouseError):
+    with pytest.raises(ia.IaraError):
         ws.sql("select * from by_year").collect()
 
 
 def test_statements_explain_their_mistakes(tmp_path: Path) -> None:
-    ctx = wh.SessionContext()
-    with pytest.raises(wh.WorkhouseError, match="COPY needs a query"):
+    ctx = ia.SessionContext()
+    with pytest.raises(ia.IaraError, match="COPY needs a query"):
         ctx.sql("copy t to 'x'")
-    with pytest.raises(wh.WorkhouseError, match="unknown COPY option"):
+    with pytest.raises(ia.IaraError, match="unknown COPY option"):
         ctx.sql(f"copy (select 1 as x) to '{(tmp_path / 'x.parquet').as_posix()}' (colour blue)")
-    with pytest.raises(wh.WorkhouseError, match="PARTITIONED BY needs a warehouse"):
+    with pytest.raises(ia.IaraError, match="PARTITIONED BY needs a warehouse"):
         ctx.sql("create table t partitioned by (x) as select 1 as x, 2 as y")

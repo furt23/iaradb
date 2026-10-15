@@ -7,10 +7,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from workhouse.kernel.notebook import marimo_io
-from workhouse.kernel.notebook.analysis import analyze_python, sql_identifiers
-from workhouse.kernel.notebook.graph import DependencyGraph
-from workhouse.kernel.notebook.model import Cell, new_cell_id
+from iara.kernel.notebook import marimo_io
+from iara.kernel.notebook.analysis import analyze_python, sql_identifiers
+from iara.kernel.notebook.graph import DependencyGraph
+from iara.kernel.notebook.model import Cell, new_cell_id
 
 
 def cell(code: str, kind: str = "python", output: str | None = None, cid: str | None = None) -> Cell:
@@ -105,10 +105,10 @@ app = marimo.App(width="medium")
 @app.cell
 def _():
     import marimo as mo
-    import workhouse as wh
+    import iara as ia
 
-    ws = wh.workspace()
-    return mo, wh, ws
+    ws = ia.workspace()
+    return mo, ia, ws
 
 
 @app.cell(hide_code=True)
@@ -325,7 +325,7 @@ def test_new_notebook_starts_with_a_setup_cell(tmp_path: Path):
     assert [(c.id, c.setup, c.name) for c in nb.cells] == [("setup", True, "setup")]
     assert nb.cells[0].code == marimo_io.TEMPLATE_CELL
     src = marimo_io.serialize(nb)
-    setup = "with app.setup:\n    import marimo as mo\n    import workhouse\n\n    ws = workhouse.workspace()\n"
+    setup = "with app.setup:\n    import marimo as mo\n    import iara\n\n    ws = iara.workspace()\n"
     assert setup in src
     assert "@app.cell" not in src
 

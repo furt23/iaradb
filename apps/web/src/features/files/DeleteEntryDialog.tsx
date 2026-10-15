@@ -10,6 +10,8 @@ import DialogTitle from "@mui/material/DialogTitle";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { useTranslation } from "react-i18next";
+
 import { useGuard, useNotify } from "@/features/shell/notify";
 import { useWorkbench } from "@/features/workbench/WorkbenchProvider";
 import { unwrap } from "@/lib/action";
@@ -17,15 +19,17 @@ import { isWithin } from "@/lib/paths";
 import { deleteEntry, entryInfo } from "@/server/actions/files";
 import type { EntryInfo } from "@/server/workspace/fileOps";
 
-function describe(info: EntryInfo | null): string {
+function describe(info: EntryInfo | null, t: (key: string, opt?: Record<string, unknown>) => string): string {
   if (!info) return "";
-  if (!info.folder) return info.notebooks.length ? "This notebook's kernel will be stopped." : "";
+  if (!info.folder) return info.notebooks.length ? t("This notebook's kernel will be stopped.") : "";
   const nb = info.notebooks.length;
-  return `The folder holds ${info.files} file${info.files === 1 ? "" : "s"}${nb ? `, ${nb} of them notebooks (their kernels will be stopped)` : ""}.`;
+  const countStr = info.files === 1 ? t("The folder holds {{count}} file", { count: info.files }) : t("The folder holds {{count}} files", { count: info.files });
+  return `${countStr}${nb ? `, ${nb} ${t("of them notebooks (their kernels will be stopped)")}` : ""}.`;
 }
 
 /** Confirm, then delete a file or folder: its files, the kernels and open tabs of its notebooks. */
 export function DeleteEntryDialog({ path, onClose }: { path: string | null; onClose(): void }) {
+  const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const [info, setInfo] = useState<EntryInfo | null>(null);
   const guard = useGuard();
@@ -55,23 +59,24 @@ export function DeleteEntryDialog({ path, onClose }: { path: string | null; onCl
 
   return (
     <Dialog open={path !== null} onClose={busy ? undefined : onClose} maxWidth="xs" fullWidth>
-      <DialogTitle>{info?.folder ? "Delete folder?" : "Delete?"}</DialogTitle>
+      <DialogTitle>{info?.folder ? t("Delete folder?") : t("Delete?")}</DialogTitle>
       <DialogContent>
         <DialogContentText>
           <Box component="strong" sx={{ overflowWrap: "anywhere" }}>
             {path}
           </Box>{" "}
-          will be deleted from the workspace. {describe(info)} This cannot be undone here (files in Git can be restored from there).
+          {t("will be deleted from the workspace.")} {describe(info, t)} {t("This cannot be undone here (files in Git can be restored from there).")}
         </DialogContentText>
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose} disabled={busy}>
-          Cancel
+          {t("Cancel")}
         </Button>
         <Button variant="contained" color="error" onClick={() => void confirm()} disabled={busy}>
-          Delete
+          {t("Delete")}
         </Button>
       </DialogActions>
     </Dialog>
   );
 }
+

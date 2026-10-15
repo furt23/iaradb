@@ -1,6 +1,6 @@
 ---
 title: LazyFrame Overview
-description: The core lazy query abstraction in Workhouse.
+description: The core lazy query abstraction in Iara.
 ---
 
 A `LazyFrame` represents an uncomputed query plan. Chaining methods on a `LazyFrame` appends transformations to an internal logical plan without executing computation or consuming memory for intermediate results.
@@ -8,8 +8,8 @@ A `LazyFrame` represents an uncomputed query plan. Chaining methods on a `LazyFr
 Execution begins only when an action is invoked, such as [`.collect()`](/lazyframe/execution/), [`.fetch()`](/lazyframe/execution/), or [`.sink_parquet()`](/lazyframe/streaming/).
 
 ```python
-import workhouse
-from workhouse import functions as F
+import iara
+from iara import functions as F
 ```
 
 ## Properties
@@ -18,7 +18,7 @@ from workhouse import functions as F
 Returns the list of column names projected by the current query plan.
 
 ```python
->>> lf = workhouse.scan_parquet("data/users.parquet")
+>>> lf = iara.scan_parquet("data/users.parquet")
 >>> lf.columns
 ['id', 'name', 'department', 'salary']
 ```

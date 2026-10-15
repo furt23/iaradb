@@ -1,4 +1,4 @@
-"""Delta interoperability: Workhouse against deltalake (delta-rs), polars and duckdb."""
+"""Delta interoperability: Iara against deltalake (delta-rs), polars and duckdb."""
 
 from __future__ import annotations
 
@@ -13,8 +13,8 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pytest
 
-import workhouse as wh
-from workhouse import functions as F
+import iara as ia
+from iara import functions as F
 
 deltalake = pytest.importorskip("deltalake")
 from deltalake import DeltaTable, write_deltalake  # noqa: E402
@@ -29,7 +29,7 @@ def _p(tmp_path: Path, name: str = "t") -> str:
 
 
 def _wh_read(path: str, **kw) -> pa.Table:
-    return wh.read_delta(path, **kw).to_arrow()
+    return ia.read_delta(path, **kw).to_arrow()
 
 
 def _dl_read(path: str, version: int | None = None) -> pa.Table:
@@ -71,10 +71,10 @@ def _basic(n: int = 6, start: int = 0) -> pa.Table:
 
 
 def _wh_write(t: pa.Table, path: str, **kw) -> None:
-    wh.from_arrow(t).write_delta(path, **kw)
+    ia.from_arrow(t).write_delta(path, **kw)
 
 
-# --------------------------------------------------------------------- 1. Workhouse writes
+# --------------------------------------------------------------------- 1. Iara writes
 
 
 def _types_table() -> pa.Table:
@@ -163,7 +163,7 @@ def duck():
     return con
 
 
-def test_duckdb_reads_workhouse(tmp_path: Path, duck) -> None:
+def test_duckdb_reads_iara(tmp_path: Path, duck) -> None:
     path = _p(tmp_path)
     t = _basic(20)
     _wh_write(t.slice(0, 10), path)
@@ -270,7 +270,7 @@ def test_stats_skipping_in_deltalake(tmp_path: Path) -> None:
     assert sorted(a["min.id"] for a in adds) == [0, 100, 200]
 
 
-# --------------------------------------------------------------------- 2. deltalake writes, Workhouse reads
+# --------------------------------------------------------------------- 2. deltalake writes, Iara reads
 
 
 def test_dl_append_overwrite(tmp_path: Path) -> None:
@@ -297,7 +297,7 @@ def test_dl_partitioned(tmp_path: Path) -> None:
     t = _basic(12).append_column("d", pa.array([dt.date(2024, 1, 1 + i % 3) for i in range(12)], pa.date32()))
     write_deltalake(path, t, partition_by=["grp", "d"])
     _same(_wh_read(path), t)
-    got = wh.scan_delta(path).filter(F.col("grp") == "a").collect().to_arrow()
+    got = ia.scan_delta(path).filter(F.col("grp") == "a").collect().to_arrow()
     _same(got, t.filter(pc.equal(t.column("grp"), "a")))
 
 
@@ -408,7 +408,7 @@ def test_wh_created_dl_appends(tmp_path: Path) -> None:
     _same(_dl_read(path), pa.concat_tables([a, b]))
 
 
-# --------------------------------------------------------------------- 5. checkpoint written by Workhouse
+# --------------------------------------------------------------------- 5. checkpoint written by Iara
 
 
 def test_wh_checkpoint_readable_by_deltalake(tmp_path: Path) -> None:
@@ -420,7 +420,7 @@ def test_wh_checkpoint_readable_by_deltalake(tmp_path: Path) -> None:
     log = Path(path) / "_delta_log"
     cps = [f for f in os.listdir(log) if "checkpoint" in f]
     if not cps:
-        pytest.skip("Workhouse wrote no checkpoint after 12 commits (no auto checkpoint)")
+        pytest.skip("Iara wrote no checkpoint after 12 commits (no auto checkpoint)")
     exp = pa.concat_tables(parts)
     _same(_dl_read(path), exp)
     assert (log / "_last_checkpoint").exists()

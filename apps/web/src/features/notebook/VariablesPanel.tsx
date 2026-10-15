@@ -2,7 +2,7 @@
 
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
-import type { Variable } from "@workhouse/protocol";
+import type { Variable } from "@iara/protocol";
 
 /**
  * The variables the notebook defines. Standalone it is a bordered side column;

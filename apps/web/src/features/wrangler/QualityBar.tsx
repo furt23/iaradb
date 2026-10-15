@@ -2,7 +2,7 @@
 
 import Box from "@mui/material/Box";
 import Tooltip from "@mui/material/Tooltip";
-import type { ColumnQuality } from "@workhouse/protocol";
+import type { ColumnQuality } from "@iara/protocol";
 
 /** Share of valid (green), null (grey) and empty-string (amber) values of a column, over all rows. */
 export function QualityBar({ quality }: { quality: ColumnQuality }) {

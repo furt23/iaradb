@@ -17,8 +17,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-import workhouse as wh
-from workhouse import functions as F
+import iara as ia
+from iara import functions as F
 
 sys.path.insert(0, os.path.dirname(__file__))
 from compare import diff  # noqa: E402
@@ -63,7 +63,7 @@ def duck(table: pa.Table) -> duckdb.DuckDBPyConnection:
 
 
 def check(table: pa.Table, query: str, duck_query: str | None = None) -> None:
-    ours = wh.sql(query, t=table).collect().to_arrow()
+    ours = ia.sql(query, t=table).collect().to_arrow()
     exp = duck(table).execute(duck_query or query).arrow().read_all()
     d = diff(ours, exp, ordered=True)
     assert d is None, f"{query}: {d}"
@@ -150,15 +150,15 @@ def test_structs_cannot_be_keys_yet(table: pa.Table) -> None:
         "select a.id from t a join t b on a.s = b.s",
         "select id, row_number() over (partition by s order by id) from t",
     ]:
-        with pytest.raises(wh.WorkhouseError, match="cannot be used as"):
-            wh.sql(query, t=table).collect()
+        with pytest.raises(ia.IaraError, match="cannot be used as"):
+            ia.sql(query, t=table).collect()
 
 
 def test_field_errors_list_the_fields(table: pa.Table) -> None:
-    with pytest.raises(wh.WorkhouseError, match="no field 'zz'.*fields: a, b"):
-        wh.sql("select s.zz from t", t=table).collect()
-    with pytest.raises(wh.WorkhouseError, match="not a struct"):
-        wh.sql("select id.a from t", t=table).collect()
+    with pytest.raises(ia.IaraError, match="no field 'zz'.*fields: a, b"):
+        ia.sql("select s.zz from t", t=table).collect()
+    with pytest.raises(ia.IaraError, match="not a struct"):
+        ia.sql("select id.a from t", t=table).collect()
 
 
 # ---------------------------------------------------------------------------
@@ -208,10 +208,10 @@ def parquet_file(table: pa.Table, tmp_path_factory: pytest.TempPathFactory) -> s
 
 
 def test_parquet_nested_columns_round_trip(table: pa.Table, parquet_file: str) -> None:
-    got = wh.scan_parquet(parquet_file).sort("id").collect().to_arrow()
+    got = ia.scan_parquet(parquet_file).sort("id").collect().to_arrow()
     assert got.to_pylist() == table.to_pylist()
     # a projection of a few fields, and pushdown on a flat column
-    r = wh.scan_parquet(parquet_file).filter(F.col("id") > 4).select("id", F.col("d").struct.field("p")).sort("id").collect()
+    r = ia.scan_parquet(parquet_file).filter(F.col("id") > 4).select("id", F.col("d").struct.field("p")).sort("id").collect()
     assert r.to_arrow().column("p").to_pylist() == [v["p"] if v else None for v in table.column("d").to_pylist()][4:]
 
 
@@ -222,14 +222,14 @@ def test_parquet_queries_match_duckdb(table: pa.Table, parquet_file: str) -> Non
         "select g, array_agg(s order by id) as a from t group by g order by g",
         "select id, unnest(s) from t order by id",
     ]:
-        ours = wh.sql(q, t=wh.scan_parquet(parquet_file)).collect().to_arrow()
+        ours = ia.sql(q, t=ia.scan_parquet(parquet_file)).collect().to_arrow()
         exp = con.execute(q.replace(" t ", f" read_parquet('{parquet_file.replace(chr(92), '/')}') ")).arrow().read_all()
         assert diff(ours, exp) is None, q
 
 
 def test_write_parquet_and_back(table: pa.Table, tmp_path) -> None:
     path = str(tmp_path / "out.parquet")
-    wh.from_arrow(table).write_parquet(path)
+    ia.from_arrow(table).write_parquet(path)
     assert pq.read_table(path).to_pylist() == table.to_pylist()
     assert pq.read_table(path).schema.field("s").type == S_TYPE
 
@@ -255,21 +255,21 @@ def values(df) -> list:
 
 
 def both(table: pa.Table, wh_expr, pl_expr) -> None:
-    ours = values(wh.from_arrow(table).lazy().select(wh_expr.alias("r")).collect())
+    ours = values(ia.from_arrow(table).lazy().select(wh_expr.alias("r")).collect())
     theirs = values(pl.from_arrow(table).select(pl_expr.alias("r")))
     assert ours == theirs
 
 
 def test_arrow_round_trip_keeps_struct_types(table: pa.Table) -> None:
-    out = wh.from_arrow(table).to_arrow()
+    out = ia.from_arrow(table).to_arrow()
     assert out.to_pylist() == table.to_pylist()
     assert out.schema.field("s").type == S_TYPE
     assert out.schema.field("ls").type == E_TYPE
     assert out.schema.field("d").type == D_TYPE
-    assert wh.from_polars(pl.from_arrow(table)).to_arrow().to_pylist() == table.to_pylist()
-    assert wh.from_dict({"s": [{"a": 1}, None, {"a": 3}]}).to_arrow().to_pylist() == [{"s": {"a": 1}}, {"s": None}, {"s": {"a": 3}}]
-    assert wh.from_arrow(table).schema["s"] == "Struct<a: Int64, b: Utf8>"
-    assert wh.from_arrow(table).schema["ls"] == "List<Struct<k: Utf8, v: Int64>>"
+    assert ia.from_polars(pl.from_arrow(table)).to_arrow().to_pylist() == table.to_pylist()
+    assert ia.from_dict({"s": [{"a": 1}, None, {"a": 3}]}).to_arrow().to_pylist() == [{"s": {"a": 1}}, {"s": None}, {"s": {"a": 3}}]
+    assert ia.from_arrow(table).schema["s"] == "Struct<a: Int64, b: Utf8>"
+    assert ia.from_arrow(table).schema["ls"] == "List<Struct<k: Utf8, v: Int64>>"
 
 
 def test_struct_namespace_matches_polars(table: pa.Table) -> None:
@@ -290,43 +290,43 @@ def test_struct_builder_matches_polars(table: pa.Table) -> None:
     with pytest.raises(ValueError, match="twice"):
         F.struct(F.col("id"), F.col("id"))
     # a dict is a struct literal
-    out = wh.from_arrow(table).lazy().select("id", F.lit(1).alias("one")).with_columns(c={"a": 1, "b": "x"}).collect().to_arrow()
+    out = ia.from_arrow(table).lazy().select("id", F.lit(1).alias("one")).with_columns(c={"a": 1, "b": "x"}).collect().to_arrow()
     assert out.column("c").to_pylist() == [{"a": 1, "b": "x"}] * 8
 
 
 def test_unnest_matches_polars(table: pa.Table) -> None:
-    ours = wh.from_arrow(table).lazy().select("id", "s", "d").unnest("s").collect()
+    ours = ia.from_arrow(table).lazy().select("id", "s", "d").unnest("s").collect()
     theirs = pl.from_arrow(table).select("id", "s", "d").unnest("s")
     assert values(ours) == values(theirs)
     assert ours.to_arrow().column_names == ["id", "a", "b", "d"]
-    ours = wh.from_arrow(table).lazy().select("id", "s", "n").unnest("s", "n", separator="_").collect()
+    ours = ia.from_arrow(table).lazy().select("id", "s", "n").unnest("s", "n", separator="_").collect()
     theirs = pl.from_arrow(table).select("id", "s", "n").unnest("s", "n", separator="_")
     assert ours.to_arrow().column_names == theirs.columns
     assert values(ours) == values(theirs)
     # inside select: one column per field
-    ours = wh.from_arrow(table).lazy().select("id", F.col("s").struct.unnest()).collect()
+    ours = ia.from_arrow(table).lazy().select("id", F.col("s").struct.unnest()).collect()
     theirs = pl.from_arrow(table).select("id", pl.col("s").struct.unnest())
     assert values(ours) == values(theirs)
     # eager frames
-    assert wh.from_arrow(table).unnest("d").to_arrow().column_names[:3] == ["id", "g", "s"]
-    with pytest.raises(wh.WorkhouseError, match="not a struct"):
-        wh.from_arrow(table).unnest("id")
-    with pytest.raises(wh.WorkhouseError, match="twice"):
-        wh.from_arrow(table).lazy().select(F.col("g").alias("a"), "s").unnest("s").collect()
+    assert ia.from_arrow(table).unnest("d").to_arrow().column_names[:3] == ["id", "g", "s"]
+    with pytest.raises(ia.IaraError, match="not a struct"):
+        ia.from_arrow(table).unnest("id")
+    with pytest.raises(ia.IaraError, match="twice"):
+        ia.from_arrow(table).lazy().select(F.col("g").alias("a"), "s").unnest("s").collect()
 
 
 def test_explode_then_unnest_a_list_of_structs(table: pa.Table) -> None:
-    ours = wh.from_arrow(table).lazy().select("id", "ls").explode("ls").unnest("ls").collect()
+    ours = ia.from_arrow(table).lazy().select("id", "ls").explode("ls").unnest("ls").collect()
     theirs = pl.from_arrow(table).select("id", "ls").explode("ls").unnest("ls")
     assert values(ours) == values(theirs)
 
 
 def test_group_by_agg_keeps_struct_payloads(table: pa.Table) -> None:
-    ours = wh.from_arrow(table).lazy().group_by("g").agg(F.col("s").implode().alias("ss"), F.col("id").max().alias("m")).sort("g").collect()
+    ours = ia.from_arrow(table).lazy().group_by("g").agg(F.col("s").implode().alias("ss"), F.col("id").max().alias("m")).sort("g").collect()
     theirs = pl.from_arrow(table).group_by("g").agg(pl.col("s").alias("ss"), pl.col("id").max().alias("m")).sort("g")
     assert values(ours) == values(theirs)
     # first / last skip null structs (the engine's first / last); the payload is carried whole
-    ours = wh.from_arrow(table).lazy().group_by("g").agg(F.col("s").first().alias("f"), F.col("s").last().alias("l")).sort("g").collect()
+    ours = ia.from_arrow(table).lazy().group_by("g").agg(F.col("s").first().alias("f"), F.col("s").last().alias("l")).sort("g").collect()
     assert ours.to_arrow().column("f").to_pylist() == [{"a": 1, "b": "x"}, {"a": None, "b": "z"}, {"a": 6, "b": "q"}, {"a": 8, "b": ""}]
     assert ours.to_arrow().column("l").to_pylist() == [{"a": 1, "b": "x"}, {"a": 5, "b": "é"}, {"a": 6, "b": "q"}, {"a": 8, "b": ""}]
 
@@ -350,7 +350,7 @@ def jt() -> pa.Table:
 
 
 def check_json(jt: pa.Table, query: str, duck_query: str | None = None) -> None:
-    ours = wh.sql(query, t=jt).collect().to_arrow()
+    ours = ia.sql(query, t=jt).collect().to_arrow()
     con = duckdb.connect()
     con.register("t", jt)
     exp = con.execute(duck_query or query).arrow().read_all()
@@ -391,24 +391,24 @@ def test_json_function_matches_duckdb(jt: pa.Table, expr: str) -> None:
 
 
 def test_json_null_input_gives_null(jt: pa.Table) -> None:
-    out = wh.sql("select json_extract_string(j, '$.s') as r, json_array_length(j) as n, j -> 'a' as e from t where id = 3", t=jt).collect().to_arrow()
+    out = ia.sql("select json_extract_string(j, '$.s') as r, json_array_length(j) as n, j -> 'a' as e from t where id = 3", t=jt).collect().to_arrow()
     assert out.to_pylist() == [{"r": None, "n": None, "e": None}]
 
 
 def test_to_json_matches_duckdb(table: pa.Table) -> None:
     for expr in ["to_json(s)", "to_json(n)", "to_json(ls)", "to_json(d)", "to_json(id)", "to_json(txt)", "to_json([id, id + 1])"]:
-        ours = wh.sql(f"select id, {expr} as r from t order by id", t=table).collect().to_arrow()
+        ours = ia.sql(f"select id, {expr} as r from t order by id", t=table).collect().to_arrow()
         exp = duck(table).execute(f"select id, {expr}::VARCHAR as r from t order by id").arrow().read_all()
         # DuckDB prints floats like 1.5 and the same compact JSON
         assert diff(ours, exp) is None, expr
 
 
 def test_json_decode_and_path_match_match_polars(jt: pa.Table) -> None:
-    dtype_wh = wh.Struct({"a": wh.Struct({"b": wh.List("float64")}), "s": "utf8", "t": "bool"})
+    dtype_wh = ia.Struct({"a": ia.Struct({"b": ia.List("float64")}), "s": "utf8", "t": "bool"})
     dtype_pl = pl.Struct({"a": pl.Struct({"b": pl.List(pl.Float64)}), "s": pl.String, "t": pl.Boolean})
     docs = [d for d in DOCS if d is not None and "{" in d and '"c"' not in d]
     t = pa.table({"j": docs})
-    ours = wh.from_arrow(t).lazy().select(F.col("j").str.json_decode(dtype_wh).alias("r")).collect().to_arrow().column("r").to_pylist()
+    ours = ia.from_arrow(t).lazy().select(F.col("j").str.json_decode(dtype_wh).alias("r")).collect().to_arrow().column("r").to_pylist()
     theirs = pl.from_arrow(t).select(pl.col("j").str.json_decode(dtype_pl).alias("r"))["r"].to_list()
     assert ours == theirs
     both(jt, F.col("j").str.json_path_match("$.s"), pl.col("j").str.json_path_match("$.s"))
@@ -419,9 +419,9 @@ def test_json_decode_and_path_match_match_polars(jt: pa.Table) -> None:
 
 
 def test_json_round_trip_with_struct_dtype(table: pa.Table) -> None:
-    dtype = wh.Struct({"a": "int64", "b": "utf8"})
+    dtype = ia.Struct({"a": "int64", "b": "utf8"})
     out = (
-        wh.from_arrow(table).lazy().select("id", F.col("s").struct.json_encode().str.json_decode(dtype).alias("back")).sort("id").collect()
+        ia.from_arrow(table).lazy().select("id", F.col("s").struct.json_encode().str.json_decode(dtype).alias("back")).sort("id").collect()
     )
     assert out.to_arrow().column("back").to_pylist() == table.column("s").to_pylist()
 
@@ -449,7 +449,7 @@ def ndjson(tmp_path_factory: pytest.TempPathFactory) -> str:
 
 
 def test_nested_ndjson_matches_polars(ndjson: str) -> None:
-    ours = wh.read_ndjson(ndjson)
+    ours = ia.read_ndjson(ndjson)
     theirs = pl.read_ndjson(ndjson)
     assert values(ours) == values(theirs)
     assert ours.schema["user"] == "Struct<name: Utf8, tags: List<Utf8>, geo: Struct<lat: Float64, lon: Int64>>"
@@ -463,20 +463,20 @@ def test_nested_ndjson_matches_duckdb(ndjson: str) -> None:
         f"select id, user.name, user.tags[1], user.geo.lat, events[1].k from read_json('{p}') order by id",
         f"select id, unnest(events) as e from read_json('{p}') order by id",
     ]:
-        ours = wh.sql(q).collect().to_arrow()
+        ours = ia.sql(q).collect().to_arrow()
         exp = duckdb.connect().execute(q).arrow().read_all()
         # DuckDB types the integer lat of record 4 as DOUBLE too
         assert diff(ours, exp) is None, q
 
 
 def test_nested_text_option(ndjson: str) -> None:
-    text = wh.read_ndjson(ndjson, nested="text")
+    text = ia.read_ndjson(ndjson, nested="text")
     assert text.schema["user"] == "Utf8"
     assert json.loads(text.to_arrow().column("user")[0].as_py())["name"] == "ann"
-    via_sql = wh.sql(f"select user from read_json('{ndjson.replace(chr(92), '/')}', nested := 'text') where id = 2").collect().to_arrow()
+    via_sql = ia.sql(f"select user from read_json('{ndjson.replace(chr(92), '/')}', nested := 'text') where id = 2").collect().to_arrow()
     assert json.loads(via_sql.column("user")[0].as_py()) == {"name": "bob", "tags": []}
     # the text can be decoded with the struct dtype
-    dtype = wh.Struct({"name": "utf8", "tags": wh.List("utf8")})
+    dtype = ia.Struct({"name": "utf8", "tags": ia.List("utf8")})
     back = text.lazy().select("id", F.col("user").str.json_decode(dtype).alias("u")).filter(F.col("id") == 2).collect()
     assert back.to_arrow().column("u").to_pylist() == [{"name": "bob", "tags": []}]
 
@@ -485,7 +485,7 @@ def test_conflicting_json_types_fall_back_to_text(tmp_path) -> None:
     path = str(tmp_path / "c.ndjson")
     with open(path, "w") as f:
         f.write('{"a": {"x": 1, "y": [1]}, "b": 5}\n{"a": {"x": "s", "y": [2, 3]}, "b": {"k": 1}}\n')
-    df = wh.read_ndjson(path)
+    df = ia.read_ndjson(path)
     assert df.schema["a"] == "Struct<x: Utf8, y: List<Int64>>"
     assert df.schema["b"] == "Utf8"
     assert df.to_arrow().to_pylist() == [{"a": {"x": "1", "y": [1]}, "b": "5"}, {"a": {"x": "s", "y": [2, 3]}, "b": '{"k": 1}'}]
@@ -493,13 +493,13 @@ def test_conflicting_json_types_fall_back_to_text(tmp_path) -> None:
 
 def test_write_ndjson_of_structs_matches_polars(table: pa.Table, tmp_path) -> None:
     ours = str(tmp_path / "ours.ndjson")
-    wh.from_arrow(table.select(["id", "s", "n", "ls", "d"])).write_ndjson(ours)
+    ia.from_arrow(table.select(["id", "s", "n", "ls", "d"])).write_ndjson(ours)
     theirs = str(tmp_path / "theirs.ndjson")
     pl.from_arrow(table.select(["id", "s", "n", "ls", "d"])).write_ndjson(theirs)
     a = [json.loads(line) for line in open(ours, encoding="utf8")]
     b = [json.loads(line) for line in open(theirs, encoding="utf8")]
     assert a == b
     # and it reads back
-    back = wh.read_ndjson(ours)
+    back = ia.read_ndjson(ours)
     assert back.to_arrow().column("s").to_pylist() == table.column("s").to_pylist()
     assert back.to_arrow().column("n").to_pylist() == table.column("n").to_pylist()

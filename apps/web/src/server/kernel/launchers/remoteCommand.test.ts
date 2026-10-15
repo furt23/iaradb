@@ -11,9 +11,9 @@ describe("remote kernel command", () => {
   });
 
   it("runs the kernel with its environment", () => {
-    const cmd = remoteCommand({ python: "/home/ec2-user/venv/bin/python", workspace: "~/workspace", env: { WORKHOUSE_MEMORY_LIMIT: "6442450944" } });
+    const cmd = remoteCommand({ python: "/home/ec2-user/venv/bin/python", workspace: "~/workspace", env: { IARA_MEMORY_LIMIT: "6442450944" } });
     expect(cmd).toBe(
-      "exec env PYTHONUNBUFFERED='1' PYTHONIOENCODING='utf-8' WORKHOUSE_MEMORY_LIMIT='6442450944' '/home/ec2-user/venv/bin/python' -m workhouse.kernel --workspace ~/'workspace' --create",
+      "exec env PYTHONUNBUFFERED='1' PYTHONIOENCODING='utf-8' IARA_MEMORY_LIMIT='6442450944' '/home/ec2-user/venv/bin/python' -m iara.kernel --workspace ~/'workspace' --create",
     );
   });
 

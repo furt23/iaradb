@@ -10,10 +10,10 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
-import workhouse as wh
-from workhouse import functions as F
-from workhouse.kernel import catalog
-from workhouse.workspaces import parse_config
+import iara as ia
+from iara import functions as F
+from iara.kernel import catalog
+from iara.workspaces import parse_config
 
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "benchmarks"))
@@ -37,10 +37,10 @@ def endpoint():
     host, port = server.get_host_and_port()
     url = f"http://{host}:{port}"
     client(url).create_bucket(Bucket=BUCKET)
-    wh.set_storage_options(f"s3://{BUCKET}", {"endpoint": url, "allow_http": True})
+    ia.set_storage_options(f"s3://{BUCKET}", {"endpoint": url, "allow_http": True})
     yield url
-    wh.set_storage_options(f"s3://{BUCKET}", None)
-    wh.storage.clear_object_stores()
+    ia.set_storage_options(f"s3://{BUCKET}", None)
+    ia.storage.clear_object_stores()
     server.stop()
     mp.undo()
 
@@ -74,8 +74,8 @@ def tpch(tmp_path_factory, endpoint) -> Path:
     return out
 
 
-def contexts(local: Path) -> tuple[wh.SessionContext, wh.SessionContext]:
-    loc, rem = wh.SessionContext(), wh.SessionContext()
+def contexts(local: Path) -> tuple[ia.SessionContext, ia.SessionContext]:
+    loc, rem = ia.SessionContext(), ia.SessionContext()
     for t in TABLES:
         loc.register_parquet(t, str(local / t))
         rem.register_parquet(t, f"s3://{BUCKET}/tpch/{t}/")
@@ -91,11 +91,11 @@ def test_tpch_over_s3_matches_local(tpch: Path, q: int) -> None:
 
 
 def test_listing_and_globs(tpch: Path) -> None:
-    files = wh.list_files(f"s3://{BUCKET}/tpch/")
+    files = ia.list_files(f"s3://{BUCKET}/tpch/")
     assert len(files) == len(TABLES) and all(size > 0 for _, size in files)
-    one = wh.list_files(f"s3://{BUCKET}/tpch/*/part-0.parquet")
+    one = ia.list_files(f"s3://{BUCKET}/tpch/*/part-0.parquet")
     assert [n for n, _ in one] == sorted(n for n, _ in files)
-    n = wh.sql(f"select count(*) from read_parquet('s3://{BUCKET}/tpch/nation/*.parquet')").collect().item()
+    n = ia.sql(f"select count(*) from read_parquet('s3://{BUCKET}/tpch/nation/*.parquet')").collect().item()
     assert n == 25
 
 
@@ -103,13 +103,13 @@ def test_write_and_read_back(endpoint: str) -> None:
     import numpy as np
 
     rows = 3_000_000  # ~24 MB uncompressed: more than one 16 MiB part
-    df = wh.from_arrow(pa.table({"i": np.arange(rows), "x": np.random.default_rng(1).random(rows)}))
+    df = ia.from_arrow(pa.table({"i": np.arange(rows), "x": np.random.default_rng(1).random(rows)}))
     df.write_parquet(f"s3://{BUCKET}/out/big.parquet", compression="none")
-    back = wh.scan_parquet(f"s3://{BUCKET}/out/big.parquet").select(F.col("i").sum().alias("s")).collect().item()
+    back = ia.scan_parquet(f"s3://{BUCKET}/out/big.parquet").select(F.col("i").sum().alias("s")).collect().item()
     assert back == rows * (rows - 1) // 2
-    small = wh.from_dict({"a": [1, 2, 3], "b": ["x", "y", "z"]})
+    small = ia.from_dict({"a": [1, 2, 3], "b": ["x", "y", "z"]})
     small.write_csv(f"s3://{BUCKET}/out/small.csv")
-    assert wh.read_csv(f"s3://{BUCKET}/out/small.csv").to_arrow().column("b").to_pylist() == ["x", "y", "z"]
+    assert ia.read_csv(f"s3://{BUCKET}/out/small.csv").to_arrow().column("b").to_pylist() == ["x", "y", "z"]
 
 
 def test_named_storage_options_in_sql(tpch: Path, endpoint: str) -> None:
@@ -118,16 +118,16 @@ def test_named_storage_options_in_sql(tpch: Path, endpoint: str) -> None:
     client(endpoint).create_bucket(Bucket=other)
     client(endpoint).upload_file(str(tpch / "region" / "part-0.parquet"), other, "region.parquet")
     q = f"select count(*) from read_parquet('s3://{other}/region.parquet', endpoint => '{endpoint}', allow_http => true)"
-    assert wh.sql(q).collect().item() == 5
-    lf = wh.scan_parquet(f"s3://{other}/region.parquet", storage_options={"endpoint": endpoint, "allow_http": True})
+    assert ia.sql(q).collect().item() == 5
+    lf = ia.scan_parquet(f"s3://{other}/region.parquet", storage_options={"endpoint": endpoint, "allow_http": True})
     assert lf.collect().height == 5
 
 
 def test_missing_objects_raise_storage_error(endpoint: str) -> None:
-    with pytest.raises(wh.StorageError, match="not found"):
-        wh.scan_parquet(f"s3://{BUCKET}/nope/x.parquet")
-    with pytest.raises(wh.WorkhouseError):
-        wh.scan_parquet(f"s3://{BUCKET}/nope/")
+    with pytest.raises(ia.StorageError, match="not found"):
+        ia.scan_parquet(f"s3://{BUCKET}/nope/x.parquet")
+    with pytest.raises(ia.IaraError):
+        ia.scan_parquet(f"s3://{BUCKET}/nope/")
 
 
 def test_workspace_with_s3_tables(tmp_path: Path, tpch: Path, endpoint: str) -> None:
@@ -149,7 +149,7 @@ allow_http = true
     assert [t.path for t in ws.tables] == [f"s3://{BUCKET}/tpch/nation/", f"s3://{BUCKET}/does/not/exist/"]
     # lazy registration: the broken table does not break the session
     assert ws.sql("select count(*) from nation").collect().item() == 25
-    with pytest.raises(wh.WorkhouseError):
+    with pytest.raises(ia.IaraError):
         ws.sql("select * from ghost").collect()
     info = catalog.table_info(ws, "nation")
     assert info["path"] == f"s3://{BUCKET}/tpch/nation/" and info["files"] == 1 and info["bytes"] > 0
@@ -158,7 +158,7 @@ allow_http = true
     assert "nation" in catalog.schemas(ws) and "ghost" not in catalog.schemas(ws)
 
 
-def test_credentials_are_refused_in_workhouse_toml(tmp_path: Path) -> None:
+def test_credentials_are_refused_in_iara_toml(tmp_path: Path) -> None:
     text = """
 [storage."s3://b"]
 region = "us-east-1"
@@ -178,18 +178,18 @@ NO_REQUESTS = {"list": 0, "head": 0, "get": 0, "bytes": 0}
 def test_requests_are_counted_and_remembered(tpch: Path) -> None:
     """Object stores bill per request, a LIST dearest: a table object over files
     already seen asks for neither their listing nor their footers again."""
-    wh.storage.clear_object_stores()  # a cold start
+    ia.storage.clear_object_stores()  # a cold start
     url = f"s3://{BUCKET}/tpch/orders/"
-    start = wh.storage.storage_requests()
+    start = ia.storage.storage_requests()
     assert set(start) == {"list", "head", "get", "bytes"}
-    wh.SessionContext().register_parquet("orders", url)
-    first = delta(start, wh.storage.storage_requests())
+    ia.SessionContext().register_parquet("orders", url)
+    first = delta(start, ia.storage.storage_requests())
     assert first["list"] == 1 and first["get"] >= 1 and first["bytes"] > 0  # one LIST, a footer per file
 
-    mark = wh.storage.storage_requests()
-    ctx = wh.SessionContext()
+    mark = ia.storage.storage_requests()
+    ctx = ia.SessionContext()
     ctx.register_parquet("orders", url)
-    assert delta(mark, wh.storage.storage_requests()) == NO_REQUESTS
+    assert delta(mark, ia.storage.storage_requests()) == NO_REQUESTS
 
     # count(*) is answered from the footers
     df, prof = ctx.sql("select count(*) from orders").profile()
@@ -199,13 +199,13 @@ def test_requests_are_counted_and_remembered(tpch: Path) -> None:
     # a scan reads data, and its profile says how many requests that took
     _, prof = ctx.sql("select sum(o_totalprice) from orders").profile()
     assert prof["requests"]["list"] == 0 and prof["requests"]["get"] >= 1 and prof["requests"]["bytes"] > 0
-    assert delta(mark, wh.storage.storage_requests()) == prof["requests"]
+    assert delta(mark, ia.storage.storage_requests()) == prof["requests"]
 
 
 def test_writes_drop_cached_listings(endpoint: str) -> None:
-    one = wh.from_dict({"a": [1, 2, 3]})
+    one = ia.from_dict({"a": [1, 2, 3]})
     one.write_parquet(f"s3://{BUCKET}/cache/a.parquet")
     q = f"select count(*) from read_parquet('s3://{BUCKET}/cache/*.parquet')"
-    assert wh.sql(q).collect().item() == 3
+    assert ia.sql(q).collect().item() == 3
     one.write_parquet(f"s3://{BUCKET}/cache/b.parquet")  # listed again at once: our own writes clear the cache
-    assert wh.sql(q).collect().item() == 6
+    assert ia.sql(q).collect().item() == 6

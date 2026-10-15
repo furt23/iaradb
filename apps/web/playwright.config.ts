@@ -10,22 +10,22 @@ import { defineConfig } from "@playwright/test";
  * (with its own Git repository), never on the real one.
  */
 function e2eWorkspace(): string {
-  if (process.env.WORKHOUSE_E2E_WORKSPACE) return process.env.WORKHOUSE_E2E_WORKSPACE;
+  if (process.env.IARA_E2E_WORKSPACE) return process.env.IARA_E2E_WORKSPACE;
   const source = path.resolve(import.meta.dirname, "../../examples/workspace");
   if (!fs.existsSync(path.join(source, "data", "tpch"))) {
     throw new Error("generate the example data first: python examples/workspace/setup_data.py");
   }
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "workhouse-e2e-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "iara-e2e-"));
   // the small TPC-H copy only (the large one, tpch_sf10, takes gigabytes)
-  const skip = [".workhouse", "exports", "tpch_sf"];
+  const skip = [".iara", "exports", "tpch_sf"];
   fs.cpSync(source, dir, { recursive: true, filter: (p) => !skip.some((s) => p.includes(s)) });
   const git = (...args: string[]) => execFileSync("git", args, { cwd: dir });
   git("init", "-q", "-b", "main");
   git("config", "user.email", "e2e@example.com");
   git("config", "user.name", "Studio E2E");
-  git("add", "workhouse.toml", "notebooks");
+  git("add", "iara.toml", "notebooks");
   git("commit", "-q", "-m", "example workspace");
-  process.env.WORKHOUSE_E2E_WORKSPACE = dir;
+  process.env.IARA_E2E_WORKSPACE = dir;
   return dir;
 }
 
@@ -52,10 +52,10 @@ export default defineConfig({
     reuseExistingServer: false,
     // kernels run on the local cluster; the Studio's own state and AWS access are not the user's
     env: {
-      WORKHOUSE_WORKSPACE: e2eWorkspace(),
-      WORKHOUSE_STUDIO_DATA: path.join(os.tmpdir(), `workhouse-e2e-studio-${process.pid}`),
-      WORKHOUSE_AWS_ENV_FILE: path.join(os.tmpdir(), "workhouse-e2e-no-aws"),
-      WORKHOUSE_LOCAL_COMPUTE: "1",
+      IARA_WORKSPACE: e2eWorkspace(),
+      IARA_STUDIO_DATA: path.join(os.tmpdir(), `iara-e2e-studio-${process.pid}`),
+      IARA_AWS_ENV_FILE: path.join(os.tmpdir(), "iara-e2e-no-aws"),
+      IARA_LOCAL_COMPUTE: "1",
       NEXT_DIST_DIR: ".next-e2e",
     },
   },

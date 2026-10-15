@@ -1,6 +1,6 @@
-"""ClickBench benchmark: Workhouse vs DuckDB vs Polars on hits.parquet.
+"""ClickBench benchmark: Iara vs DuckDB vs Polars on hits.parquet.
 
-usage: python benchmarks/bench_clickbench.py <parquet_path> [--runs N] [--engines workhouse,duckdb,polars] [--queries 0,1,2] [--json out.json]
+usage: python benchmarks/bench_clickbench.py <parquet_path> [--runs N] [--engines iara,duckdb,polars] [--queries 0,1,2] [--json out.json]
 """
 
 from __future__ import annotations
@@ -16,10 +16,10 @@ sys.path.insert(0, os.path.dirname(__file__))
 from clickbench_queries import QUERIES
 
 
-def setup_workhouse(path: str):
-    import workhouse as wh
+def setup_iara(path: str):
+    import iara as ia
 
-    ctx = wh.SessionContext()
+    ctx = ia.SessionContext()
     ctx.register_parquet("hits", path)
     return lambda q: ctx.sql(QUERIES[q]).collect()
 
@@ -50,7 +50,7 @@ def setup_polars_streaming(path: str):
 
 
 SETUP = {
-    "workhouse": setup_workhouse,
+    "iara": setup_iara,
     "duckdb": setup_duckdb,
     "polars": setup_polars_sql,
     "polars-streaming": setup_polars_streaming,
@@ -61,7 +61,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("path", help="Path to hits.parquet or sample.parquet")
     ap.add_argument("--runs", type=int, default=3)
-    ap.add_argument("--engines", default="workhouse,duckdb,polars")
+    ap.add_argument("--engines", default="iara,duckdb,polars")
     ap.add_argument("--queries", default="")
     ap.add_argument("--json", default="")
     args = ap.parse_args()

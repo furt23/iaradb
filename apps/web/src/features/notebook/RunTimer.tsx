@@ -78,8 +78,8 @@ export function RunTimer({ current, lastRun, total, cells }: RunTimerProps) {
           py: 0.25,
           borderRadius: 1,
           border: 1,
-          borderColor: current ? "primary.main" : "divider",
-          color: current ? "primary.main" : lastRun?.failed ? "warning.main" : "text.secondary",
+          borderColor: current ? "ochre.main" : "divider",
+          color: current ? "ochre.main" : lastRun?.failed ? "warning.main" : "text.secondary",
           flexShrink: 0,
         }}
       >

@@ -1,4 +1,4 @@
-import type { CatalogChange, RunRequest, WidgetsState } from "@workhouse/protocol";
+import type { CatalogChange, RunRequest, WidgetsState } from "@iara/protocol";
 
 import { authErrorResponse, requireUser } from "@/server/auth/session";
 import type { KernelClient } from "@/server/kernel/client";
@@ -13,7 +13,7 @@ export const runtime = "nodejs";
 /**
  * Runs notebook cells or a scratch SQL query, streaming kernel events
  * (`cell.state`, `cell.stream`, `progress`, `catalog.changed`) and finally
- * `done` or `failed`. Catalog changes are written to workhouse.toml first.
+ * `done` or `failed`. Catalog changes are written to iara.toml first.
  */
 export async function POST(req: Request): Promise<Response> {
   try {

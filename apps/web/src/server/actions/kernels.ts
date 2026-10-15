@@ -1,6 +1,6 @@
 "use server";
 
-import type { ChartData, ChartSpec, ResultPage, SortKey } from "@workhouse/protocol";
+import type { ChartData, ChartSpec, ResultPage, SortKey } from "@iara/protocol";
 
 import { requireUser } from "../auth/session";
 import { parseKernelKey } from "../kernel/keys";

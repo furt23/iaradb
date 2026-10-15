@@ -1,4 +1,4 @@
-/** The Workhouse Studio MUI theme: Foundry palette, CSS variables, both schemes. */
+/** The Iara Studio MUI theme: Foundry palette, CSS variables, both schemes. */
 
 import { createTheme, type Theme } from "@mui/material/styles";
 import { createSvgIcon } from "@mui/material/utils";
@@ -41,6 +41,12 @@ declare module "@mui/material/Chip" {
   }
 }
 
+declare module "@mui/material/LinearProgress" {
+  interface LinearProgressPropsColorOverrides {
+    ochre: true;
+  }
+}
+
 /** A thin chevron for selects (the MUI triangle reads as stock Material). */
 const Chevron = createSvgIcon(<path d="M7 10l5 5 5-5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />, "Chevron");
 
@@ -61,13 +67,13 @@ const floating = (theme: VarsTheme) => ({
 const dark = {
   palette: {
     mode: "dark" as const,
-    primary: { main: accents.verdigris, contrastText: night.background },
-    secondary: { main: accents.ochre, contrastText: night.background },
+    primary: { main: accents.cobalt, contrastText: night.background },
+    secondary: { main: accents.azure, contrastText: night.background },
     ochre: { main: accents.ochre, contrastText: night.background },
     success: { main: accents.moss },
     error: { main: accents.brick },
     warning: { main: accents.amber },
-    info: { main: accents.verdigris },
+    info: { main: accents.cobalt },
     background: { default: night.background, paper: night.surface, raised: night.raised },
     text: { primary: night.text, secondary: night.textDim, disabled: night.textFaint },
     divider: night.line,
@@ -77,20 +83,20 @@ const dark = {
 const light = {
   palette: {
     mode: "light" as const,
-    primary: { main: accents.verdigrisInk },
-    secondary: { main: accents.ochreInk },
+    primary: { main: accents.cobaltInk },
+    secondary: { main: accents.azureInk },
     ochre: { main: accents.ochreInk, contrastText: "#FFFFFF" },
     success: { main: accents.mossInk },
     error: { main: accents.brickInk },
     warning: { main: accents.amberInk },
-    info: { main: accents.verdigrisInk },
+    info: { main: accents.cobaltInk },
     background: { default: paper.background, paper: paper.surface, raised: paper.raised },
     text: { primary: paper.text, secondary: paper.textDim, disabled: paper.textFaint },
     divider: paper.line,
   },
 };
 
-export function createWorkhouseTheme(): Theme {
+export function createIaraTheme(): Theme {
   return createTheme({
     cssVariables: { colorSchemeSelector: "data-scheme" },
     colorSchemes: { dark, light },

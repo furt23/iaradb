@@ -4,10 +4,12 @@ import Search from "@mui/icons-material/Search";
 import Box from "@mui/material/Box";
 import ButtonBase from "@mui/material/ButtonBase";
 import Typography from "@mui/material/Typography";
-import { LogoMark } from "@workhouse/ui";
+import { LogoMark } from "@iara/ui";
 import Link from "next/link";
 
+import { useTranslation } from "@/i18n";
 import { AccountMenu, type AppAccount } from "./AccountMenu";
+import { LanguageMenu } from "./LanguageMenu";
 import { useShell } from "./ShellProvider";
 import { ThemeMenu } from "./ThemeMenu";
 
@@ -19,6 +21,7 @@ export const APP_BAR_HEIGHT = 48;
  */
 export function AppBar({ workspace, account }: { workspace: string; account: AppAccount }) {
   const { setQuickOpen } = useShell();
+  const { t } = useTranslation();
   return (
     <Box
       component="header"
@@ -39,23 +42,23 @@ export function AppBar({ workspace, account }: { workspace: string; account: App
         <Box
           component={Link}
           href="/notebooks"
-          aria-label="Workhouse Studio home"
+          aria-label={t("Iara Studio home")}
           sx={{ display: "flex", alignItems: "center", gap: 1, color: "text.primary", textDecoration: "none", flexShrink: 0 }}
         >
           <LogoMark size={24} />
           <Typography variant="h3" component="span" sx={{ fontSize: 17, lineHeight: 1, display: { xs: "none", sm: "block" } }}>
-            Workhouse
+            Iara
           </Typography>
         </Box>
         <Typography sx={{ color: "text.disabled", fontSize: 15, display: { xs: "none", md: "block" } }}>/</Typography>
-        <Typography noWrap title="Workspace" sx={{ fontSize: 13, color: "text.secondary", minWidth: 0, display: { xs: "none", md: "block" } }}>
+        <Typography noWrap title={t("Workspace")} sx={{ fontSize: 13, color: "text.secondary", minWidth: 0, display: { xs: "none", md: "block" } }}>
           {workspace}
         </Typography>
       </Box>
 
       <ButtonBase
         onClick={() => setQuickOpen(true)}
-        aria-label="open by name"
+        aria-label={t("open by name")}
         sx={{
           height: 32,
           px: 1.25,
@@ -72,7 +75,7 @@ export function AppBar({ workspace, account }: { workspace: string; account: App
       >
         <Search sx={{ fontSize: 18 }} />
         <Box component="span" sx={{ flex: 1, textAlign: "left", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
-          Search notebooks, queries and tables
+          {t("Search notebooks, queries and tables")}
         </Box>
         <Box
           component="kbd"
@@ -83,6 +86,7 @@ export function AppBar({ workspace, account }: { workspace: string; account: App
       </ButtonBase>
 
       <Box sx={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 0.5 }}>
+        <LanguageMenu />
         <ThemeMenu />
         <AccountMenu account={account} />
       </Box>

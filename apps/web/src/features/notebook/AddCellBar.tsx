@@ -3,7 +3,7 @@
 import Add from "@mui/icons-material/Add";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
-import type { CellKind } from "@workhouse/protocol";
+import type { CellKind } from "@iara/protocol";
 
 /** Insert a cell between two others; visible on hover (always, when `persistent`). */
 export function AddCellBar({ onAdd, persistent = false }: { onAdd(kind: CellKind): void; persistent?: boolean }) {

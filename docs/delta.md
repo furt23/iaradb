@@ -1,6 +1,6 @@
 # Delta Lake tables
 
-Workhouse reads and writes Delta Lake tables without the `deltalake` crates. A Delta table is a folder with a `_delta_log/` of commits. Other tools that read Delta can read these tables, and the reverse.
+Iara reads and writes Delta Lake tables without the `deltalake` crates. A Delta table is a folder with a `_delta_log/` of commits. Other tools that read Delta can read these tables, and the reverse.
 
 Tables created in a warehouse are Delta by default. Plain Parquet folders are still available with `USING PARQUET`.
 
@@ -54,8 +54,8 @@ SELECT * FROM read_delta('s3://my-bucket/orders', version => 3);
 ```
 
 ```python
-workhouse.read_delta("warehouse/sales/orders", version=3)
-workhouse.scan_delta("warehouse/sales/orders", timestamp="2026-10-01 12:00:00")
+iara.read_delta("warehouse/sales/orders", version=3)
+iara.scan_delta("warehouse/sales/orders", timestamp="2026-10-01 12:00:00")
 ```
 
 Time travel needs a Delta table. On another format it is refused.
@@ -97,8 +97,8 @@ An overwrite keeps the table's schema and partitioning. `schema_mode="merge"` (P
 ## Python
 
 ```python
-lf = workhouse.scan_delta("warehouse/sales/orders", version=None)
-df = workhouse.read_delta("warehouse/sales/orders", version=3)
+lf = iara.scan_delta("warehouse/sales/orders", version=None)
+df = iara.read_delta("warehouse/sales/orders", version=3)
 
 lf.sink_delta("warehouse/sales/daily", mode="overwrite", partition_by=["region"])
 df.write_delta("warehouse/sales/copy", mode="append", schema_mode="merge")
@@ -106,7 +106,7 @@ df.write_delta("warehouse/sales/copy", mode="append", schema_mode="merge")
 
 `sink_delta` takes `mode`: `"error"` (default, the table must not exist), `"append"`, `"overwrite"` or `"ignore"` (no write when the table exists). It returns `{"version", "files", "rows", "skipped"}`.
 
-`workhouse.storage.delta_history(path)` and `workhouse.storage.delta_info(path)` return the commit list and the table details that `DESCRIBE HISTORY` and `DESCRIBE DETAIL` show.
+`iara.storage.delta_history(path)` and `iara.storage.delta_info(path)` return the commit list and the table details that `DESCRIBE HISTORY` and `DESCRIBE DETAIL` show.
 
 ## Limits
 
@@ -123,7 +123,7 @@ A commit writes the next `_delta_log/<version>.json` only if the file does not e
 Object stores without conditional writes cannot do this. For those, set the storage option `single_writer` to `true`. The engine then checks for the file and writes it, in two steps. Use it only when one process writes to the table.
 
 ```python
-workhouse.set_storage_options("s3://my-bucket", {"single_writer": "true"})
+iara.set_storage_options("s3://my-bucket", {"single_writer": "true"})
 ```
 
 Checkpoints are written after every 10 commits (versions 10, 20, ...), so readers do not replay the whole log.

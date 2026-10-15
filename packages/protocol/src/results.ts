@@ -1,4 +1,4 @@
-/** Tabular results, served page by page (see workhouse.kernel.runtime.results). */
+/** Tabular results, served page by page (see iara.kernel.runtime.results). */
 
 export interface ColumnInfo {
   name: string;

@@ -3,7 +3,7 @@
 import Box from "@mui/material/Box";
 import ToggleButton from "@mui/material/ToggleButton";
 import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
-import type { Cell, Variable } from "@workhouse/protocol";
+import type { Cell, Variable } from "@iara/protocol";
 import { useCallback, useEffect, useState } from "react";
 
 import { OutlinePanel } from "./OutlinePanel";
@@ -11,7 +11,7 @@ import { VariablesPanel } from "./VariablesPanel";
 
 export type SideView = "outline" | "variables";
 
-const STORAGE_KEY = "workhouse.notebook.side";
+const STORAGE_KEY = "iara.notebook.side";
 
 function isView(value: unknown): value is SideView {
   return value === "outline" || value === "variables";

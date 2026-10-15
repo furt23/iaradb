@@ -1,13 +1,13 @@
 /**
- * Custom Starlight styling for Workhouse Python Documentation
+ * Custom Starlight styling for Iara Python Documentation
  * Inspired by the Observatory design system (packages/ui/src/tokens.ts)
  */
 
 /* Dark Mode (Native Scheme) */
 :root {
-  --sl-color-accent-low: #221a0d;
-  --sl-color-accent: #d4a24c;
-  --sl-color-accent-high: #f5d28a;
+  --sl-color-accent-low: #10213a;
+  --sl-color-accent: #7fb2f0;
+  --sl-color-accent-high: #c9def8;
 
   --sl-color-white: #e6eaf2;
   --sl-color-gray-1: #c8d0e0;
@@ -21,19 +21,19 @@
   --sl-font-system: 'Inter Variable', Inter, system-ui, -apple-system, sans-serif;
   --sl-font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, Consolas, monospace;
 
-  /* Custom Workhouse palette tokens */
-  --wh-accent-nebula: #6ea8fe;
-  --wh-accent-brass: #d4a24c;
-  --wh-accent-aurora: #5fd3a6;
-  --wh-accent-nova: #f5c46b;
-  --wh-accent-mars: #f2777a;
+  /* Custom Iara palette tokens */
+  --iara-accent-nebula: #6ea8fe;
+  --iara-accent-brass: #d4a24c;
+  --iara-accent-aurora: #5fd3a6;
+  --iara-accent-nova: #f5c46b;
+  --iara-accent-mars: #f2777a;
 }
 
 /* Light Mode (Paper Scheme) */
 :root[data-theme='light'] {
-  --sl-color-accent-low: #f8edd7;
-  --sl-color-accent: #a87a22;
-  --sl-color-accent-high: #5f430d;
+  --sl-color-accent-low: #dbe8fa;
+  --sl-color-accent: #1e5bb8;
+  --sl-color-accent-high: #123a75;
 
   --sl-color-white: #1b2233;
   --sl-color-gray-1: #2c3447;
@@ -44,11 +44,11 @@
   --sl-color-gray-6: #ffffff;
   --sl-color-black: #f7f6f2;
 
-  --wh-accent-nebula: #2f6fd6;
-  --wh-accent-brass: #a87a22;
-  --wh-accent-aurora: #1f9e73;
-  --wh-accent-nova: #b7801a;
-  --wh-accent-mars: #c93b40;
+  --iara-accent-nebula: #2f6fd6;
+  --iara-accent-brass: #a87a22;
+  --iara-accent-aurora: #1f9e73;
+  --iara-accent-nova: #b7801a;
+  --iara-accent-mars: #c93b40;
 }
 
 /* Header & Navigation Polish */
@@ -91,19 +91,19 @@ header.header {
 
 .api-badge-lazy {
   background-color: rgba(110, 168, 254, 0.15);
-  color: var(--wh-accent-nebula);
+  color: var(--iara-accent-nebula);
   border: 1px solid rgba(110, 168, 254, 0.3);
 }
 
 .api-badge-eager {
   background-color: rgba(212, 162, 76, 0.15);
-  color: var(--wh-accent-brass);
+  color: var(--iara-accent-brass);
   border: 1px solid rgba(212, 162, 76, 0.3);
 }
 
 .api-badge-expr {
   background-color: rgba(95, 211, 166, 0.15);
-  color: var(--wh-accent-aurora);
+  color: var(--iara-accent-aurora);
   border: 1px solid rgba(95, 211, 166, 0.3);
 }
 

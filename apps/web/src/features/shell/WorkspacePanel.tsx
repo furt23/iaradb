@@ -18,9 +18,10 @@ import { NewQueryDialog } from "@/features/queries/NewQueryDialog";
 import { withoutData } from "@/lib/fileFilter";
 import type { FileNode } from "@/server/workspace/files";
 
+import { useTranslation } from "@/i18n";
 import { SidePanelHeader } from "./SidePanelHeader";
 
-const SHOW_DATA_KEY = "workhouse.showDataFiles.v1";
+const SHOW_DATA_KEY = "iara.showDataFiles.v1";
 
 /** Whether the tree shows data files (they belong to the Data section), remembered by the browser. */
 function useShowData(): [boolean, (show: boolean) => void] {
@@ -51,30 +52,31 @@ export function WorkspacePanel({ name, tree }: { name: string; tree: FileNode[] 
   const [showData, setShowData] = useShowData();
   const filtered = useMemo(() => withoutData(tree), [tree]);
   const router = useRouter();
+  const { t } = useTranslation();
   return (
     <>
       <SidePanelHeader
-        overline="Workspace"
+        overline={t("Workspace")}
         title={name}
         actions={
           <>
-            <Tooltip title="New notebook">
-              <IconButton onClick={() => setCreating(true)} aria-label="new notebook">
+            <Tooltip title={t("New notebook")}>
+              <IconButton onClick={() => setCreating(true)} aria-label={t("new notebook")}>
                 <Add fontSize="small" />
               </IconButton>
             </Tooltip>
-            <Tooltip title="New SQL query">
-              <IconButton onClick={() => setQuery(true)} aria-label="new SQL query">
+            <Tooltip title={t("New SQL query")}>
+              <IconButton onClick={() => setQuery(true)} aria-label={t("new SQL query")}>
                 <PostAddOutlined fontSize="small" />
               </IconButton>
             </Tooltip>
-            <Tooltip title="New folder">
-              <IconButton onClick={() => setFolder(true)} aria-label="new folder">
+            <Tooltip title={t("New folder")}>
+              <IconButton onClick={() => setFolder(true)} aria-label={t("new folder")}>
                 <CreateNewFolderOutlined fontSize="small" />
               </IconButton>
             </Tooltip>
-            <Tooltip title="Refresh files">
-              <IconButton onClick={() => router.refresh()} aria-label="refresh files">
+            <Tooltip title={t("Refresh files")}>
+              <IconButton onClick={() => router.refresh()} aria-label={t("refresh files")}>
                 <Refresh fontSize="small" />
               </IconButton>
             </Tooltip>
@@ -89,7 +91,9 @@ export function WorkspacePanel({ name, tree }: { name: string; tree: FileNode[] 
           onClick={() => setShowData(!showData)}
           sx={{ justifyContent: "flex-start", px: 1.5, py: 0.75, borderTop: 1, borderColor: "divider", fontSize: 12, color: "text.secondary", "&:hover": { color: "text.primary" } }}
         >
-          {showData ? "Hide data files" : `${filtered.hidden} data ${filtered.hidden === 1 ? "entry" : "entries"} hidden · show`}
+          {showData
+            ? t("Hide data files")
+            : t("{{count}} data entries hidden · show", { count: filtered.hidden })}
         </ButtonBase>
       )}
       <NewNotebookDialog open={creating} onClose={() => setCreating(false)} />

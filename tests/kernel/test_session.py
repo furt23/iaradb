@@ -12,9 +12,9 @@ from typing import Any
 
 import pytest
 
-from workhouse.kernel.notebook import marimo_io
-from workhouse.kernel.notebook.model import Cell
-from workhouse.kernel.session import KernelSession
+from iara.kernel.notebook import marimo_io
+from iara.kernel.notebook.model import Cell
+from iara.kernel.session import KernelSession
 
 
 class Recorder:
@@ -47,7 +47,7 @@ def sql(cid: str, code: str, output: str | None = None) -> dict[str, Any]:
     return {"id": cid, "kind": "sql", "code": code, "output": output}
 
 
-SETUP = py("setup", "import workhouse as wh\nws = wh.workspace()")
+SETUP = py("setup", "import iara as ia\nws = ia.workspace()")
 
 
 def run(session: KernelSession, cells: list[dict], targets: list[str] | None = None, autorun: bool = False) -> tuple[dict, Recorder]:
@@ -272,7 +272,7 @@ def test_variables(session: KernelSession):
     run(session, [SETUP, py("v", "nums = [1, 2, 3]\ndf = ws.table('sales').collect()")])
     names = {v["name"]: v for v in session.notebook.variables()}
     assert names["df"]["summary"] == "1000 × 3" and names["nums"]["type"] == "list"
-    assert "wh" not in names  # modules are hidden
+    assert "ia" not in names  # modules are hidden
 
 
 def test_catalog(session: KernelSession, workspace: Path):
@@ -282,7 +282,7 @@ def test_catalog(session: KernelSession, workspace: Path):
     stats = {s["column"]: s for s in info["stats"]}
     assert stats["id"]["min"] == 0 and stats["id"]["max"] == 999
     session.handlers()["catalog.add"]({"name": "sales_copy", "path": "data/sales.parquet"}, lambda *a: None)
-    assert "sales_copy" in (workspace / "workhouse.toml").read_text()
+    assert "sales_copy" in (workspace / "iara.toml").read_text()
     assert session.ws.sql("select count(*) from sales_copy").collect().item() == 1000
 
 
@@ -307,7 +307,7 @@ def test_configure_replaces_the_catalog(session: KernelSession, workspace: Path)
     assert info["name"] == "remote" and [t["name"] for t in info["tables"]] == ["only"]
     assert info["host"] and info["platform"]
     assert session.ws.sql("select count(*) from only").collect().item() == 1000
-    # notebooks see the kernel's catalog through wh.workspace()
+    # notebooks see the kernel's catalog through ia.workspace()
     session.notebook.create("notebooks/cfg.py", persist=False)
     result, _ = run(session, [SETUP, py("t", "names = ws.session.tables()")])
     assert result["ran"] == ["setup", "t"] and session.notebook.namespace()["names"] == ["only"]
@@ -327,10 +327,10 @@ def test_notebooks_live_in_the_studio(session: KernelSession, workspace: Path):
 
 
 def test_catalog_add_without_writing(session: KernelSession, workspace: Path):
-    before = (workspace / "workhouse.toml").read_text()
+    before = (workspace / "iara.toml").read_text()
     ref = call(session, "catalog.add", {"name": "s3t", "path": "s3://bucket/t/", "persist": False})
     assert ref["path"] == "s3://bucket/t/" and '[tables.s3t]\npath = "s3://bucket/t/"' in ref["entry"]
-    assert (workspace / "workhouse.toml").read_text() == before
+    assert (workspace / "iara.toml").read_text() == before
     assert session.ws.spec("s3t") is not None
 
 
@@ -348,7 +348,7 @@ def test_exports_are_read_in_chunks(session: KernelSession):
             break
     assert len(chunks) > 1 and b"".join(chunks) == (session.ws.root / path).read_bytes()
     with pytest.raises(PermissionError):
-        call(session, "file.read", {"path": "workhouse.toml"})
+        call(session, "file.read", {"path": "iara.toml"})
 
 
 def test_renamed_notebook_keeps_its_state(session: KernelSession):

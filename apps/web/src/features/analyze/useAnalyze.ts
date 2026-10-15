@@ -1,6 +1,6 @@
 "use client";
 
-import type { QueryParams } from "@workhouse/protocol";
+import type { QueryParams } from "@iara/protocol";
 import { useRouter } from "next/navigation";
 import { useCallback, useState } from "react";
 

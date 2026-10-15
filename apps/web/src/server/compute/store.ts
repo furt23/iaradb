@@ -13,7 +13,7 @@ import type { ClusterRecord } from "./types";
  * The Studio's own state (not the workspace's): clusters, which notebook is
  * attached to which cluster, the default cluster, and the SSH identity the
  * Studio uses to reach its machines. One JSON file plus a private key in
- * `WORKHOUSE_STUDIO_DATA` (default ~/.workhouse/studio).
+ * `IARA_STUDIO_DATA` (default ~/.iara/studio).
  */
 
 export interface StudioState {
@@ -31,7 +31,7 @@ export interface Identity {
 }
 
 export function dataDir(): string {
-  return process.env.WORKHOUSE_STUDIO_DATA || path.join(os.homedir(), ".workhouse", "studio");
+  return process.env.IARA_STUDIO_DATA || path.join(os.homedir(), ".iara", "studio");
 }
 
 function writeAtomic(file: string, text: string, mode = 0o600): void {
@@ -87,7 +87,7 @@ export class Store {
   identity(): Identity {
     const keyFile = path.join(this.dir, "id_ed25519");
     if (!fs.existsSync(keyFile)) {
-      const pair = utils.generateKeyPairSync("ed25519", { comment: "workhouse-studio" });
+      const pair = utils.generateKeyPairSync("ed25519", { comment: "iara-studio" });
       writeAtomic(keyFile, pair.private);
       writeAtomic(`${keyFile}.pub`, pair.public, 0o644);
     }

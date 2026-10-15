@@ -37,9 +37,9 @@ Expr.dt.truncate(unit: str) -> Expr
 
 ### Example
 ```python
->>> import workhouse
->>> from workhouse import functions as F
->>> df = workhouse.from_dict({"order_date": ["2026-10-09", "2026-12-25"]})
+>>> import iara
+>>> from iara import functions as F
+>>> df = iara.from_dict({"order_date": ["2026-10-09", "2026-12-25"]})
 >>> df.lazy().with_columns(
 ...     d=F.col("order_date").cast("date")
 ... ).select(

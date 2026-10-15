@@ -8,6 +8,7 @@ import Divider from "@mui/material/Divider";
 import Menu from "@mui/material/Menu";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { useNotify } from "@/features/shell/notify";
 import type { CatalogTable } from "@/lib/catalogToml";
@@ -24,6 +25,7 @@ export interface TableMenuTarget {
 
 /** Actions on a catalog table: open, query, copy its name, remove it from the catalog. */
 export function TableMenu({ target, onClose }: { target: TableMenuTarget | null; onClose(): void }) {
+  const { t } = useTranslation();
   const [removing, setRemoving] = useState<CatalogTable | null>(null);
   const router = useRouter();
   const notify = useNotify();
@@ -44,19 +46,19 @@ export function TableMenu({ target, onClose }: { target: TableMenuTarget | null;
         anchorPosition={point ? { top: point.y, left: point.x } : undefined}
         slotProps={{ list: { dense: true, "aria-label": target ? `actions for ${target.table.name}` : undefined } }}
       >
-        <ActionItem icon={<TableChartOutlined fontSize="small" />} label="Open" onClick={run((t) => router.push(tableHref(t.name)))} />
-        <ActionItem icon={<TerminalOutlined fontSize="small" />} label="Query in the SQL editor" onClick={run((t) => router.push(sqlHref(sampleQuery(t.name))))} />
+        <ActionItem icon={<TableChartOutlined fontSize="small" />} label={t("Open")} onClick={run((tRow) => router.push(tableHref(tRow.name)))} />
+        <ActionItem icon={<TerminalOutlined fontSize="small" />} label={t("Query in the SQL editor")} onClick={run((tRow) => router.push(sqlHref(sampleQuery(tRow.name))))} />
         <ActionItem
           icon={<ContentCopyOutlined fontSize="small" />}
-          label="Copy name"
-          onClick={run(async (t) => {
-            await navigator.clipboard.writeText(t.name);
-            notify(`Copied ${t.name}`, "success");
+          label={t("Copy name")}
+          onClick={run(async (tRow) => {
+            await navigator.clipboard.writeText(tRow.name);
+            notify(`Copied ${tRow.name}`, "success");
           })}
         />
         <Divider />
-        <ActionItem icon={<DeleteOutline fontSize="small" />} label="Remove from catalog…"
-          onClick={run((t) => setRemoving(t))}
+        <ActionItem icon={<DeleteOutline fontSize="small" />} label={t("Remove from catalog…")}
+          onClick={run((tRow) => setRemoving(tRow))}
           danger
           disabled={!!target?.table.discovered}
           hint={target?.table.discovered ? "Discovered from the schema's location: delete the folder to remove the table" : undefined}
@@ -66,3 +68,4 @@ export function TableMenu({ target, onClose }: { target: TableMenuTarget | null;
     </>
   );
 }
+

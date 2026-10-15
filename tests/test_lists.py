@@ -17,8 +17,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-import workhouse as wh
-from workhouse import functions as F
+import iara as ia
+from iara import functions as F
 
 sys.path.insert(0, os.path.dirname(__file__))
 from compare import diff  # noqa: E402
@@ -52,7 +52,7 @@ def duck(table: pa.Table) -> duckdb.DuckDBPyConnection:
 
 
 def check(table: pa.Table, query: str, duck_query: str | None = None, ordered: bool = True) -> None:
-    ours = wh.sql(query, t=table).collect().to_arrow()
+    ours = ia.sql(query, t=table).collect().to_arrow()
     exp = duck(table).execute(duck_query or query).arrow().read_all()
     d = diff(ours, exp, ordered=ordered)
     assert d is None, f"{query}: {d}"
@@ -151,8 +151,8 @@ def test_lists_cannot_be_keys_yet(table: pa.Table) -> None:
         "select * from t order by l",
         "select a.id from t a join t b on a.l = b.l",
     ]:
-        with pytest.raises(wh.WorkhouseError, match="cannot be used as"):
-            wh.sql(query, t=table).collect()
+        with pytest.raises(ia.IaraError, match="cannot be used as"):
+            ia.sql(query, t=table).collect()
 
 
 # ---------------------------------------------------------------------------
@@ -209,8 +209,8 @@ def test_list_aggregates_with_other_aggregates(table: pa.Table) -> None:
 
 
 def test_array_agg_in_a_window_is_rejected(table: pa.Table) -> None:
-    with pytest.raises(wh.WorkhouseError, match="array_agg"):
-        wh.sql("select array_agg(x) over (partition by g) from t", t=table).collect()
+    with pytest.raises(ia.IaraError, match="array_agg"):
+        ia.sql("select array_agg(x) over (partition by g) from t", t=table).collect()
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +250,7 @@ def _norm(v):
 
 
 def both(table: pa.Table, wh_expr, pl_expr, sort_lists: bool = False) -> None:
-    ours = values(wh.from_arrow(table).lazy().select(wh_expr.alias("r")).collect())
+    ours = values(ia.from_arrow(table).lazy().select(wh_expr.alias("r")).collect())
     theirs = values(pl.from_arrow(table).select(pl_expr.alias("r")))
     if sort_lists:
         key = lambda v: (v is None, v)  # noqa: E731
@@ -307,23 +307,23 @@ def test_concat_list_matches_polars(table: pa.Table) -> None:
 
 def test_implode_and_group_by_agg_list(table: pa.Table) -> None:
     ours = (
-        wh.from_arrow(table).lazy().group_by("g").agg(F.col("x").implode().alias("xs"), F.col("l").implode().alias("ls")).sort("g").collect()
+        ia.from_arrow(table).lazy().group_by("g").agg(F.col("x").implode().alias("xs"), F.col("l").implode().alias("ls")).sort("g").collect()
     )
     theirs = pl.from_arrow(table).group_by("g").agg(pl.col("x").alias("xs"), pl.col("l").alias("ls")).sort("g")
     assert values(ours) == values(theirs)
-    whole = wh.from_arrow(table).lazy().select(F.col("x").implode().alias("xs")).collect().to_arrow().to_pylist()
+    whole = ia.from_arrow(table).lazy().select(F.col("x").implode().alias("xs")).collect().to_arrow().to_pylist()
     assert whole == [{"xs": table.column("x").to_pylist()}]
     # filtered
-    f = wh.from_arrow(table).lazy().group_by("g").agg(F.col("x").filter(F.col("id") > 3).implode().alias("xs")).sort("g").collect()
+    f = ia.from_arrow(table).lazy().group_by("g").agg(F.col("x").filter(F.col("id") > 3).implode().alias("xs")).sort("g").collect()
     p = pl.from_arrow(table).group_by("g").agg(pl.col("x").filter(pl.col("id") > 3).alias("xs")).sort("g")
     assert values(f) == values(p)
 
 
 def test_explode_matches_polars(table: pa.Table) -> None:
-    ours = wh.from_arrow(table).lazy().select("id", "l").explode("l").collect()
+    ours = ia.from_arrow(table).lazy().select("id", "l").explode("l").collect()
     theirs = pl.from_arrow(table).select("id", "l").explode("l")
     assert values(ours) == values(theirs)
-    ours = wh.from_arrow(table).lazy().select("id", "s", "l").explode("s").collect()
+    ours = ia.from_arrow(table).lazy().select("id", "s", "l").explode("s").collect()
     theirs = pl.from_arrow(table).select("id", "s", "l").explode("s")
     assert values(ours) == values(theirs)
     # in place: column order and names are kept
@@ -336,38 +336,38 @@ def test_explode_matches_polars(table: pa.Table) -> None:
 
 
 def test_schema_names_and_arrow_types(table: pa.Table) -> None:
-    lf = wh.from_arrow(table).lazy()
+    lf = ia.from_arrow(table).lazy()
     assert lf.schema["l"] == "List<Int64>"
     assert lf.schema["s"] == "List<Utf8>"
     out = lf.select(F.col("l").list.len().alias("n"), F.col("s")).collect().to_arrow()
     assert out.schema.field("s").type == pa.list_(pa.string())
-    nested = wh.sql("select [[1, 2], [3]] as ll").collect()
+    nested = ia.sql("select [[1, 2], [3]] as ll").collect()
     assert nested.to_arrow().schema.field("ll").type == pa.list_(pa.list_(pa.int64()))
-    assert wh.sql("select [[1, 2], [3]] as ll").schema["ll"] == "List<List<Int64>>"
+    assert ia.sql("select [[1, 2], [3]] as ll").schema["ll"] == "List<List<Int64>>"
 
 
 def test_pyarrow_and_polars_round_trip(table: pa.Table) -> None:
-    df = wh.from_arrow(table).lazy().select("id", "l", "s").collect()
+    df = ia.from_arrow(table).lazy().select("id", "l", "s").collect()
     assert df.to_arrow().to_pylist() == table.select(["id", "l", "s"]).to_pylist()
     back = pl.from_arrow(df.to_arrow())
     assert back.schema["l"] == pl.List(pl.Int64)
     assert back["s"].to_list() == table.column("s").to_pylist()
-    assert wh.from_polars(pl.from_arrow(table)).lazy().collect().to_arrow().to_pylist() == table.to_pylist()
+    assert ia.from_polars(pl.from_arrow(table)).lazy().collect().to_arrow().to_pylist() == table.to_pylist()
 
 
 def test_large_list_and_other_element_names_are_normalized() -> None:
     t = pa.table({"a": pa.array([[1, 2], None, [3]], pa.large_list(pa.int64())), "b": pa.array([["x"], [], None], pa.list_(pa.field("element", pa.string())))})
-    df = wh.from_arrow(t).lazy().collect().to_arrow()
+    df = ia.from_arrow(t).lazy().collect().to_arrow()
     assert df.schema.field("a").type == pa.list_(pa.int64())
     assert df.to_pylist() == t.to_pylist()
-    assert wh.from_arrow(t).lazy().select(F.col("a").list.sum()).collect().to_arrow().column(0).to_pylist() == [3, None, 3]
+    assert ia.from_arrow(t).lazy().select(F.col("a").list.sum()).collect().to_arrow().column(0).to_pylist() == [3, None, 3]
 
 
 def test_parquet_nested_columns_round_trip(table: pa.Table) -> None:
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "n.parquet")
         pq.write_table(table, path)  # pyarrow names list elements "element"
-        lf = wh.scan_parquet(path)
+        lf = ia.scan_parquet(path)
         assert lf.schema["l"] == "List<Int64>"
         got = lf.sort("id").collect().to_arrow()
         assert got.to_pylist() == table.to_pylist()
@@ -375,7 +375,7 @@ def test_parquet_nested_columns_round_trip(table: pa.Table) -> None:
         expected = [len(v) if v is not None else None for v in table.column("l").to_pylist()][5:]
         assert n.column("n").to_pylist() == expected
         out = os.path.join(d, "o.parquet")
-        wh.read_parquet(path).write_parquet(out)
+        ia.read_parquet(path).write_parquet(out)
         assert pq.read_table(out).sort_by("id").to_pylist() == table.to_pylist()
         assert pl.read_parquet(out).sort("id")["l"].to_list() == table.column("l").to_pylist()
 
@@ -403,11 +403,11 @@ def test_large_groups_and_spill_match_duckdb() -> None:
     expected = [duck(t).execute(d or q).arrow().read_all() for q, d in queries]
     for limit in (None, "24MB"):
         if limit:
-            wh.set_memory_limit(limit)
+            ia.set_memory_limit(limit)
         try:
             for (q, _), exp in zip(queries, expected):
-                d = diff(wh.sql(q, t=t).collect().to_arrow(), exp)
+                d = diff(ia.sql(q, t=t).collect().to_arrow(), exp)
                 assert d is None, f"{q} (limit {limit}): {d}"
         finally:
             if limit:
-                wh.set_memory_limit(None)
+                ia.set_memory_limit(None)

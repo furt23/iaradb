@@ -19,8 +19,8 @@ interface Active {
   controller: AbortController;
 }
 
-const g = globalThis as { __workhouseJobRuns?: Map<string, Active> };
-const active = (g.__workhouseJobRuns ??= new Map());
+const g = globalThis as { __iaraJobRuns?: Map<string, Active> };
+const active = (g.__iaraJobRuns ??= new Map());
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {

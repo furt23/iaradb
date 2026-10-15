@@ -1,41 +1,41 @@
 # Studio
 
-Workhouse Studio is a web app for working with a workspace: notebooks that mix Python and SQL, SQL files, a table catalog, query history and profiles, charts, scheduled jobs and clusters.
+Iara Studio is a web app for working with a workspace: notebooks that mix Python and SQL, SQL files, a table catalog, query history and profiles, charts, scheduled jobs and clusters.
 
 ```bash
 pnpm install
 python examples/workspace/setup_data.py     # example data (TPC-H, scale factor 0.1)
-workhouse serve examples/workspace          # http://localhost:3870; or: pnpm dev
+iara serve examples/workspace          # http://localhost:3870; or: pnpm dev
 ```
 
-`workhouse serve` takes `--port`, `--dev` and `--no-browser`.
+`iara serve` takes `--port`, `--dev` and `--no-browser`.
 
 ## How it is built
 
-The browser only renders. The Next.js server handles files, Git and kernel processes, and each kernel is a Python process (`python -m workhouse.kernel`) that talks to the server in JSON lines over stdio, or over ssh for a cluster. Queries run in the Rust engine inside the kernel.
+The browser only renders. The Next.js server handles files, Git and kernel processes, and each kernel is a Python process (`python -m iara.kernel`) that talks to the server in JSON lines over stdio, or over ssh for a cluster. Queries run in the Rust engine inside the kernel.
 
 ```
 browser (React + MUI)
    | server actions, /api/run (SSE), /api/assist
 Next.js server (apps/web/src/server)
    | JSON lines over stdio or ssh
-kernel (python -m workhouse.kernel)
+kernel (python -m iara.kernel)
    |
-workhouse-core (Rust)
+iara-core (Rust)
 ```
 
 ## Workspaces
 
-A workspace is a directory with a `workhouse.toml` that lists its tables. `workhouse init [directory]` creates one. Notebooks and the SQL editor query the tables by name. A script can use the same catalog:
+A workspace is a directory with a `iara.toml` that lists its tables. `iara init [directory]` creates one. Notebooks and the SQL editor query the tables by name. A script can use the same catalog:
 
 ```python
-import workhouse
+import iara
 
-ws = workhouse.workspace()      # finds workhouse.toml from the current directory upward
+ws = iara.workspace()      # finds iara.toml from the current directory upward
 ws.sql("select count(*) from lineitem").collect()
 ```
 
-Tables can be Parquet, CSV or JSON files, directories or globs, local or `s3://`. Schemas are declared in the same file. For the file format see the docstring of `python/workhouse/workspaces.py`.
+Tables can be Parquet, CSV or JSON files, directories or globs, local or `s3://`. Schemas are declared in the same file. For the file format see the docstring of `python/iara/workspaces.py`.
 
 ## Notebooks
 
@@ -47,23 +47,23 @@ Tables can be Parquet, CSV or JSON files, directories or globs, local or `s3://`
 - The file menu renames, moves, duplicates, exports (`.py`, `.ipynb`, Markdown), schedules as a job and deletes. The kernel menu interrupts, restarts, restarts and clears outputs, or restarts and runs all.
 - The side panel shows an outline built from Markdown headings and the variables defined in the kernel.
 - Python cells have completion (Jedi). Syntax errors, undefined names and SQL errors are marked while you type.
-- The imports of a notebook live in a setup cell (`with app.setup:`). The Studio hides it from the cell list. Kernel → Show setup code opens it. New notebooks start with `import marimo as mo`, `import workhouse` and `ws = workhouse.workspace()`.
-- Frames, readers and `sql` are on `workhouse` (`workhouse.scan_parquet(...)`). Expression functions are in `workhouse.functions`: import it under the name you like, e.g. `from workhouse import functions as F`, then `F.col("x") > 5`, `F.sum("amount")`, `F.when(...)`. Its `sum`, `min`, `max`, `all` and `len` are aggregates, so import the module rather than `*`.
-- A cell does not show the frame it ends with, and `collect()` only collects: a frame shows its first 500 rows with `df.preview()` (or `workhouse.preview(df)`, `df.preview(50)` for fewer). A LazyFrame runs with a limit, and its profile and plan come along. The table's CSV and Parquet downloads, charts and the Wrangle tab use all the rows. SQL cells and the SQL editor show the first 500 rows of their result; the cell's variable has all of them. Other tables (pandas, pyarrow, polars) a cell ends with are shown as before, their first 500 rows.
+- The imports of a notebook live in a setup cell (`with app.setup:`). The Studio hides it from the cell list. Kernel → Show setup code opens it. New notebooks start with `import marimo as mo`, `import iara` and `ws = iara.workspace()`.
+- Frames, readers and `sql` are on `iara` (`iara.scan_parquet(...)`). Expression functions are in `iara.functions`: import it under the name you like, e.g. `from iara import functions as F`, then `F.col("x") > 5`, `F.sum("amount")`, `F.when(...)`. Its `sum`, `min`, `max`, `all` and `len` are aggregates, so import the module rather than `*`.
+- A cell does not show the frame it ends with, and `collect()` only collects: a frame shows its first 500 rows with `df.preview()` (or `iara.preview(df)`, `df.preview(50)` for fewer). A LazyFrame runs with a limit, and its profile and plan come along. The table's CSV and Parquet downloads, charts and the Wrangle tab use all the rows. SQL cells and the SQL editor show the first 500 rows of their result; the cell's variable has all of them. Other tables (pandas, pyarrow, polars) a cell ends with are shown as before, their first 500 rows.
 
 ## Widgets
 
-`workhouse.widgets` defines named inputs for a notebook: `text`, `number`, `dropdown`, `multiselect`, `checkbox` and `date`. Each call defines the widget and returns its value.
+`iara.widgets` defines named inputs for a notebook: `text`, `number`, `dropdown`, `multiselect`, `checkbox` and `date`. Each call defines the widget and returns its value.
 
 ```python
-region = workhouse.widgets.dropdown("region", "north", ["north", "south"], label="Region")
+region = iara.widgets.dropdown("region", "north", ["north", "south"], label="Region")
 ```
 
-The notebook's widget bar shows the widgets. Changing a value re-runs the cells that read it. A SQL cell binds `:name` placeholders to widget values. Outside the Studio (a script or a job without a kernel), a widget takes its value from the environment variable `WORKHOUSE_PARAM_<NAME>` (the name in upper case) when it is set, and from its default otherwise.
+The notebook's widget bar shows the widgets. Changing a value re-runs the cells that read it. A SQL cell binds `:name` placeholders to widget values. Outside the Studio (a script or a job without a kernel), a widget takes its value from the environment variable `IARA_PARAM_<NAME>` (the name in upper case) when it is set, and from its default otherwise.
 
 ## Results
 
-Results stay in the kernel and the browser fetches pages as needed, so a result can be larger than the browser can hold. Results over `WORKHOUSE_RESULT_MEMORY` (128 MB) are kept on disk. You can sort a result and download it as CSV or Parquet.
+Results stay in the kernel and the browser fetches pages as needed, so a result can be larger than the browser can hold. Results over `IARA_RESULT_MEMORY` (128 MB) are kept on disk. You can sort a result and download it as CSV or Parquet.
 
 Queries show live progress and can be cancelled. SQL cells and lazy frames show a profile per pipeline: time, rows, memory peak and spilled bytes.
 
@@ -72,7 +72,7 @@ Queries show live progress and can be cancelled. SQL cells and lazy frames show 
 A `.sql` file's `:name` placeholders are detected and get a field in the parameter bar above the editor. The header comment keeps each parameter's type and default:
 
 ```sql
--- workhouse:params {"region":{"type":"select","options":["EU","US"],"default":"EU"}}
+-- iara:params {"region":{"type":"select","options":["EU","US"],"default":"EU"}}
 select * from sales.orders where region = :region
 ```
 
@@ -90,9 +90,9 @@ Analyze on a query runs it with full profiling and opens a report at `/analyze`:
 
 The Data section lists tables by schema (`sales.orders`; the default schema is `main`). For each table it shows the location, size, columns, Parquet statistics and sample rows. You can add tables from the Data panel or from a file in the file tree, and remove them without deleting the data.
 
-`CREATE TABLE ... AS SELECT` writes a Delta table to the workspace's warehouse directory (`warehouse` under `[workspace]` in `workhouse.toml`) and registers the table. `USING PARQUET` writes plain Parquet instead. See [delta.md](delta.md). The History tab of a Delta table lists its commits; a version can be queried or restored from there. `DROP TABLE` and `DROP SCHEMA [CASCADE]` update the catalog.
+`CREATE TABLE ... AS SELECT` writes a Delta table to the workspace's warehouse directory (`warehouse` under `[workspace]` in `iara.toml`) and registers the table. `USING PARQUET` writes plain Parquet instead. See [delta.md](delta.md). The History tab of a Delta table lists its commits; a version can be queried or restored from there. `DROP TABLE` and `DROP SCHEMA [CASCADE]` update the catalog.
 
-A schema can have a `location` (`[schemas.<name>]`, an `s3://` URL or a workspace folder). Every subfolder of it is a table of that schema, named after the folder; folders starting with `_` or `.` and names that are not identifiers are skipped. Tables declared in `[tables]` win over discovered ones, and discovered tables are never written to `workhouse.toml`. Studio lists the location with the credentials and `[storage."s3://..."]` settings of the workspace and caches the listing for 30 seconds (the refresh button in the Data panel reads it again). `CREATE TABLE` in such a schema writes into the location; `DROP TABLE` is refused for these tables, delete the folder instead.
+A schema can have a `location` (`[schemas.<name>]`, an `s3://` URL or a workspace folder). Every subfolder of it is a table of that schema, named after the folder; folders starting with `_` or `.` and names that are not identifiers are skipped. Tables declared in `[tables]` win over discovered ones, and discovered tables are never written to `iara.toml`. Studio lists the location with the credentials and `[storage."s3://..."]` settings of the workspace and caches the listing for 30 seconds (the refresh button in the Data panel reads it again). `CREATE TABLE` in such a schema writes into the location; `DROP TABLE` is refused for these tables, delete the folder instead.
 
 ## Jobs
 
@@ -157,9 +157,9 @@ The Data Wrangler builds a cleaning recipe on a table or a query result: open th
 
 | Variable | Default | Effect |
 |---|---|---|
-| `WORKHOUSE_WORKSPACE` | the example workspace in a checkout, else the current directory | Workspace Studio opens. |
-| `WORKHOUSE_PYTHON` | | Python interpreter that runs kernels. |
-| `WORKHOUSE_KERNEL_IDLE_MINUTES` | `60` | Idle time before a kernel is stopped. |
-| `WORKHOUSE_RESULT_MEMORY` | `128MB` | Largest result kept in memory. |
-| `WORKHOUSE_STUDIO_DIR` | the checkout's `apps/web` | Where `workhouse serve` finds the web app. |
-| `WORKHOUSE_SCHEDULER` | on | `0` turns the job scheduler off. |
+| `IARA_WORKSPACE` | the example workspace in a checkout, else the current directory | Workspace Studio opens. |
+| `IARA_PYTHON` | | Python interpreter that runs kernels. |
+| `IARA_KERNEL_IDLE_MINUTES` | `60` | Idle time before a kernel is stopped. |
+| `IARA_RESULT_MEMORY` | `128MB` | Largest result kept in memory. |
+| `IARA_STUDIO_DIR` | the checkout's `apps/web` | Where `iara serve` finds the web app. |
+| `IARA_SCHEDULER` | on | `0` turns the job scheduler off. |

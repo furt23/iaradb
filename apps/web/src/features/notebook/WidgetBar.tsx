@@ -9,7 +9,7 @@ import ListItemText from "@mui/material/ListItemText";
 import MenuItem from "@mui/material/MenuItem";
 import Select from "@mui/material/Select";
 import TextField from "@mui/material/TextField";
-import type { WidgetDefinition, WidgetValue, WidgetsState } from "@workhouse/protocol";
+import type { WidgetDefinition, WidgetValue, WidgetsState } from "@iara/protocol";
 import { useEffect, useRef, useState } from "react";
 
 import { choiceKey, inputText, pickChoice, sameValue, valueToSend, WIDGET_DEBOUNCE_MS } from "./widgets";
@@ -156,7 +156,7 @@ function WidgetInput(p: InputProps) {
   }
 }
 
-/** The notebook's widgets (`workhouse.widgets.*`), set from here; nothing is shown while the notebook has none. */
+/** The notebook's widgets (`iara.widgets.*`), set from here; nothing is shown while the notebook has none. */
 export function WidgetBar({ widgets, onChange }: WidgetBarProps) {
   if (widgets.definitions.length === 0) return null;
   return (

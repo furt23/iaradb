@@ -32,13 +32,13 @@ describe("run history", () => {
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "runs-"));
-    previous = process.env.WORKHOUSE_STUDIO_DATA;
-    process.env.WORKHOUSE_STUDIO_DATA = dir;
+    previous = process.env.IARA_STUDIO_DATA;
+    process.env.IARA_STUDIO_DATA = dir;
   });
 
   afterEach(() => {
-    if (previous === undefined) delete process.env.WORKHOUSE_STUDIO_DATA;
-    else process.env.WORKHOUSE_STUDIO_DATA = previous;
+    if (previous === undefined) delete process.env.IARA_STUDIO_DATA;
+    else process.env.IARA_STUDIO_DATA = previous;
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

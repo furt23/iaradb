@@ -1,4 +1,4 @@
-import type { Cell } from "@workhouse/protocol";
+import type { Cell } from "@iara/protocol";
 import { describe, expect, it } from "vitest";
 
 import { markdownHeadings, outlineOf, type OutlineNode } from "./outline";

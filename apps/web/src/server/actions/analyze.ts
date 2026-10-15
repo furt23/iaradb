@@ -1,6 +1,6 @@
 "use server";
 
-import type { QueryParams } from "@workhouse/protocol";
+import type { QueryParams } from "@iara/protocol";
 
 import type { AnalysisSummary, StoredAnalysis } from "@/features/analyze/types";
 

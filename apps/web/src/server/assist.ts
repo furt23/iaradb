@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { AssistRequest } from "@workhouse/protocol";
+import type { AssistRequest } from "@iara/protocol";
 
 import { normalizeRelative } from "./kernel/keys";
 import { kernels } from "./kernel/manager";

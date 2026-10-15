@@ -19,10 +19,10 @@ COPY apps/web/package.json apps/web/
 COPY packages/protocol/package.json packages/protocol/
 COPY packages/ui/package.json packages/ui/
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
-    pnpm install --frozen-lockfile --filter @workhouse/docs...
+    pnpm install --frozen-lockfile --filter @iara/docs...
 
 COPY apps/docs apps/docs
-RUN pnpm --filter @workhouse/docs build
+RUN pnpm --filter @iara/docs build
 
 # ---------------------------------------------------------------------------
 # final: static files on unprivileged nginx (listens on 8080, runs as uid 101)

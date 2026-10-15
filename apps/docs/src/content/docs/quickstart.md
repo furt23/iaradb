@@ -1,30 +1,30 @@
 ---
 title: Quickstart Guide
-description: Get up and running with Workhouse Python API in minutes.
+description: Get up and running with Iara Python API in minutes.
 ---
 
-This guide introduces the core concepts of the Workhouse Python API: constructing queries, evaluating expressions, running SQL, and exporting results.
+This guide introduces the core concepts of the Iara Python API: constructing queries, evaluating expressions, running SQL, and exporting results.
 
 ## Installation
 
-Install Workhouse into your Python environment:
+Install Iara into your Python environment:
 
 ```bash
-pip install workhouse
+pip install iara
 ```
 
 Import the package and commonly used expression utilities:
 
 ```python
-import workhouse
-from workhouse import functions as F
+import iara
+from iara import functions as F
 ```
 
 ---
 
 ## 1. Creating DataFrames
 
-You can construct Workhouse DataFrames in memory from Python dictionaries or existing Arrow/Pandas/Polars objects.
+You can construct Iara DataFrames in memory from Python dictionaries or existing Arrow/Pandas/Polars objects.
 
 ```python
 >>> data = {
@@ -32,7 +32,7 @@ You can construct Workhouse DataFrames in memory from Python dictionaries or exi
 ...     "dept": ["Eng", "Sales", "Eng", "Sales"],
 ...     "salary": [120000.0, 95000.0, 140000.0, 80000.0],
 ... }
->>> df = workhouse.from_dict(data)
+>>> df = iara.from_dict(data)
 >>> df.show()
 ┌─────┬───────┬──────────┐
 │ id  │ dept  │ salary   │
@@ -49,7 +49,7 @@ You can construct Workhouse DataFrames in memory from Python dictionaries or exi
 
 ## 2. Lazy Execution with LazyFrame
 
-Workhouse uses a lazy-first evaluation model. Query chains built with `LazyFrame` do not compute immediately; they construct an optimized logical plan that executes only when `.collect()` or a streaming sink is invoked.
+Iara uses a lazy-first evaluation model. Query chains built with `LazyFrame` do not compute immediately; they construct an optimized logical plan that executes only when `.collect()` or a streaming sink is invoked.
 
 ```python
 >>> lf = df.lazy()
@@ -105,10 +105,10 @@ Group by one or more columns and compute summary statistics using `group_by()`:
 
 ## 4. Querying with SQL
 
-Execute standard ANSI SQL queries against frames or registered tables using `workhouse.sql()`:
+Execute standard ANSI SQL queries against frames or registered tables using `iara.sql()`:
 
 ```python
->>> sql_result = workhouse.sql("""
+>>> sql_result = iara.sql("""
 ...     SELECT dept, count(*) as count, sum(salary) as total_payroll
 ...     FROM employees
 ...     WHERE salary > 90000
@@ -132,7 +132,7 @@ Scan and write Parquet files locally or over `s3://` URLs:
 
 ```python
 # Lazily scan files matching a glob pattern
-lf = workhouse.scan_parquet("data/transactions/*.parquet")
+lf = iara.scan_parquet("data/transactions/*.parquet")
 
 # Process and stream directly to output files without holding full data in memory
 row_count = lf.filter(F.col("status") == "COMPLETED").sink_parquet("data/completed_transactions.parquet")

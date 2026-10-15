@@ -26,7 +26,7 @@ SessionContext.warehouse -> str | None
 
 ### SQL DDL & DML Commands
 
-Workhouse SQL supports writing data and managing schemas transactionally:
+Iara SQL supports writing data and managing schemas transactionally:
 
 #### `CREATE TABLE ... AS SELECT`
 Writes Parquet partitions to `<warehouse>/<table_name>/` and registers the table:

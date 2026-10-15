@@ -1,4 +1,4 @@
-/** The Data Wrangler (see workhouse.kernel.wrangle): recipes run in the kernel. */
+/** The Data Wrangler (see iara.kernel.wrangle): recipes run in the kernel. */
 
 import type { CellValue, ColumnInfo } from "./results";
 

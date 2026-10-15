@@ -14,7 +14,7 @@ import LinearProgress from "@mui/material/LinearProgress";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 
-import type { WrangleProfile } from "@workhouse/protocol";
+import type { WrangleProfile } from "@iara/protocol";
 import { typeLabel } from "@/lib/format";
 
 interface Props {

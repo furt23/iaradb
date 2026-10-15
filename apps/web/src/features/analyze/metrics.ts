@@ -1,4 +1,4 @@
-import type { AnalyzedNode, OperatorMetrics } from "@workhouse/protocol";
+import type { AnalyzedNode, OperatorMetrics } from "@iara/protocol";
 
 import { formatBytes, formatCount, formatDuration } from "@/lib/format";
 

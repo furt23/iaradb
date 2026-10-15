@@ -14,9 +14,10 @@ import Tab from "@mui/material/Tab";
 import Tabs from "@mui/material/Tabs";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
-import type { TableRef } from "@workhouse/protocol";
+import type { TableRef } from "@iara/protocol";
 import Link from "next/link";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 
 import { OutputView } from "@/features/results/OutputView";
 import { useNotify } from "@/features/shell/notify";
@@ -59,8 +60,10 @@ const lastSection = new Map<string, Section>();
 
 /** A catalog table: where it lives, its size, columns with statistics, and a sample of its rows. */
 export function TableView({ table }: { table: TableRef }) {
+  const { t } = useTranslation();
   const data = useData();
   const notify = useNotify();
+
   const { name } = table;
   const [section, setSection] = useState<Section>(() => lastSection.get(name) ?? "columns");
   const isDelta = table.format === "delta";
@@ -97,29 +100,29 @@ export function TableView({ table }: { table: TableRef }) {
           </Typography>
           {isDelta && ready?.partitions && ready.partitions.length > 0 && (
             <Typography variant="caption" component="div" sx={{ color: "text.secondary", mt: 0.5 }}>
-              Partitioned by {ready.partitions.join(", ")}
+              {t("Partitioned by {{partitions}}", { partitions: ready.partitions.join(", ") })}
             </Typography>
           )}
           <Box sx={{ display: "flex", gap: 4, mt: 1.5 }}>
-            <Stat label="Rows" value={stat((i) => formatCount(i.num_rows))} />
-            <Stat label="Columns" value={stat((i) => String(i.columns.length))} />
-            <Stat label="Files" value={stat((i) => formatCount(i.files))} />
-            <Stat label="Size" value={stat((i) => formatBytes(i.bytes))} />
+            <Stat label={t("Rows")} value={stat((i) => formatCount(i.num_rows))} />
+            <Stat label={t("Columns")} value={stat((i) => String(i.columns.length))} />
+            <Stat label={t("Files")} value={stat((i) => formatCount(i.files))} />
+            <Stat label={t("Size")} value={stat((i) => formatBytes(i.bytes))} />
           </Box>
         </Box>
         <Box sx={{ display: "flex", gap: 0.5, alignItems: "center" }}>
-          <Tooltip title="Copy the table name">
+          <Tooltip title={t("Copy the table name")}>
             <IconButton aria-label="copy table name" onClick={() => void copy()}>
               <ContentCopyOutlined fontSize="small" />
             </IconButton>
           </Tooltip>
-          <Tooltip title="Reload statistics and sample">
+          <Tooltip title={t("Reload statistics and sample")}>
             <IconButton aria-label="reload table" onClick={() => load(name, true)}>
               <Refresh fontSize="small" />
             </IconButton>
           </Tooltip>
           <Button variant="outlined" startIcon={<TerminalOutlined />} component={Link} href={sqlHref(sampleQuery(name))}>
-            Query
+            {t("Query")}
           </Button>
         </Box>
       </Box>
@@ -129,11 +132,12 @@ export function TableView({ table }: { table: TableRef }) {
           lastSection.set(name, v);
           setSection(v);
         }} sx={{ px: 2, minHeight: 38, borderBottom: 1, borderColor: "divider", "& .MuiTab-root": { minHeight: 38, py: 0, fontSize: 13 } }}>
-        <Tab value="columns" label={ready ? `Columns (${ready.columns.length})` : "Columns"} />
-        <Tab value="sample" label="Sample data" />
-        <Tab value="wrangle" label="Wrangle" />
-        {isDelta && <Tab value="history" label="History" />}
+        <Tab value="columns" label={ready ? t("Columns ({{count}})", { count: ready.columns.length }) : t("Columns")} />
+        <Tab value="sample" label={t("Sample data")} />
+        <Tab value="wrangle" label={t("Wrangle")} />
+        {isDelta && <Tab value="history" label={t("History")} />}
       </Tabs>
+
       <Box ref={body} sx={{ flex: 1, minHeight: 0, overflow: "auto" }}>
         {section === "columns" ? (
           <Loaded load={info} onRetry={() => load(name, true)}>

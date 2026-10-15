@@ -13,6 +13,7 @@ import useMediaQuery from "@mui/material/useMediaQuery";
 import { usePathname } from "next/navigation";
 import { Fragment, useState, type ReactNode } from "react";
 
+import { useTranslation } from "@/i18n";
 import { NavItem } from "./NavItem";
 import { RailToggle } from "./RailToggle";
 import { SECTIONS, sectionOf, type SectionId } from "./sections";
@@ -44,6 +45,7 @@ const GROUP_ENDS: SectionId[] = ["sql", "compute"];
 export function NavRail() {
   const current = sectionOf(usePathname());
   const { panelOpen, togglePanel, railExpanded, toggleRail } = useShell();
+  const { t } = useTranslation();
   const narrow = useMediaQuery(NARROW);
   const expanded = railExpanded && !narrow;
   // the width animates after the user's own toggle, not when the stored choice loads
@@ -70,15 +72,16 @@ export function NavRail() {
       {SECTIONS.map((s) => {
         const active = s.id === current;
         const toggles = active && s.panel !== null;
+        const label = t(s.label);
         return (
           <Fragment key={s.id}>
             <NavItem
               icon={ICONS[s.id]}
-              label={s.label}
+              label={label}
               href={s.href}
               active={active}
               expanded={expanded}
-              tooltip={toggles ? `${s.label} · ${panelOpen ? "hide" : "show"} the side panel (Ctrl+B)` : s.label}
+              tooltip={toggles ? `${label} · ${panelOpen ? t("hide") : t("show")} ${t("the side panel (Ctrl+B)")}` : label}
               onClick={(e) => {
                 if (!toggles) {
                   togglePanel(true);

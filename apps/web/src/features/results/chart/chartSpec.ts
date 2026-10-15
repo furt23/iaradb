@@ -1,6 +1,6 @@
 /** Chart specs over result columns, and the kernel's points shaped into series (pure). */
 
-import type { CellValue, ChartData, ChartSpec, ColumnInfo } from "@workhouse/protocol";
+import type { CellValue, ChartData, ChartSpec, ColumnInfo } from "@iara/protocol";
 
 import { isNumericType } from "@/lib/format";
 

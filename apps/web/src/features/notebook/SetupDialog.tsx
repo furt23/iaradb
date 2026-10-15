@@ -6,7 +6,7 @@ import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
 import DialogTitle from "@mui/material/DialogTitle";
 import Typography from "@mui/material/Typography";
-import type { Cell } from "@workhouse/protocol";
+import type { Cell } from "@iara/protocol";
 import { useEffect, useMemo, useState } from "react";
 
 import { CodeEditor } from "@/features/editor/CodeEditor";
@@ -45,7 +45,7 @@ export function SetupDialog({ open, path, cell, error, running, onClose, onSave,
       <DialogTitle>Setup code</DialogTitle>
       <DialogContent>
         <Typography variant="body2" sx={{ color: "text.secondary", mb: 1.5 }}>
-          Runs before every other cell; the names it defines (mo, wh, ws, ...) are available in all of them. Saved as <code>with app.setup:</code>.
+          Runs before every other cell; the names it defines (mo, ia, ws, ...) are available in all of them. Saved as <code>with app.setup:</code>.
         </Typography>
         {error && (
           <Typography variant="body2" role="alert" sx={{ color: "error.main", mb: 1.5 }}>

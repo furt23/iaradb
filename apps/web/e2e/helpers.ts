@@ -5,7 +5,7 @@ import { expect, type Locator, type Page } from "@playwright/test";
 
 /** A file of the throwaway workspace (the tests read what Studio wrote to it). */
 export function workspaceFile(...parts: string[]): string {
-  return path.join(process.env.WORKHOUSE_E2E_WORKSPACE!, ...parts);
+  return path.join(process.env.IARA_E2E_WORKSPACE!, ...parts);
 }
 
 export function readWorkspaceFile(...parts: string[]): string {

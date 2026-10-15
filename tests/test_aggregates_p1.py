@@ -14,8 +14,8 @@ import polars as pl
 import pyarrow as pa
 import pytest
 
-import workhouse as wh
-from workhouse import functions as F
+import iara as ia
+from iara import functions as F
 
 sys.path.insert(0, os.path.dirname(__file__))
 from compare import diff  # noqa: E402
@@ -36,7 +36,7 @@ def table() -> pa.Table:
 
 
 def check(table: pa.Table, query: str, duck: str | None = None) -> None:
-    ours = wh.sql(query, t=table).collect().to_arrow()
+    ours = ia.sql(query, t=table).collect().to_arrow()
     con = duckdb.connect()
     con.register("t", table)
     exp = con.execute(duck or query).arrow().read_all()
@@ -94,7 +94,7 @@ def test_quantile_edges(table: pa.Table) -> None:
     for p in (0, 0.1, 0.5, 0.99, 1):
         check(table, f"SELECT quantile_cont(y, {p}) c, quantile_disc(y, {p}) d, quantile_disc(x, {p}) e FROM t")
     with pytest.raises(Exception):
-        wh.sql("SELECT quantile_cont(x, 1.5) FROM t", t=table).collect()
+        ia.sql("SELECT quantile_cont(x, 1.5) FROM t", t=table).collect()
 
 
 def test_within_group(table: pa.Table) -> None:
@@ -143,7 +143,7 @@ def test_rollup_cube_grouping_sets(table: pa.Table) -> None:
 
 def test_grouping_outside_rollup_is_an_error(table: pa.Table) -> None:
     with pytest.raises(Exception):
-        wh.sql("SELECT grouping(g) FROM t GROUP BY g", t=table).collect()
+        ia.sql("SELECT grouping(g) FROM t GROUP BY g", t=table).collect()
 
 
 def test_trig(table: pa.Table) -> None:
@@ -153,7 +153,7 @@ def test_trig(table: pa.Table) -> None:
 
 
 def test_now_is_constant_per_query(table: pa.Table) -> None:
-    out = wh.sql(
+    out = ia.sql(
         "SELECT count(DISTINCT now()) n, min(now()) <= max(current_timestamp) ok, year(current_date) y FROM t", t=table
     ).collect().to_arrow()
     assert out.column("n")[0].as_py() == 1
@@ -162,10 +162,10 @@ def test_now_is_constant_per_query(table: pa.Table) -> None:
 
 
 def test_random(table: pa.Table) -> None:
-    out = wh.sql("SELECT random() r FROM t", t=table).collect().to_arrow().column("r").to_pylist()
+    out = ia.sql("SELECT random() r FROM t", t=table).collect().to_arrow().column("r").to_pylist()
     assert len(set(out)) == len(out) and all(0 <= v < 1 for v in out)
-    a = wh.sql("SELECT random(5, id) r FROM t ORDER BY id", t=table).collect().to_arrow().column("r").to_pylist()
-    b = wh.sql("SELECT rand(5, id) r FROM t ORDER BY id", t=table).collect().to_arrow().column("r").to_pylist()
+    a = ia.sql("SELECT random(5, id) r FROM t ORDER BY id", t=table).collect().to_arrow().column("r").to_pylist()
+    b = ia.sql("SELECT rand(5, id) r FROM t ORDER BY id", t=table).collect().to_arrow().column("r").to_pylist()
     assert a == b and len(set(a)) == len(a)
 
 
@@ -174,8 +174,8 @@ def _pl(table: pa.Table) -> pl.DataFrame:
     return pl.from_arrow(table)
 
 
-def _ours(table: pa.Table, *aggs: wh.Expr) -> pa.Table:
-    return wh.from_arrow(table).lazy().group_by("g").agg(*aggs).sort("g").collect().to_arrow()
+def _ours(table: pa.Table, *aggs: ia.Expr) -> pa.Table:
+    return ia.from_arrow(table).lazy().group_by("g").agg(*aggs).sort("g").collect().to_arrow()
 
 
 def test_expr_quantile_median_product(table: pa.Table) -> None:
@@ -211,8 +211,8 @@ def test_expr_bool_and_by(table: pa.Table) -> None:
 
 
 def test_expr_corr_and_trig(table: pa.Table) -> None:
-    out = wh.from_arrow(table).lazy().agg(F.col("x").corr(F.col("y")).alias("r")).collect().to_dicts()[0]["r"]
+    out = ia.from_arrow(table).lazy().agg(F.col("x").corr(F.col("y")).alias("r")).collect().to_dicts()[0]["r"]
     exp = _pl(table).select(pl.corr("x", "y")).item()
     assert out == pytest.approx(exp)
-    t = wh.from_arrow(table).lazy().select(F.col("y").sin().alias("s"), F.col("y").arctan2(F.col("y")).alias("a")).collect().to_arrow()
+    t = ia.from_arrow(table).lazy().select(F.col("y").sin().alias("s"), F.col("y").arctan2(F.col("y")).alias("a")).collect().to_arrow()
     assert t.column("s").to_pylist() == pytest.approx(_pl(table).select(pl.col("y").sin()).to_series().to_list(), nan_ok=True)

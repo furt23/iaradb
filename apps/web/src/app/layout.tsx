@@ -28,9 +28,11 @@ import { catalogSchemas, catalogTables } from "@/server/workspace/catalog";
 import { listTree, type FileNode } from "@/server/workspace/files";
 import { workspaceName } from "@/server/workspace/sources";
 
+import { I18nProvider } from "@/i18n/I18nProvider";
+
 export const metadata: Metadata = {
-  title: "Workhouse Studio",
-  description: "Notebooks, SQL and a data catalog on the Workhouse engine",
+  title: "Iara Studio",
+  description: "Notebooks, SQL e um catálogo de dados no motor Iara",
 };
 
 export const dynamic = "force-dynamic";
@@ -73,12 +75,13 @@ export default async function RootLayout({
     catalogSchemas().catch(() => []),
   ]);
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="pt" suppressHydrationWarning>
       <body>
         <InitColorSchemeScript attribute="data-scheme" defaultMode="dark" />
         <AppRouterCacheProvider>
           <ThemeRegistry>
-            <NotifyProvider>
+            <I18nProvider>
+              <NotifyProvider>
               <ComputeProvider>
                 <ShellProvider>
                   <WorkbenchProvider ids={idsOfTree(tree)}>
@@ -133,7 +136,8 @@ export default async function RootLayout({
                 </ShellProvider>
               </ComputeProvider>
             </NotifyProvider>
-          </ThemeRegistry>
+          </I18nProvider>
+        </ThemeRegistry>
         </AppRouterCacheProvider>
       </body>
     </html>

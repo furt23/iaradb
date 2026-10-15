@@ -1,4 +1,4 @@
-/** Query runtime: progress, profiles and plans (see workhouse.exec.query). */
+/** Query runtime: progress, profiles and plans (see iara.exec.query). */
 
 export interface PipelineStats {
   source: string;

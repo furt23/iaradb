@@ -1,31 +1,31 @@
 import marimo
 
-__generated_with = "workhouse"
+__generated_with = "iara"
 app = marimo.App(width="medium")
 
 
 with app.setup:
     import marimo as mo
-    import workhouse
+    import iara
 
-    ws = workhouse.workspace()
+    ws = iara.workspace()
 
 
 @app.cell(id="29mm28vo")
 def _():
-    import workhouse.functions as F
+    import iara.functions as F
     return (F,)
 
 
 @app.cell(id="nsqyy0d2")
 def _():
-    customer = workhouse.scan_parquet("D:/tpch_sf100_gen/customer.parquet")
+    customer = iara.scan_parquet("D:/tpch_sf100_gen/customer.parquet")
     return (customer,)
 
 
 @app.cell(id="2l54czxt")
 def _():
-    nation = workhouse.scan_parquet("D:/tpch_sf100_gen/nation.parquet")
+    nation = iara.scan_parquet("D:/tpch_sf100_gen/nation.parquet")
     return (nation,)
 
 

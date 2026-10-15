@@ -337,7 +337,7 @@ export class ClusterService {
     const c = this.d.store.cluster(id)!;
     const wheel = await cloud.engineWheel(this.d.engineVersion);
     if (!wheel) {
-      throw new ClusterError("NoEngine", `the engine ${this.d.engineVersion} is not published for clusters: run \`python -m workhouse.cloud publish\``);
+      throw new ClusterError("NoEngine", `the engine ${this.d.engineVersion} is not published for clusters: run \`python -m iara.cloud publish\``);
     }
     this.phase(id, "preparing network and access");
     const group = await cloud.ensureNetwork(await cloud.studioCidrs());

@@ -5,8 +5,9 @@ export default defineConfig({
   site: 'https://docs.workhouse.dev',
   integrations: [
     starlight({
-      title: 'Workhouse Python API',
-      description: 'Official Python API documentation and reference for the Workhouse Engine.',
+      title: 'Iara Python API',
+      logo: { light: './src/assets/logo-light.svg', dark: './src/assets/logo-dark.svg' },
+      description: 'Official Python API documentation and reference for the Iara Engine.',
       defaultLocale: 'root',
       locales: {
         root: {

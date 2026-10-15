@@ -1,4 +1,4 @@
-/** Workspace, catalog and history (see workhouse.workspaces, workhouse.kernel.catalog). */
+/** Workspace, catalog and history (see iara.workspaces, iara.kernel.catalog). */
 
 export interface TableRef {
   name: string;

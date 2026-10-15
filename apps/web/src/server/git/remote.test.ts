@@ -12,7 +12,7 @@ const REPO_URL = "https://github.com/team/analytics.git";
 let dir: string;
 
 beforeEach(() => {
-  dir = fs.mkdtempSync(path.join(os.tmpdir(), "workhouse-remote-"));
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), "iara-remote-"));
 });
 
 afterEach(() => {
@@ -63,7 +63,7 @@ describe("git authentication", () => {
   it("passes the token only in the environment of git", () => {
     saveRemote({ url: REPO_URL, branch: "main", token: TOKEN }, dir);
     const auth = gitAuth(dir);
-    expect(auth?.env.WORKHOUSE_GIT_TOKEN).toBe(TOKEN);
+    expect(auth?.env.IARA_GIT_TOKEN).toBe(TOKEN);
     expect(auth?.env.GIT_ASKPASS).toBe(path.join(dir, process.platform === "win32" ? "git-askpass.cmd" : "git-askpass.sh"));
     expect(auth?.secrets).toEqual([TOKEN]);
     expect(fs.readFileSync(auth!.env.GIT_ASKPASS, "utf8")).not.toContain(TOKEN);

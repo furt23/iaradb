@@ -35,9 +35,9 @@ LazyFrame.join(
 
 #### Example: Inner Join
 ```python
->>> import workhouse
->>> users = workhouse.from_dict({"user_id": [1, 2, 3], "name": ["Alice", "Bob", "Charlie"]})
->>> orders = workhouse.from_dict({"order_id": [101, 102], "cust_id": [1, 2], "amt": [50.0, 75.0]})
+>>> import iara
+>>> users = iara.from_dict({"user_id": [1, 2, 3], "name": ["Alice", "Bob", "Charlie"]})
+>>> orders = iara.from_dict({"order_id": [101, 102], "cust_id": [1, 2], "amt": [50.0, 75.0]})
 >>> joined = users.lazy().join(orders.lazy(), left_on="user_id", right_on="cust_id")
 >>> joined.collect().show()
 ┌─────────┬───────┬──────────┬─────────┬──────┐
@@ -86,8 +86,8 @@ LazyFrame.union(*others: LazyFrame | DataFrame) -> LazyFrame
 
 #### Example
 ```python
->>> df1 = workhouse.from_dict({"val": [1, 2]})
->>> df2 = workhouse.from_dict({"val": [3, 4]})
+>>> df1 = iara.from_dict({"val": [1, 2]})
+>>> df2 = iara.from_dict({"val": [3, 4]})
 >>> df1.lazy().union(df2.lazy()).collect().show()
 ┌─────┐
 │ val │

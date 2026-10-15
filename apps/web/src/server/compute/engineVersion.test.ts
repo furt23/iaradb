@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { ENGINE_VERSION } from "@workhouse/protocol";
+import { ENGINE_VERSION } from "@iara/protocol";
 import { describe, expect, it } from "vitest";
 
 describe("engine version", () => {

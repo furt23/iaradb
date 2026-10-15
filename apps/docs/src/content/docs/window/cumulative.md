@@ -19,9 +19,9 @@ Cumulative methods compute running statistics from the beginning of the partitio
 
 ### Example: Running Ledger Balance
 ```python
->>> import workhouse
->>> from workhouse import functions as F
->>> df = workhouse.from_dict({
+>>> import iara
+>>> from iara import functions as F
+>>> df = iara.from_dict({
 ...     "account": ["A1", "A1", "A1"],
 ...     "tx": [100.0, -40.0, 25.0]
 ... })

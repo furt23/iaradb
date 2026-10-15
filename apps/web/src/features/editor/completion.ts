@@ -1,7 +1,7 @@
 import { autocompletion, type Completion, type CompletionContext, type CompletionResult, type CompletionSource } from "@codemirror/autocomplete";
 import { globalCompletion, localCompletionSource } from "@codemirror/lang-python";
 import type { Extension } from "@codemirror/state";
-import type { CompletionItem } from "@workhouse/protocol";
+import type { CompletionItem } from "@iara/protocol";
 
 import type { EditorAssist } from "./assist";
 

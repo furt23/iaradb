@@ -3,11 +3,11 @@
  * session's user claims, so the proxy, server actions and route handlers
  * apply the same rules.
  *
- * - `WORKHOUSE_AUTH`: `off` disables sign-in (a Studio on your own machine);
+ * - `IARA_AUTH`: `off` disables sign-in (a Studio on your own machine);
  *   `auth0` requires it. Unset: required when `AUTH0_DOMAIN` is set.
- * - `WORKHOUSE_ALLOWED_EMAILS`: comma-separated emails that may sign in.
+ * - `IARA_ALLOWED_EMAILS`: comma-separated emails that may sign in.
  *   Empty means nobody.
- * - `WORKHOUSE_ADMIN_EMAILS`: team admins. Every member may use clusters;
+ * - `IARA_ADMIN_EMAILS`: team admins. Every member may use clusters;
  *   admins may also edit and delete any cluster, not only their own.
  */
 
@@ -31,7 +31,7 @@ export interface UserClaims {
 type Env = Record<string, string | undefined>;
 
 export function authMode(env: Env = process.env): AuthMode {
-  const mode = env.WORKHOUSE_AUTH?.trim().toLowerCase();
+  const mode = env.IARA_AUTH?.trim().toLowerCase();
   if (mode === "off") return "off";
   if (mode === "auth0" || env.AUTH0_DOMAIN) return "auth0";
   return "off";
@@ -59,9 +59,9 @@ export function emailList(value: string | undefined): Set<string> {
 export function studioUser(claims: UserClaims | null | undefined, env: Env = process.env): StudioUser | null {
   if (!claims || claims.email_verified !== true || typeof claims.email !== "string") return null;
   const email = claims.email.trim().toLowerCase();
-  if (!emailList(env.WORKHOUSE_ALLOWED_EMAILS).has(email)) return null;
+  if (!emailList(env.IARA_ALLOWED_EMAILS).has(email)) return null;
   const name = typeof claims.name === "string" && claims.name ? claims.name : email;
-  const user: StudioUser = { email, name, admin: emailList(env.WORKHOUSE_ADMIN_EMAILS).has(email) };
+  const user: StudioUser = { email, name, admin: emailList(env.IARA_ADMIN_EMAILS).has(email) };
   if (typeof claims.picture === "string" && claims.picture.startsWith("https://")) user.picture = claims.picture;
   return user;
 }

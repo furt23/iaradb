@@ -10,7 +10,7 @@ import IconButton from "@mui/material/IconButton";
 import TableCell from "@mui/material/TableCell";
 import TableRow from "@mui/material/TableRow";
 import Tooltip from "@mui/material/Tooltip";
-import type { DeltaCommit } from "@workhouse/protocol";
+import type { DeltaCommit } from "@iara/protocol";
 import Link from "next/link";
 import { useState } from "react";
 

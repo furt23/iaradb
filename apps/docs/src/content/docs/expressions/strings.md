@@ -89,9 +89,9 @@ F.col("code").str.reverse()
 
 ### Example
 ```python
->>> import workhouse
->>> from workhouse import functions as F
->>> df = workhouse.from_dict({"city": ["  new york ", "san francisco", "tokyo"]})
+>>> import iara
+>>> from iara import functions as F
+>>> df = iara.from_dict({"city": ["  new york ", "san francisco", "tokyo"]})
 >>> df.lazy().select(
 ...     cleaned=F.col("city").str.strip_chars().str.to_uppercase(),
 ...     is_san=F.col("city").str.contains("san"),

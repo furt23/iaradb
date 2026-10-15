@@ -9,8 +9,8 @@ import duckdb
 import pyarrow as pa
 import pytest
 
-import workhouse as wh
-from workhouse import functions as F
+import iara as ia
+from iara import functions as F
 
 FLOATS = [2.5, -2.5, 28.75, 3.5, -0.5, None]
 FLOAT_INTS = [2, -2, 29, 4, 0, None]
@@ -32,7 +32,7 @@ def _table(dtype: pa.DataType, values: list) -> pa.Table:
 @pytest.mark.parametrize("target", ["BIGINT", "INTEGER"])
 def test_sql_cast(dtype: pa.DataType, values: list, expected: list, target: str) -> None:
     t = _table(dtype, values)
-    got = wh.sql(f"SELECT CAST(x AS {target}) AS r FROM t", t=t).collect().to_arrow()
+    got = ia.sql(f"SELECT CAST(x AS {target}) AS r FROM t", t=t).collect().to_arrow()
     assert got.column("r").to_pylist() == expected
     assert duckdb.sql(f"SELECT CAST(x AS {target}) AS r FROM t").fetchall() == [(v,) for v in expected]
 
@@ -40,12 +40,12 @@ def test_sql_cast(dtype: pa.DataType, values: list, expected: list, target: str)
 @pytest.mark.parametrize("dtype, values, expected", CASES)
 @pytest.mark.parametrize("target", ["Int64", "Int32"])
 def test_api_cast(dtype: pa.DataType, values: list, expected: list, target: str) -> None:
-    got = wh.from_arrow(_table(dtype, values)).lazy().select(F.col("x").cast(target).alias("r")).collect()
+    got = ia.from_arrow(_table(dtype, values)).lazy().select(F.col("x").cast(target).alias("r")).collect()
     assert got.to_arrow().column("r").to_pylist() == expected
 
 
 def test_literal_casts() -> None:
-    got = wh.sql(
+    got = ia.sql(
         "SELECT CAST(28.75 AS BIGINT) a, CAST(2.5 AS BIGINT) b, CAST(-2.5 AS BIGINT) c,"
         " CAST(2.5::DOUBLE AS BIGINT) d, CAST(-2.5::DOUBLE AS BIGINT) e, CAST(NULL::DOUBLE AS BIGINT) f"
     ).collect().to_arrow()
@@ -54,5 +54,5 @@ def test_literal_casts() -> None:
 
 def test_non_strict_cast_out_of_range_is_null() -> None:
     t = _table(pa.float64(), [1e30, 1.5])
-    got = wh.from_arrow(t).lazy().select(F.col("x").cast("Int32", strict=False).alias("r")).collect()
+    got = ia.from_arrow(t).lazy().select(F.col("x").cast("Int32", strict=False).alias("r")).collect()
     assert got.to_arrow().column("r").to_pylist() == [None, 2]

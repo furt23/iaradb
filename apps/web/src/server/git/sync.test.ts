@@ -6,10 +6,10 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 // the workspace is a fresh directory with no repository of its own
-const root = fs.mkdtempSync(path.join(os.tmpdir(), "workhouse-sync-"));
+const root = fs.mkdtempSync(path.join(os.tmpdir(), "iara-sync-"));
 const workspace = path.join(root, "ws");
 fs.mkdirSync(workspace);
-process.env.WORKHOUSE_WORKSPACE = workspace;
+process.env.IARA_WORKSPACE = workspace;
 
 const bare = path.join(root, "remote.git");
 const other = path.join(root, "other");

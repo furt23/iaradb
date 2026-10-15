@@ -9,8 +9,8 @@ import { fileFromPathname, fileHref, renameFileIds, setFileIds } from "./fileIdR
 import { dropRecent, parseRecent, renameRecent, touchRecent } from "./recent";
 import { activePath, emptyWorkbench, parseWorkbench, workbenchReducer, type WorkbenchAction, type WorkbenchState } from "./workbenchState";
 
-const STORAGE_KEY = "workhouse.workbench.v1";
-const RECENT_KEY = "workhouse.recent.v1";
+const STORAGE_KEY = "iara.workbench.v1";
+const RECENT_KEY = "iara.recent.v1";
 
 // URLs name files by id (see fileIdRegistry); callers import these from here
 export { fileFromPathname, fileHref };

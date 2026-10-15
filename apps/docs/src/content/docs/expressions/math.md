@@ -53,9 +53,9 @@ Computes the natural logarithm (`ln`) or base-10 logarithm (`log10`).
 
 ### Example
 ```python
->>> import workhouse
->>> from workhouse import functions as F
->>> df = workhouse.from_dict({"val": [-4.5, 9.0, 16.25]})
+>>> import iara
+>>> from iara import functions as F
+>>> df = iara.from_dict({"val": [-4.5, 9.0, 16.25]})
 >>> df.lazy().select(
 ...     original=F.col("val"),
 ...     absolute=F.col("val").abs(),

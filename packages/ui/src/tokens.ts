@@ -1,8 +1,9 @@
 /**
- * Foundry palette: warm paper and green-tinted graphite, one verdigris accent.
+ * Foundry palette: warm paper and green-tinted graphite, accented with the blues of the logo.
  *
  * Light is paper with ink; dark is graphite with the same hues lifted in lightness.
- * Verdigris is the primary accent, ochre the secondary (running and warnings).
+ * Cobalt is the primary accent and azure the secondary (selection, run actions, tabs).
+ * Ochre is kept for running state and warnings.
  */
 
 export const night = {
@@ -26,10 +27,13 @@ export const paper = {
 } as const;
 
 export const accents = {
-  /** primary: verdigris */
-  verdigris: "#4FB39C",
-  verdigrisInk: "#2F6F62",
-  /** secondary: ochre */
+  /** primary: cobalt, the logo blues */
+  cobalt: "#4A8FE0",
+  cobaltInk: "#1E5BB8",
+  /** secondary: azure, the lighter logo blue */
+  azure: "#7FB2F0",
+  azureInk: "#2E72CC",
+  /** running state */
   ochre: "#E0B04A",
   ochreInk: "#A87A15",
   /** success */
@@ -43,6 +47,12 @@ export const accents = {
   amberInk: "#B07F1C",
 } as const;
 
+/** The scales of the logo, darkest to lightest, for each scheme. */
+export const logoScales = {
+  light: ["#1E5BB8", "#4A8FE0", "#A9CBF2"],
+  dark: ["#4A8FE0", "#7FB2F0", "#C9DEF8"],
+} as const;
+
 export const fonts = {
   sans: '"Inter Variable", Inter, system-ui, -apple-system, "Segoe UI", sans-serif',
   serif: 'Georgia, "Iowan Old Style", "Times New Roman", serif',
@@ -51,7 +61,7 @@ export const fonts = {
 
 /** Colors of operator kinds in query plans and profiles. */
 export const operatorColors: Record<string, string> = {
-  scan: accents.verdigris,
+  scan: accents.cobalt,
   join: accents.ochre,
   aggregate: accents.moss,
   sort: "#B69CFF",

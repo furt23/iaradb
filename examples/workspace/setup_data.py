@@ -44,8 +44,8 @@ def link_tree(src: Path, dst: Path) -> None:
 
 
 def register_big(sf: str) -> None:
-    """Add ``<table>_sf<sf>`` entries to workhouse.toml (once)."""
-    config = HERE / "workhouse.toml"
+    """Add ``<table>_sf<sf>`` entries to iara.toml (once)."""
+    config = HERE / "iara.toml"
     text = config.read_text(encoding="utf-8")
     tag = f"sf{sf.replace('.', '_')}"
     entries = [f'\n[tables.{t}_{tag}]\npath = "data/tpch_{tag}/{t}"\n' for t in TABLES if f"[tables.{t}_{tag}]" not in text]

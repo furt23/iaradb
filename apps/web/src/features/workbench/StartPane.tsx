@@ -16,6 +16,7 @@ import { NewNotebookDialog } from "@/features/files/NewNotebookDialog";
 import { NewQueryDialog } from "@/features/queries/NewQueryDialog";
 import { baseName, parentOf } from "@/lib/paths";
 
+import { useTranslation } from "@/i18n";
 import { useWorkbench } from "./WorkbenchProvider";
 
 function Action({ icon, title, hint, onClick, href }: { icon: ReactNode; title: string; hint: string; onClick?(): void; href?: string }) {
@@ -65,6 +66,7 @@ function FileRow({ path, onOpen }: { path: string; onOpen(): void }) {
 /** The workbench with nothing open: what to start with, and what was open lately. */
 export function StartPane({ name, notebooks }: { name: string; notebooks: string[] }) {
   const { recent, act } = useWorkbench();
+  const { t } = useTranslation();
   const [creating, setCreating] = useState<"notebook" | "query" | null>(null);
   const known = new Set(notebooks);
   const recentFiles = recent.filter((p) => known.has(p));
@@ -74,25 +76,25 @@ export function StartPane({ name, notebooks }: { name: string; notebooks: string
       <Box sx={{ width: "100%", maxWidth: 720, display: "flex", flexDirection: "column", gap: 3, pt: { md: 4 } }}>
         <Box>
           <Typography variant="overline" sx={{ color: "secondary.main" }}>
-            Workspace
+            {t("Workspace")}
           </Typography>
           <Typography variant="h2">{name}</Typography>
         </Box>
         <Box sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 1.5 }}>
-          <Action icon={<Add />} title="New notebook" hint="Python and SQL cells, reactive" onClick={() => setCreating("notebook")} />
-          <Action icon={<PostAddOutlined />} title="New SQL query" hint="A .sql file, saved as you type" onClick={() => setCreating("query")} />
-          <Action icon={<TerminalOutlined />} title="SQL editor" hint="Scratch queries on the default cluster" href="/sql" />
-          <Action icon={<StorageOutlined />} title="Browse data" hint="Tables, columns and samples" href="/data" />
+          <Action icon={<Add />} title={t("New notebook")} hint={t("Python and SQL cells, reactive")} onClick={() => setCreating("notebook")} />
+          <Action icon={<PostAddOutlined />} title={t("New SQL query")} hint={t("A .sql file, saved as you type")} onClick={() => setCreating("query")} />
+          <Action icon={<TerminalOutlined />} title={t("SQL editor")} hint={t("Scratch queries on the default cluster")} href="/sql" />
+          <Action icon={<StorageOutlined />} title={t("Browse data")} hint={t("Tables, columns and samples")} href="/data" />
         </Box>
         <Box>
           <Typography variant="overline" sx={{ color: "text.disabled" }}>
-            {recentFiles.length ? "Recent" : "Notebooks"}
+            {recentFiles.length ? t("Recent") : t("Notebooks")}
           </Typography>
           {list.length ? (
             list.map((p) => <FileRow key={p} path={p} onOpen={() => act({ type: "open", path: p }, true)} />)
           ) : (
             <Typography variant="body2" sx={{ color: "text.secondary", px: 1 }}>
-              No notebooks or queries yet.
+              {t("No notebooks or queries yet.")}
             </Typography>
           )}
         </Box>

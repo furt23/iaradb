@@ -1,6 +1,6 @@
 import { Prec, StateEffect, StateField, type Extension } from "@codemirror/state";
 import { EditorView, keymap, showTooltip, ViewPlugin, type Tooltip, type ViewUpdate } from "@codemirror/view";
-import type { SignatureHelp } from "@workhouse/protocol";
+import type { SignatureHelp } from "@iara/protocol";
 
 import type { EditorAssist } from "./assist";
 

@@ -35,9 +35,9 @@ GroupBy.agg(*aggs: Any, **named: Any) -> LazyFrame
 
 #### Example
 ```python
->>> import workhouse
->>> from workhouse import functions as F
->>> df = workhouse.from_dict({
+>>> import iara
+>>> from iara import functions as F
+>>> df = iara.from_dict({
 ...     "category": ["Book", "Electronics", "Book", "Electronics"],
 ...     "price": [15.0, 300.0, 25.0, 150.0],
 ...     "units": [4, 1, 2, 2],
@@ -75,7 +75,7 @@ LazyFrame.agg(*aggs: Any, **named: Any) -> LazyFrame
 
 #### Example
 ```python
->>> df = workhouse.from_dict({"val": [10.0, 20.0, 30.0]})
+>>> df = iara.from_dict({"val": [10.0, 20.0, 30.0]})
 >>> df.lazy().agg(
 ...     total=F.col("val").sum(),
 ...     avg=F.col("val").mean(),

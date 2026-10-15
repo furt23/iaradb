@@ -1,4 +1,4 @@
-# Workhouse on one host: the docs site and one Studio per team, reached through a Cloudflare Tunnel.
+# Iara on one host: the docs site and one Studio per team, reached through a Cloudflare Tunnel.
 #
 # No port needs to be public. cloudflared makes an outbound connection to Cloudflare, and the
 # public hostnames (the ingress rules in docker/cloudflared/config.yml) forward to services on
@@ -15,14 +15,14 @@
 # Local checks (127.0.0.1 only): docs at http://127.0.0.1:4321, the Studio at http://127.0.0.1:3870.
 # The Studio port clashes with `pnpm dev`, so stop one of them before the other.
 
-name: workhouse
+name: iara
 
 services:
   docs:
     build:
       context: .
       dockerfile: docker/docs.Dockerfile
-    image: workhouse-docs:local
+    image: iara-docs:local
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -33,7 +33,7 @@ services:
     build:
       context: .
       dockerfile: docker/studio.Dockerfile
-    image: workhouse-studio:local
+    image: iara-studio:local
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true

@@ -10,7 +10,7 @@ import Popover from "@mui/material/Popover";
 import Switch from "@mui/material/Switch";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import type { QueryParamType } from "@workhouse/protocol";
+import type { QueryParamType } from "@iara/protocol";
 import { useState } from "react";
 
 import { PARAM_TYPES, type ParamSpec, type ParamSpecs } from "./queryHeader";

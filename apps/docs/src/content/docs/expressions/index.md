@@ -3,11 +3,11 @@ title: Column Expressions (Expr)
 description: Constructing column references, literals, and wildcard expressions.
 ---
 
-In Workhouse, an `Expr` represents a lazily evaluated computation over columns and rows. Expressions compile into vectorized Apache Arrow execution kernels. The functions that build them live in the `workhouse.functions` module, imported as `F` in these docs (`sum`, `min`, `max`, `all` and `len` are aggregates there, so import the module rather than `*`).
+In Iara, an `Expr` represents a lazily evaluated computation over columns and rows. Expressions compile into vectorized Apache Arrow execution kernels. The functions that build them live in the `iara.functions` module, imported as `F` in these docs (`sum`, `min`, `max`, `all` and `len` are aggregates there, so import the module rather than `*`).
 
 ```python
-import workhouse
-from workhouse import functions as F
+import iara
+from iara import functions as F
 ```
 
 ---

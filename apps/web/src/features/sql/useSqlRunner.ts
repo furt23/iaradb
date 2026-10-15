@@ -1,6 +1,6 @@
 "use client";
 
-import type { CellOutput, PlanNode, QueryParams, QueryProfile, RunStreamEvent } from "@workhouse/protocol";
+import type { CellOutput, PlanNode, QueryParams, QueryProfile, RunStreamEvent } from "@iara/protocol";
 import { useCallback, useState } from "react";
 
 import { useCatalogRefresh } from "@/features/data/useCatalogRefresh";

@@ -3,7 +3,7 @@
 import { quotePath, shellQuote } from "./shellQuote";
 
 export interface RemoteKernel {
-  /** Python with workhouse installed, on the machine */
+  /** Python with iara installed, on the machine */
   python: string;
   /** the kernel's working directory there (created if missing) */
   workspace: string;
@@ -19,5 +19,5 @@ export function remoteCommand(k: RemoteKernel): string {
     if (!ENV_NAME.test(name)) throw new Error(`invalid environment variable name: ${name}`);
     return `${name}=${shellQuote(value)}`;
   });
-  return `exec env ${assignments.join(" ")} ${quotePath(k.python)} -m workhouse.kernel --workspace ${quotePath(k.workspace)} --create`;
+  return `exec env ${assignments.join(" ")} ${quotePath(k.python)} -m iara.kernel --workspace ${quotePath(k.workspace)} --create`;
 }

@@ -11,6 +11,7 @@ import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { LocalTime } from "@/features/shell/LocalTime";
 import { PageHeader } from "@/features/shell/PageHeader";
@@ -22,12 +23,12 @@ import type { GitFile, GitStatus } from "@/server/git/status";
 import { DiffView } from "./DiffView";
 import { RemoteBar } from "./RemoteBar";
 
-function badge(f: GitFile): { label: string; color: "success" | "warning" | "error" | "info" } {
+function badge(f: GitFile, t: (k: string) => string): { label: string; color: "success" | "warning" | "error" | "info" } {
   const code = f.index !== " " && f.index !== "?" ? f.index : f.worktree;
-  if (code === "?" || code === "A") return { label: "new", color: "success" };
-  if (code === "D") return { label: "deleted", color: "error" };
-  if (code === "R") return { label: "renamed", color: "info" };
-  return { label: "modified", color: "warning" };
+  if (code === "?" || code === "A") return { label: t("new"), color: "success" };
+  if (code === "D") return { label: t("deleted"), color: "error" };
+  if (code === "R") return { label: t("renamed"), color: "info" };
+  return { label: t("modified"), color: "warning" };
 }
 
 export interface GitPanelProps {
@@ -37,12 +38,14 @@ export interface GitPanelProps {
 }
 
 export function GitPanel({ status, error, log }: GitPanelProps) {
+  const { t } = useTranslation();
   const files = status?.files ?? [];
   const [selected, setSelected] = useState<Set<string>>(() => new Set(files.map((f) => f.path)));
   const [focus, setFocus] = useState<string | null>(files[0]?.path ?? null);
   const [diff, setDiff] = useState("");
   const [message, setMessage] = useState("");
   const [remote, setRemote] = useState<GitRemoteSettings | null>(null);
+
   const guard = useGuard();
   const notify = useNotify();
   const router = useRouter();
@@ -87,11 +90,11 @@ export function GitPanel({ status, error, log }: GitPanelProps) {
   return (
     <Box sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       <PageHeader
-        title="Git"
+        title={t("Git")}
         subtitle={status ? `on ${status.branch ?? "detached HEAD"}${status.upstream ? ` · tracking ${status.upstream} (+${status.ahead} −${status.behind})` : ""}` : "version control of the workspace"}
         actions={
           <Button startIcon={<Refresh />} onClick={() => router.refresh()} sx={{ color: "text.secondary" }}>
-            Refresh
+            {t("Refresh")}
           </Button>
         }
       />
@@ -100,16 +103,16 @@ export function GitPanel({ status, error, log }: GitPanelProps) {
         <Box sx={{ p: 3 }}>
           <Typography sx={{ color: "error.main", whiteSpace: "pre-wrap", fontFamily: "'JetBrains Mono Variable', monospace", fontSize: 13 }}>{error}</Typography>
           <Typography sx={{ color: "text.secondary", mt: 1 }}>
-            The workspace is not a usable Git repository. Connect a repository above to create one, or check that Git trusts the workspace.
+            {t("The workspace is not a usable Git repository. Connect a repository above to create one, or check that Git trusts the workspace.")}
           </Typography>
         </Box>
       ) : (
         <Box sx={{ display: "grid", gridTemplateColumns: "340px 1fr", flex: 1, minHeight: 0 }}>
           <Box sx={{ borderRight: 1, borderColor: "divider", display: "flex", flexDirection: "column", minHeight: 0 }}>
             <Box sx={{ flex: 1, overflow: "auto" }}>
-              {files.length === 0 && <Typography sx={{ p: 2, color: "text.secondary" }}>Nothing to commit: the working tree is clean.</Typography>}
+              {files.length === 0 && <Typography sx={{ p: 2, color: "text.secondary" }}>{t("Nothing to commit: the working tree is clean.")}</Typography>}
               {files.map((f) => {
-                const b = badge(f);
+                const b = badge(f, t);
                 return (
                   <Box
                     key={f.path}
@@ -126,9 +129,9 @@ export function GitPanel({ status, error, log }: GitPanelProps) {
               })}
             </Box>
             <Box sx={{ p: 1.5, borderTop: 1, borderColor: "divider", display: "flex", flexDirection: "column", gap: 1 }}>
-              <TextField multiline minRows={2} placeholder="Commit message" value={message} onChange={(e) => setMessage(e.target.value)} />
+              <TextField multiline minRows={2} placeholder={t("Commit message")} value={message} onChange={(e) => setMessage(e.target.value)} />
               <Button variant="contained" color="secondary" startIcon={<CallSplit />} onClick={commit} disabled={!message.trim() || selected.size === 0}>
-                Commit {selected.size} file{selected.size === 1 ? "" : "s"}
+                {selected.size === 1 ? t("Commit {{count}} file", { count: selected.size }) : t("Commit {{count}} files", { count: selected.size })}
               </Button>
             </Box>
           </Box>
@@ -137,8 +140,9 @@ export function GitPanel({ status, error, log }: GitPanelProps) {
             {log.length > 0 && (
               <Paper square variant="outlined" sx={{ borderLeft: 0, borderRight: 0, borderBottom: 0, maxHeight: 200, overflow: "auto", px: 2, py: 1 }}>
                 <Typography variant="overline" sx={{ color: "text.disabled" }}>
-                  Recent commits
+                  {t("Recent commits")}
                 </Typography>
+
                 {log.map((c) => (
                   <Box key={c.hash} sx={{ display: "flex", gap: 1.5, py: 0.25 }}>
                     <Typography variant="mono" sx={{ color: "secondary.main" }}>

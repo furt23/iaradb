@@ -13,8 +13,9 @@ import MenuItem from "@mui/material/MenuItem";
 import Select from "@mui/material/Select";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
-import type { Cell, CellKind, CellState } from "@workhouse/protocol";
+import type { Cell, CellKind, CellState } from "@iara/protocol";
 
+import { useTranslation } from "@/i18n";
 import { CellMenu, type CellMenuProps } from "./CellMenu";
 import { CellStatusBadge } from "./CellStatus";
 import type { DragHandle } from "./SortableCell";
@@ -37,13 +38,14 @@ function validName(name: string): boolean {
 }
 
 function Handle({ handle }: { handle: DragHandle }) {
+  const { t } = useTranslation();
   return (
-    <Tooltip title="Drag to move (or focus and press Space, then the arrow keys)">
+    <Tooltip title={t("Drag to move (or focus and press Space, then the arrow keys)")}>
       <Box
         ref={handle.ref}
         {...handle.attributes}
         {...handle.listeners}
-        aria-label="drag to move the cell"
+        aria-label={t("drag to move the cell")}
         sx={{ display: "flex", color: "text.disabled", cursor: "grab", borderRadius: 1, touchAction: "none", "&:hover": { color: "text.secondary" }, "&:active": { cursor: "grabbing" } }}
       >
         <DragIndicator fontSize="small" />
@@ -53,17 +55,18 @@ function Handle({ handle }: { handle: DragHandle }) {
 }
 
 function OutputName({ value, onChange }: { value: string; onChange(v: string): void }) {
+  const { t } = useTranslation();
   return (
     <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
       <Typography variant="mono" sx={{ color: "text.disabled", fontSize: 11 }}>
         →
       </Typography>
-      <Tooltip title="Variable holding the result (usable from other cells, in Python or SQL)">
+      <Tooltip title={t("Variable holding the result (usable from other cells, in Python or SQL)")}>
         <InputBase
           value={value}
           onChange={(e) => onChange(e.target.value.replace(/[^A-Za-z0-9_]/g, ""))}
           error={!validName(value)}
-          inputProps={{ "aria-label": "result name", spellCheck: false }}
+          inputProps={{ "aria-label": t("result name"), spellCheck: false }}
           sx={{
             fontFamily: "'JetBrains Mono Variable', monospace",
             fontSize: 12,
@@ -77,12 +80,13 @@ function OutputName({ value, onChange }: { value: string; onChange(v: string): v
 }
 
 export function CellHeader(p: CellHeaderProps) {
+  const { t } = useTranslation();
   return (
     <Box sx={{ display: "flex", alignItems: "center", gap: 1, pl: 0.5, pr: 1, height: 36 }}>
       {p.dragHandle && <Handle handle={p.dragHandle} />}
-      <Tooltip title="Run cell (Shift+Enter)">
+      <Tooltip title={t("Run cell (Shift+Enter)")}>
         <span>
-          <IconButton onClick={p.onRun} disabled={p.disabled} aria-label="run cell" sx={{ color: "success.main" }}>
+          <IconButton onClick={p.onRun} disabled={p.disabled} aria-label={t("run cell")} sx={{ color: "success.main" }}>
             <PlayArrowRounded fontSize="small" />
           </IconButton>
         </span>
@@ -93,7 +97,7 @@ export function CellHeader(p: CellHeaderProps) {
         variant="standard"
         disableUnderline
         sx={{ fontSize: 12, fontWeight: 700, color: "text.secondary", "& .MuiSelect-select": { py: 0 } }}
-        inputProps={{ "aria-label": "cell language" }}
+        inputProps={{ "aria-label": t("cell language") }}
       >
         {(Object.keys(KIND_LABEL) as CellKind[]).map((k) => (
           <MenuItem key={k} value={k} sx={{ fontSize: 13 }}>
@@ -104,14 +108,14 @@ export function CellHeader(p: CellHeaderProps) {
       {p.cell.kind === "sql" && <OutputName value={p.cell.output ?? ""} onChange={p.onOutput} />}
       <Box sx={{ flex: 1 }} />
       <CellStatusBadge status={p.state.status} stale={p.stale} elapsed={p.state.elapsed_ms} />
-      <Tooltip title={p.hidden ? "Show code" : "Hide code"}>
-        <IconButton onClick={p.onToggleHidden} aria-label={p.hidden ? "show code" : "hide code"} sx={{ color: p.hidden ? "secondary.main" : "text.disabled" }}>
+      <Tooltip title={p.hidden ? t("Show code") : t("Hide code")}>
+        <IconButton onClick={p.onToggleHidden} aria-label={p.hidden ? t("show code") : t("hide code")} sx={{ color: p.hidden ? "secondary.main" : "text.disabled" }}>
           {p.hidden ? <Code fontSize="small" /> : <CodeOff fontSize="small" />}
         </IconButton>
       </Tooltip>
       {p.hasOutput && (
-        <Tooltip title={p.outputHidden ? "Show output" : "Hide output"}>
-          <IconButton onClick={p.onToggleOutput} aria-label={p.outputHidden ? "show output" : "hide output"} sx={{ color: p.outputHidden ? "secondary.main" : "text.disabled" }}>
+        <Tooltip title={p.outputHidden ? t("Show output") : t("Hide output")}>
+          <IconButton onClick={p.onToggleOutput} aria-label={p.outputHidden ? t("show output") : t("hide output")} sx={{ color: p.outputHidden ? "secondary.main" : "text.disabled" }}>
             {p.outputHidden ? <UnfoldMore fontSize="small" /> : <UnfoldLess fontSize="small" />}
           </IconButton>
         </Tooltip>

@@ -1,4 +1,4 @@
-/** Steps of a Data Wrangler recipe (run in the kernel: workhouse.kernel.wrangle). */
+/** Steps of a Data Wrangler recipe (run in the kernel: iara.kernel.wrangle). */
 
 export type FilterOperator =
   | "equals"

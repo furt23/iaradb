@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { NotebookView, WidgetValue } from "@workhouse/protocol";
+import type { NotebookView, WidgetValue } from "@iara/protocol";
 
 import { isWithin, movedPath } from "@/lib/paths";
 
@@ -73,8 +73,8 @@ export class KernelManager {
     const c = clusters.get(clusterId);
     const endpoint = clusters.endpoint(clusterId); // throws while the cluster is not running
     const type = c && instanceType(c.instanceType);
-    const env: Record<string, string> = { AWS_REGION: cloudRegion() ?? "us-east-1", WORKHOUSE_SPILL_DIR: SPILL_DIR };
-    if (type) env.WORKHOUSE_MEMORY_LIMIT = String(memoryLimitBytes(type));
+    const env: Record<string, string> = { AWS_REGION: cloudRegion() ?? "us-east-1", IARA_SPILL_DIR: SPILL_DIR };
+    if (type) env.IARA_MEMORY_LIMIT = String(memoryLimitBytes(type));
     const command = remoteCommand({ python: `${VENV}/bin/python`, workspace: "~/workspace", env });
     return { name: c?.name ?? clusterId, localRoot: null, start: () => ssh2Transport(endpoint, command) };
   }
@@ -291,7 +291,7 @@ export class KernelManager {
   }
 }
 
-const globalForKernels = globalThis as unknown as { __workhouseKernels?: KernelManager };
+const globalForKernels = globalThis as unknown as { __iaraKernels?: KernelManager };
 
 /** Survives module reloads in development. */
-export const kernels: KernelManager = (globalForKernels.__workhouseKernels ??= new KernelManager(config));
+export const kernels: KernelManager = (globalForKernels.__iaraKernels ??= new KernelManager(config));

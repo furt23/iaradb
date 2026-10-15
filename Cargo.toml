@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/workhouse-core", "crates/workhouse-python"]
+members = ["crates/iara-core", "crates/iara-python"]
 
 [workspace.package]
 version = "0.1.0"

@@ -14,6 +14,8 @@ import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { useState } from "react";
 
+import { useTranslation } from "@/i18n";
+
 /** The user the Studio runs as; `signOut` is false when sign-in is off. */
 export interface AppAccount {
   name: string;
@@ -34,13 +36,14 @@ export function initials(name: string): string {
 
 /** The account's avatar, with a menu: who is signed in, and signing out. */
 export function AccountMenu({ account }: { account: AppAccount }) {
+  const { t } = useTranslation();
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const local = !account.signOut;
-  const label = local ? "Local Studio" : account.name;
+  const label = local ? t("Local Studio") : account.name;
   return (
     <>
-      <Tooltip title={local ? "Local Studio (sign-in is off)" : account.email}>
-        <IconButton onClick={(e) => setAnchor(e.currentTarget)} aria-label="account" sx={{ p: 0.25 }}>
+      <Tooltip title={local ? t("Local Studio (sign-in is off)") : account.email}>
+        <IconButton onClick={(e) => setAnchor(e.currentTarget)} aria-label={t("Account")} sx={{ p: 0.25 }}>
           <Avatar
             src={account.picture}
             alt=""
@@ -66,7 +69,7 @@ export function AccountMenu({ account }: { account: AppAccount }) {
             {account.admin && !local && <Chip label="admin" size="small" variant="outlined" sx={{ height: 18, fontSize: 10.5 }} />}
           </Box>
           <Typography variant="body2" sx={{ color: "text.secondary", fontSize: 12.5 }} noWrap>
-            {local ? "Sign-in is off on this Studio" : account.email}
+            {local ? t("Sign-in is off on this Studio") : account.email}
           </Typography>
         </Box>
         {account.signOut && <Divider sx={{ my: 0.5 }} />}
@@ -76,7 +79,7 @@ export function AccountMenu({ account }: { account: AppAccount }) {
             <ListItemIcon>
               <LogoutOutlined fontSize="small" />
             </ListItemIcon>
-            Sign out
+            {t("Sign out")}
           </MenuItem>
         )}
       </Menu>

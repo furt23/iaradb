@@ -10,18 +10,18 @@ from typing import Any
 
 import pytest
 
-from workhouse.kernel.params import bind_params
-from workhouse.kernel.session import KernelSession
-from workhouse.workspaces import Workspace
+from iara.kernel.params import bind_params
+from iara.kernel.session import KernelSession
+from iara.workspaces import Workspace
 
 def _engine_binds_params() -> bool:
     """Whether the built engine binds ``:name`` placeholders (the Python side may be ahead of the native build)."""
     if "params" not in inspect.signature(Workspace.sql).parameters:
         return False
     try:
-        import workhouse as wh
+        import iara as ia
 
-        wh.SessionContext().sql("select :a as a", {"a": 1}).collect()
+        ia.SessionContext().sql("select :a as a", {"a": 1}).collect()
         return True
     except Exception:  # noqa: BLE001
         return False

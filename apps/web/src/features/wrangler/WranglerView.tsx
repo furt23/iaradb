@@ -14,7 +14,7 @@ import LinearProgress from "@mui/material/LinearProgress";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { DataGrid, type GridColDef } from "@mui/x-data-grid";
-import type { CellValue, WranglePreview, WrangleProfile, WrangleSource } from "@workhouse/protocol";
+import type { CellValue, WranglePreview, WrangleProfile, WrangleSource } from "@iara/protocol";
 import { useEffect, useMemo, useState } from "react";
 
 import { formatCount, isNumericType, typeLabel } from "@/lib/format";

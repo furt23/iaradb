@@ -5,10 +5,10 @@
  * shutdown, so both limits end its billing.
  */
 
-export const READY_MARKER = "/var/lib/workhouse/ready";
+export const READY_MARKER = "/var/lib/iara/ready";
 export const VENV = "/home/ec2-user/venv";
 /** spill files and large results: on the EBS volume (AL2023's /tmp is in RAM) */
-export const SPILL_DIR = "/home/ec2-user/.workhouse/spill";
+export const SPILL_DIR = "/home/ec2-user/.iara/spill";
 export const PACKAGES = ["pyarrow", "marimo", "jedi"];
 
 export interface UserDataInput {
@@ -32,29 +32,29 @@ function checked(name: string, value: string): string {
 
 /** Shuts the machine down after `idle` minutes without a kernel process or an SSH session. */
 function watchdog(idleMinutes: number): string {
-  return `cat > /usr/local/bin/workhouse-idle <<'EOF'
+  return `cat > /usr/local/bin/iara-idle <<'EOF'
 #!/bin/bash
-stamp=/run/workhouse-last-active
-if pgrep -f workhouse.kernel >/dev/null || [ -n "$(ss -Htn state established '( sport = :22 )')" ] || [ ! -f "$stamp" ]; then
+stamp=/run/iara-last-active
+if pgrep -f iara.kernel >/dev/null || [ -n "$(ss -Htn state established '( sport = :22 )')" ] || [ ! -f "$stamp" ]; then
   touch "$stamp"; exit 0
 fi
 idle=$(( $(date +%s) - $(stat -c %Y "$stamp") ))
-if [ "$idle" -ge ${idleMinutes * 60} ]; then shutdown -h now "workhouse: idle"; fi
+if [ "$idle" -ge ${idleMinutes * 60} ]; then shutdown -h now "iara: idle"; fi
 EOF
-chmod +x /usr/local/bin/workhouse-idle
-cat > /etc/systemd/system/workhouse-idle.service <<'EOF'
+chmod +x /usr/local/bin/iara-idle
+cat > /etc/systemd/system/iara-idle.service <<'EOF'
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/workhouse-idle
+ExecStart=/usr/local/bin/iara-idle
 EOF
-cat > /etc/systemd/system/workhouse-idle.timer <<'EOF'
+cat > /etc/systemd/system/iara-idle.timer <<'EOF'
 [Timer]
 OnBootSec=5min
 OnUnitActiveSec=1min
 [Install]
 WantedBy=timers.target
 EOF
-systemctl daemon-reload && systemctl enable --now workhouse-idle.timer`;
+systemctl daemon-reload && systemctl enable --now iara-idle.timer`;
 }
 
 export function userData(input: UserDataInput): string {
@@ -64,7 +64,7 @@ export function userData(input: UserDataInput): string {
   return `#!/bin/bash
 set -euxo pipefail
 # hard limit: the machine terminates whatever happens
-shutdown -h +${Math.max(10, Math.floor(input.maxMinutes))} "workhouse: time limit"
+shutdown -h +${Math.max(10, Math.floor(input.maxMinutes))} "iara: time limit"
 install -d -m 700 -o ec2-user -g ec2-user /home/ec2-user/.ssh
 echo '${key}' >> /home/ec2-user/.ssh/authorized_keys
 chown ec2-user:ec2-user /home/ec2-user/.ssh/authorized_keys && chmod 600 /home/ec2-user/.ssh/authorized_keys

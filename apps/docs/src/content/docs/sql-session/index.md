@@ -6,7 +6,7 @@ description: Managing relational tables, catalogs, and executing SQL.
 `SessionContext` holds state for an interactive SQL and DataFrame environment: registered tables, named schemas, metadata statistics, and the session warehouse.
 
 ```python
-import workhouse
+import iara
 ```
 
 ---
@@ -14,7 +14,7 @@ import workhouse
 ### Creating a Session
 
 ```python
->>> ctx = workhouse.SessionContext()
+>>> ctx = iara.SessionContext()
 ```
 
 ---
@@ -29,7 +29,7 @@ SessionContext.sql(query: str) -> LazyFrame
 
 #### Example
 ```python
->>> ctx = workhouse.SessionContext()
+>>> ctx = iara.SessionContext()
 >>> ctx.register_parquet("nation", "data/nation.parquet")
 >>> lf = ctx.sql("""
 ...     SELECT n_regionkey, count(*) as count
@@ -49,13 +49,13 @@ SessionContext.sql(query: str) -> LazyFrame
 
 ---
 
-### Ad-hoc SQL with `workhouse.sql`
+### Ad-hoc SQL with `iara.sql`
 
-To run SQL directly against Python objects without creating a persistent session, use the module-level `workhouse.sql()` function:
+To run SQL directly against Python objects without creating a persistent session, use the module-level `iara.sql()` function:
 
 ```python
->>> users = workhouse.from_dict({"id": [1, 2], "name": ["A", "B"]})
->>> workhouse.sql("SELECT name FROM u WHERE id = 1", u=users).collect().show()
+>>> users = iara.from_dict({"id": [1, 2], "name": ["A", "B"]})
+>>> iara.sql("SELECT name FROM u WHERE id = 1", u=users).collect().show()
 ┌──────┐
 │ name │
 │ utf8 │

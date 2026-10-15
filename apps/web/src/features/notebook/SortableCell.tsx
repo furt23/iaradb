@@ -4,7 +4,7 @@ import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import Box from "@mui/material/Box";
-import type { CellKind } from "@workhouse/protocol";
+import type { CellKind } from "@iara/protocol";
 import { memo, useMemo } from "react";
 
 import { AddCellBar } from "./AddCellBar";

@@ -1,4 +1,4 @@
-import type { Cell, CellStatus, NotebookView } from "@workhouse/protocol";
+import type { Cell, CellStatus, NotebookView } from "@iara/protocol";
 import { describe, expect, it } from "vitest";
 
 import { fullIndex, initialState, isStale, makeCell, newCellId, nextResultName, notebookReducer, setupCell, setupError, totalElapsed, visibleCells, type NotebookAction, type NotebookState } from "./notebookState";

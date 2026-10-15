@@ -8,6 +8,7 @@ import Paper from "@mui/material/Paper";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { hourlyCost } from "@/lib/clusterTime";
 import { engineStatus } from "@/server/actions/clusters";
@@ -27,7 +28,7 @@ function EngineNote({ cloud, version }: { cloud: boolean; version: string }) {
     return (
       <Alert severity="info">
         AWS is not configured for this Studio, so only the local cluster is available. Set <code>AWS_ACCESS_KEY_ID</code> /{" "}
-        <code>AWS_SECRET_ACCESS_KEY</code> (or <code>WORKHOUSE_AWS_ENV_FILE</code>) on the server to create clusters.
+        <code>AWS_SECRET_ACCESS_KEY</code> (or <code>IARA_AWS_ENV_FILE</code>) on the server to create clusters.
       </Alert>
     );
   }
@@ -38,7 +39,7 @@ function EngineNote({ cloud, version }: { cloud: boolean; version: string }) {
     </Alert>
   ) : (
     <Alert severity="warning">
-      Engine {version} is not published for clusters yet: run <code>uv run --env-file .aws python -m workhouse.cloud publish</code>.
+      Engine {version} is not published for clusters yet: run <code>uv run --env-file .aws python -m iara.cloud publish</code>.
     </Alert>
   );
 }
@@ -58,28 +59,30 @@ function Stat({ label, value }: { label: string; value: string }) {
 
 /** Running machines, what they cost per hour now, and the notebooks attached to clusters. */
 function Summary({ clusters }: { clusters: ClusterView[] }) {
+  const { t } = useTranslation();
   const machines = clusters.filter((c) => c.kind === "ec2" && c.state === "running");
   const perHour = machines.reduce((sum, c) => sum + (hourlyCost(c) ?? 0), 0);
   const attached = clusters.reduce((n, c) => n + c.notebooks.length, 0);
   return (
     <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(3, 1fr)" }, gap: 1.5 }}>
-      <Stat label="Running" value={String(machines.length)} />
-      <Stat label="≈ $/h now" value={`$${perHour.toFixed(2)}`} />
-      <Stat label="Notebooks attached" value={String(attached)} />
+      <Stat label={t("Running")} value={String(machines.length)} />
+      <Stat label={t("≈ $/h now")} value={`$${perHour.toFixed(2)}`} />
+      <Stat label={t("Notebooks attached")} value={String(attached)} />
     </Box>
   );
 }
 
 /** The Compute page: clusters, their machines and lifecycles. */
 export function ComputeView() {
+  const { t } = useTranslation();
   const { overview, error, refresh } = useCompute();
   const [dialog, setDialog] = useState<{ edit: ClusterView | null } | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const clusterActions = useClusterActions(refresh);
 
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(t);
+    const tTimer = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(tTimer);
   }, []);
 
   const actions: ClusterActions = { ...clusterActions, edit: (c) => setDialog({ edit: c }) };
@@ -89,15 +92,14 @@ export function ComputeView() {
       <Box sx={{ display: "flex", alignItems: "flex-start", gap: 2, mb: 2.5 }}>
         <Box sx={{ flex: 1 }}>
           <Typography variant="h5" sx={{ fontWeight: 700 }}>
-            Compute
+            {t("Compute")}
           </Typography>
           <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.5 }}>
-            Clusters run the kernels of notebooks, the SQL editor and the catalog, and read your data straight from S3. Notebooks attach to a
-            cluster from their toolbar; many can share one.
+            {t("Clusters run the kernels of notebooks, the SQL editor and the catalog, and read your data straight from S3. Notebooks attach to a cluster from their toolbar; many can share one.")}
           </Typography>
         </Box>
         <Button variant="contained" startIcon={<Add />} onClick={() => setDialog({ edit: null })} disabled={!overview?.cloud}>
-          Create cluster
+          {t("Create cluster")}
         </Button>
       </Box>
       <Stack spacing={1.5}>
@@ -106,13 +108,14 @@ export function ComputeView() {
         {overview && <EngineNote cloud={overview.cloud} version={overview.engineVersion} />}
         {overview?.clusters.map((c) => <ClusterRow key={c.id} cluster={c} now={now} actions={actions} cloud={overview.cloud} />)}
         {overview && overview.clusters.length === 0 && (
-          <Typography sx={{ color: "text.secondary" }}>No clusters yet: create one to run notebooks.</Typography>
+          <Typography sx={{ color: "text.secondary" }}>{t("No clusters yet: create one to run notebooks.")}</Typography>
         )}
       </Stack>
       <ClusterDialog
         open={dialog !== null}
         edit={dialog?.edit ?? null}
         types={overview?.instanceTypes ?? []}
+
         onClose={() => setDialog(null)}
         onSaved={() => void refresh()}
       />

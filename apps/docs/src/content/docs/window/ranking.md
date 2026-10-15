@@ -32,9 +32,9 @@ F.row_number() -> Expr
 
 ### Example: Top-N per Group
 ```python
->>> import workhouse
->>> from workhouse import functions as F
->>> df = workhouse.from_dict({
+>>> import iara
+>>> from iara import functions as F
+>>> df = iara.from_dict({
 ...     "dept": ["IT", "IT", "IT", "Sales", "Sales"],
 ...     "name": ["Alice", "Bob", "Charlie", "David", "Emma"],
 ...     "score": [95, 95, 80, 88, 92],

@@ -43,7 +43,7 @@ describe("retargetToml", () => {
 
 describe("retargetToml with several tasks", () => {
   const TASKS = [
-    "# A Workhouse job: 2 tasks by hand.",
+    "# A Iara job: 2 tasks by hand.",
     'name = "Two"',
     'timeout_minutes = 60',
     "",
@@ -68,7 +68,7 @@ describe("retargetToml with several tasks", () => {
     ]);
     expect(retargetTargets(TASKS, moves)).toBe(
       [
-        "# A Workhouse job: 2 tasks by hand.",
+        "# A Iara job: 2 tasks by hand.",
         'name = "Two"',
         "timeout_minutes = 60",
         "",
@@ -105,12 +105,12 @@ describe("retargetToml with several tasks", () => {
   });
 
   it("moves the target of a one-task job written with a [[task]] table", () => {
-    const toml = '# A Workhouse job: runs notebooks/a.py by hand.\n[[task]]\ntarget = "notebooks/a.py"\n';
-    expect(retargetToml(toml, "notebooks/a.py", "b/a.py")).toBe('# A Workhouse job: runs b/a.py by hand.\n[[task]]\ntarget = "b/a.py"\n');
+    const toml = '# A Iara job: runs notebooks/a.py by hand.\n[[task]]\ntarget = "notebooks/a.py"\n';
+    expect(retargetToml(toml, "notebooks/a.py", "b/a.py")).toBe('# A Iara job: runs b/a.py by hand.\n[[task]]\ntarget = "b/a.py"\n');
   });
 
   it("does not touch the header of a different target that shares its start", () => {
-    const toml = '# A Workhouse job: runs notebooks/a.py.bak by hand.\ntarget = "notebooks/a.py.bak"\n';
+    const toml = '# A Iara job: runs notebooks/a.py.bak by hand.\ntarget = "notebooks/a.py.bak"\n';
     expect(retargetToml(toml, "notebooks/a.py", "b.py")).toBe(toml);
   });
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import type { Cell, CellKind, NotebookView, RunRequest, RunStreamEvent, WidgetValue } from "@workhouse/protocol";
+import type { Cell, CellKind, NotebookView, RunRequest, RunStreamEvent, WidgetValue } from "@iara/protocol";
 import { useCallback, useEffect, useReducer, useRef } from "react";
 
 import { useCatalogRefresh } from "@/features/data/useCatalogRefresh";

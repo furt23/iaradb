@@ -1,6 +1,6 @@
 "use server";
 
-import { ENGINE_VERSION } from "@workhouse/protocol";
+import { ENGINE_VERSION } from "@iara/protocol";
 
 import type { StudioUser } from "../auth/access";
 import { AuthError, requireUser } from "../auth/session";

@@ -37,7 +37,7 @@ export interface CloudApi {
   studioCidrs(): Promise<string[]>;
 }
 
-export const TAG_COMPONENT = "workhouse:component";
-export const TAG_CLUSTER = "workhouse:cluster";
-/** set on everything created for a team (when `WORKHOUSE_TEAM` is set); names: see ./team.ts */
-export const TAG_TEAM = "workhouse:team";
+export const TAG_COMPONENT = "iara:component";
+export const TAG_CLUSTER = "iara:cluster";
+/** set on everything created for a team (when `IARA_TEAM` is set); names: see ./team.ts */
+export const TAG_TEAM = "iara:team";

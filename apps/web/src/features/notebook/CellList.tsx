@@ -19,7 +19,7 @@ import DragIndicator from "@mui/icons-material/DragIndicator";
 import Box from "@mui/material/Box";
 import Paper from "@mui/material/Paper";
 import Typography from "@mui/material/Typography";
-import type { Cell } from "@workhouse/protocol";
+import type { Cell } from "@iara/protocol";
 import { useState, type ReactNode } from "react";
 
 /** The cell under the pointer: cells are tall, so their centers say little. */

@@ -5,7 +5,7 @@ import { expect, test } from "@playwright/test";
 
 import { addCell, cells, newNotebook, newQuery, runCell, setCode, typeQuery } from "./helpers";
 
-const workspace = () => process.env.WORKHOUSE_E2E_WORKSPACE!;
+const workspace = () => process.env.IARA_E2E_WORKSPACE!;
 
 test("a query's chart is drawn from its result and saved in the .sql file", async ({ page }) => {
   await newQuery(page, "queries/e2e_chart.sql");
@@ -23,9 +23,9 @@ test("a query's chart is drawn from its result and saved in the .sql file", asyn
   await expect(page.getByLabel("save status")).toHaveText("saved");
   const file = path.join(workspace(), "queries", "e2e_chart.sql");
   const first = fs.readFileSync(file, "utf8").split("\n")[0];
-  expect(first).toMatch(/^-- workhouse:chart \{.*"agg":"avg"/);
+  expect(first).toMatch(/^-- iara:chart \{.*"agg":"avg"/);
   // the editor shows the query alone
-  await expect(page.locator(".cm-content").first()).not.toContainText("workhouse:chart");
+  await expect(page.locator(".cm-content").first()).not.toContainText("iara:chart");
 
   // reopened and run again, the result opens on its chart
   await page.reload();

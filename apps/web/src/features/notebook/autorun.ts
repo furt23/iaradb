@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-const STORAGE_KEY = "workhouse.autorun.v1";
+const STORAGE_KEY = "iara.autorun.v1";
 
 /** The notebooks (by path) whose dependent cells run on their own after a cell runs. */
 export function parseAutorun(text: string | null): Record<string, true> {

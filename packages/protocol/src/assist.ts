@@ -1,4 +1,4 @@
-/** Code assistance for notebook cells (see workhouse.kernel.assist). */
+/** Code assistance for notebook cells (see iara.kernel.assist). */
 
 export interface CompletionItem {
   label: string;

@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { CatalogChange } from "@workhouse/protocol";
+import type { CatalogChange } from "@iara/protocol";
 
 import { removeSchemaSection, removeTableSection } from "@/lib/catalogToml";
 
@@ -11,7 +11,7 @@ import { catalogSchemas } from "./catalog";
 import { invalidateDiscovery } from "./discovery";
 import { readConfigText, workspaceName, writeConfigText } from "./sources";
 
-/** A schema's location got new data: its listing is read again (workhouse.toml is not touched). */
+/** A schema's location got new data: its listing is read again (iara.toml is not touched). */
 async function invalidateSchemas(names: string[]): Promise<void> {
   try {
     const wanted = new Set(names.map((n) => n.toLowerCase()));
@@ -39,7 +39,7 @@ function withChange(text: string, change: CatalogChange): string {
 
 /**
  * Apply what a run's statements did to the catalog (`CREATE TABLE ... AS`,
- * `DROP TABLE`, `CREATE SCHEMA`, `DROP SCHEMA`) to workhouse.toml, which the
+ * `DROP TABLE`, `CREATE SCHEMA`, `DROP SCHEMA`) to iara.toml, which the
  * Studio owns; the workspace kernel (catalog, SQL editor) re-reads it unless
  * it made the changes.
  */

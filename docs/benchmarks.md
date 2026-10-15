@@ -1,12 +1,12 @@
 # Benchmarks
 
-TPC-H (all 22 queries) and ClickBench on Workhouse, DuckDB 1.5.6 and Polars 2.0.0. The engines read the same Parquet files. TPC-H data comes from `tpchgen-cli` (ZSTD, `DECIMAL(15,2)` prices); ClickBench uses the single-file `hits.parquet`. Each figure is the median wall-clock time after a warm-up run, and TPC-H results are checked against DuckDB.
+TPC-H (all 22 queries) and ClickBench on Iara, DuckDB 1.5.6 and Polars 2.0.0. The engines read the same Parquet files. TPC-H data comes from `tpchgen-cli` (ZSTD, `DECIMAL(15,2)` prices); ClickBench uses the single-file `hits.parquet`. Each figure is the median wall-clock time after a warm-up run, and TPC-H results are checked against DuckDB.
 
 Machine: AWS m7i.4xlarge (16 vCPUs, Xeon 8488C, 64 GB RAM), Amazon Linux 2023, Python 3.12, engine built with `-C target-cpu=native`.
 
 ## TPC-H totals
 
-| Scale factor | Workhouse | DuckDB | Polars |
+| Scale factor | Iara | DuckDB | Polars |
 |---|---:|---:|---:|
 | SF10, sum of 22 queries | **5.88 s** | 7.69 s | 8.11 s |
 | SF10, geometric mean | **224 ms** | 293 ms | 248 ms |
@@ -17,7 +17,7 @@ Machine: AWS m7i.4xlarge (16 vCPUs, Xeon 8488C, 64 GB RAM), Amazon Linux 2023, P
 
 The fastest time per query is in bold.
 
-| Query | Workhouse | DuckDB | Polars | Query | Workhouse | DuckDB | Polars |
+| Query | Iara | DuckDB | Polars | Query | Iara | DuckDB | Polars |
 |:---:|---:|---:|---:|:---:|---:|---:|---:|
 | Q1 | 3730 | **3542** | 4766 | Q12 | **1109** | 2243 | 1278 |
 | Q2 | 735 | 912 | **368** | Q13 | **3250** | 4387 | 4499 |
@@ -37,12 +37,12 @@ Polars runs its own DataFrame versions of the queries (`benchmarks/tpch_polars.p
 
 Over the 32 queries all three engines ran (the others fail in every engine on this file's integer `EventTime` / `EventDate` columns, or are not supported by Polars):
 
-| | Workhouse | DuckDB | Polars |
+| | Iara | DuckDB | Polars |
 |---|---:|---:|---:|
 | Sum | **17.6 s** | 18.0 s | 20.3 s |
 | Geometric mean | **229 ms** | 338 ms | 259 ms |
 
-Per-query times are printed by `bench_clickbench.py`. Workhouse is slowest on `GROUP BY URL` (Q33, Q34: about 2.1-2.4 s against DuckDB's 1.8 s) and on grouped `COUNT(DISTINCT ...)` (Q8, Q9).
+Per-query times are printed by `bench_clickbench.py`. Iara is slowest on `GROUP BY URL` (Q33, Q34: about 2.1-2.4 s against DuckDB's 1.8 s) and on grouped `COUNT(DISTINCT ...)` (Q8, Q9).
 
 ## Reproducing
 
@@ -55,7 +55,7 @@ python benchmarks/gen_tpch.py 10 benchmarks/data/sf10
 python benchmarks/gen_tpch.py 100 benchmarks/data/sf100
 ```
 
-Check Workhouse's results against DuckDB:
+Check Iara's results against DuckDB:
 
 ```bash
 python benchmarks/check_tpch.py benchmarks/data/sf10
@@ -65,21 +65,21 @@ Run the benchmark:
 
 ```bash
 python benchmarks/bench_tpch.py benchmarks/data/sf10 --runs 3 --validate
-python benchmarks/bench_tpch.py benchmarks/data/sf10 --engines workhouse,duckdb --queries 1,3,6
+python benchmarks/bench_tpch.py benchmarks/data/sf10 --engines iara,duckdb --queries 1,3,6
 ```
 
-Options: `--runs` (default 5), `--engines` (default `workhouse,duckdb,polars`), `--queries` (default all), `--json FILE` to save the timings, `--validate` to compare every engine with DuckDB.
+Options: `--runs` (default 5), `--engines` (default `iara,duckdb,polars`), `--queries` (default all), `--json FILE` to save the timings, `--validate` to compare every engine with DuckDB.
 
 ClickBench, with [hits.parquet](https://datasets.clickhouse.com/hits_compatible/hits.parquet) (14 GB):
 
 ```bash
-python benchmarks/bench_clickbench.py hits.parquet --runs 2 --engines workhouse,duckdb,polars
+python benchmarks/bench_clickbench.py hits.parquet --runs 2 --engines iara,duckdb,polars
 ```
 
-Profile one query (here Q10 at SF10, 3 runs) with `WORKHOUSE_PROFILE=1`:
+Profile one query (here Q10 at SF10, 3 runs) with `IARA_PROFILE=1`:
 
 ```bash
-WORKHOUSE_PROFILE=1 python benchmarks/profile_query.py benchmarks/data/sf10 10 3
+IARA_PROFILE=1 python benchmarks/profile_query.py benchmarks/data/sf10 10 3
 ```
 
 For the fastest build, use `maturin develop --profile dist`.

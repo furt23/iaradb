@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { KernelEventName, KernelInfo, KernelMethod, ParamsOf, ResultOf } from "@workhouse/protocol";
+import type { KernelEventName, KernelInfo, KernelMethod, ParamsOf, ResultOf } from "@iara/protocol";
 
 import type { Transport } from "./transport";
 import { parseMessage } from "./wire";
