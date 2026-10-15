@@ -1,0 +1,85 @@
+---
+/** Six capabilities, each with a small line icon drawn in the logo blue. */
+const features = [
+  {
+    title: 'Files',
+    text: 'Parquet, CSV, JSON and Hive-partitioned datasets, read in parallel.',
+    icon: '<path d="M8 3h7l4 4v11H8z"/><path d="M4 7v11a1 1 0 0 0 1 1h9"/>',
+  },
+  {
+    title: 'Object storage',
+    text: 'S3, Cloudflare R2 and MinIO, with the same API as local files.',
+    icon: '<path d="M7 18h10a4 4 0 0 0 .5-7.97A6 6 0 0 0 6.2 9.3 3.5 3.5 0 0 0 7 18z"/>',
+  },
+  {
+    title: 'SQL and DataFrames',
+    text: 'Joins, window functions, recursive CTEs, lists and structs, query parameters.',
+    icon: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 4v16"/>',
+  },
+  {
+    title: 'Delta Lake',
+    text: 'Read and write Delta tables, with UPDATE, DELETE, MERGE and time travel.',
+    icon: '<path d="M12 4 21 19H3z"/>',
+  },
+  {
+    title: 'Every core',
+    text: 'Morsel-driven pipelines use all cores and release the GIL while a query runs.',
+    icon: '<path d="M13 3 5 14h6l-1 7 8-11h-6z"/>',
+  },
+  {
+    title: 'Plans and profiles',
+    text: 'explain_tree(), profile() and EXPLAIN ANALYZE show the plan with row counts and timings per operator.',
+    icon: '<path d="M4 16a8 8 0 1 1 16 0"/><path d="M12 16l4-5"/>',
+  },
+];
+---
+
+<section class="section section--alt" id="features">
+  <div class="container">
+    <header class="section-head">
+      <span class="eyebrow">What it does</span>
+      <h2>What you need for analytics, in one package.</h2>
+    </header>
+
+    <div class="grid grid--3">
+      {features.map((f) => (
+        <div class="card feature">
+          <div class="icon">
+            <svg viewBox="0 0 24 24" width="22" height="22" role="img" aria-label={f.title}>
+              <g set:html={f.icon} />
+            </svg>
+          </div>
+          <h3>{f.title}</h3>
+          <p class="muted small">{f.text}</p>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+  .icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    background: var(--mist-2);
+    margin-bottom: 18px;
+  }
+
+  .icon svg {
+    width: 22px;
+    height: 22px;
+    fill: none;
+    stroke: var(--cobalt);
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .feature h3 {
+    font-size: 1.15rem;
+  }
+</style>

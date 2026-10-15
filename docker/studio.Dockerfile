@@ -49,6 +49,7 @@ WORKDIR /app
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps/web/package.json apps/web/
 COPY apps/docs/package.json apps/docs/
+COPY apps/site/package.json apps/site/
 COPY packages/protocol/package.json packages/protocol/
 COPY packages/ui/package.json packages/ui/
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \

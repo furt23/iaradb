@@ -1,0 +1,251 @@
+---
+/** The query path as a diagram: a wide horizontal version above 980px, a vertical one below. */
+const fills = ['var(--mist)', 'var(--azure)', 'var(--cobalt)'];
+
+const wideWidths = [
+  [22, 18, 26, 20, 24],
+  [18, 24, 20, 26, 16],
+  [26, 20, 22, 18, 24],
+  [20, 24, 18, 22, 26],
+];
+const narrowWidths = [
+  [26, 20, 30, 22, 28],
+  [20, 28, 22, 30, 18],
+  [30, 22, 26, 20, 24],
+  [24, 30, 20, 26, 22],
+];
+
+/** Places one lane's morsels left to right, cycling the fills so neighbours differ. */
+function lane(widths: number[], index: number, x0: number, gap: number, cy: number) {
+  let x = x0;
+  const morsels = widths.map((w, i) => {
+    const m = { x, w, fill: fills[(i + index) % fills.length] };
+    x += w + gap;
+    return m;
+  });
+  return { label: `core ${index + 1}`, cy, morsels };
+}
+
+const wideLanes = wideWidths.map((w, i) => lane(w, i, 765, 5, 140 + i * 34));
+const narrowLanes = narrowWidths.map((w, i) => lane(w, i, 112, 6, 396 + i * 28));
+---
+
+<section class="section" id="engine">
+  <div class="container">
+    <header class="section-head">
+      <span class="eyebrow">How a query runs</span>
+      <h2>From a query to every core.</h2>
+      <p class="lede">SQL and DataFrame code become one logical plan. The optimizer rewrites it, the planner cuts it into pipelines, and worker threads push small chunks of data, called morsels, through each pipeline in parallel.</p>
+    </header>
+
+    <div class="flow-figure">
+      <svg class="wide" viewBox="0 0 1120 360" width="100%" height="auto" role="img" aria-label="Flow: SQL and DataFrame code become one logical plan, the optimizer rewrites it, the pipelines run morsels on four cores, and the result goes out as Arrow batches or to a Parquet or CSV sink.">
+        <!-- connectors first, boxes paint over their ends -->
+        <path class="flow" d="M150 132 C172 132 172 180 195 180" />
+        <path class="flow" d="M150 208 C172 208 172 180 195 180" />
+        <path class="flow" d="M355 180 H395" />
+        <path class="flow" d="M655 180 H695" />
+        <path class="flow" d="M925 180 H980" />
+        <path class="flow" d="M1030 194 V250" />
+        <path class="flow" d="M187 175 L195 180 L187 185" />
+        <path class="flow" d="M387 175 L395 180 L387 185" />
+        <path class="flow" d="M687 175 L695 180 L687 185" />
+        <path class="flow" d="M972 175 L980 180 L972 185" />
+
+        <!-- 1. inputs -->
+        <rect class="box" x="20" y="110" width="130" height="44" rx="10" />
+        <text class="t-mono" x="85" y="137" text-anchor="middle">SQL</text>
+        <rect class="box" x="20" y="186" width="130" height="44" rx="10" />
+        <text class="t-mono" x="85" y="213" text-anchor="middle">DataFrame</text>
+
+        <!-- 2. logical plan -->
+        <rect class="box" x="195" y="110" width="160" height="140" rx="10" />
+        <text class="t-display" x="275" y="166" text-anchor="middle">Logical plan</text>
+        <text class="t-sub" x="275" y="196" text-anchor="middle">one plan for both</text>
+
+        <!-- 3. optimizer -->
+        <rect class="box" x="395" y="100" width="260" height="160" rx="10" />
+        <text class="t-display" x="525" y="140" text-anchor="middle">Optimizer</text>
+        <text class="t-small" x="525" y="172" text-anchor="middle">predicate &amp; projection pushdown</text>
+        <text class="t-small" x="525" y="194" text-anchor="middle">subquery decorrelation</text>
+        <text class="t-small" x="525" y="216" text-anchor="middle">join order by dynamic programming</text>
+
+        <!-- 4. pipelines -->
+        <rect class="box" x="695" y="80" width="230" height="200" rx="10" />
+        <text class="t-display" x="712" y="108">Pipelines</text>
+        {wideLanes.map((l) => (
+          <g>
+            <text class="t-lane" x="712" y={l.cy + 4}>{l.label}</text>
+            {l.morsels.map((m) => (
+              <rect x={m.x} y={l.cy - 9} width={m.w} height="18" rx="4" style={`fill: ${m.fill}`} />
+            ))}
+          </g>
+        ))}
+        <text class="t-small" x="810" y="302" text-anchor="middle">morsels in parallel, spill to disk if needed</text>
+
+        <!-- result -->
+        <rect class="pill-main" x="980" y="166" width="100" height="28" rx="14" />
+        <text class="t-pill" x="1030" y="185" text-anchor="middle">Result</text>
+        <rect class="pill-sub" x="962" y="214" width="136" height="26" rx="13" />
+        <text class="t-sub12" x="1030" y="231" text-anchor="middle">Arrow batches</text>
+        <rect class="pill-sub" x="962" y="250" width="136" height="26" rx="13" />
+        <text class="t-sub12" x="1030" y="267" text-anchor="middle">Parquet / CSV sink</text>
+      </svg>
+
+      <svg class="narrow" viewBox="0 0 340 680" width="100%" height="auto" role="img" aria-label="Flow, top to bottom: SQL and DataFrame code become one logical plan, the optimizer rewrites it, the pipelines run morsels on four cores, and the result goes out as Arrow batches or to a Parquet or CSV sink.">
+        <path class="flow" d="M90 50 V74 H250 M250 50 V74 M170 74 V92" />
+        <path class="flow" d="M170 164 V192" />
+        <path class="flow" d="M170 316 V344" />
+        <path class="flow" d="M170 548 V580" />
+        <path class="flow" d="M170 620 V632 M90 632 H250 M90 632 V640 M250 632 V640" />
+        <path class="flow" d="M164 92 L170 100 L176 92" />
+        <path class="flow" d="M164 192 L170 200 L176 192" />
+        <path class="flow" d="M164 344 L170 352 L176 344" />
+        <path class="flow" d="M164 580 L170 588 L176 580" />
+
+        <!-- 1. inputs -->
+        <rect class="box" x="20" y="10" width="140" height="40" rx="10" />
+        <text class="t-mono" x="90" y="35" text-anchor="middle">SQL</text>
+        <rect class="box" x="180" y="10" width="140" height="40" rx="10" />
+        <text class="t-mono" x="250" y="35" text-anchor="middle">DataFrame</text>
+
+        <!-- 2. logical plan -->
+        <rect class="box" x="40" y="100" width="260" height="64" rx="10" />
+        <text class="t-display" x="170" y="128" text-anchor="middle">Logical plan</text>
+        <text class="t-sub" x="170" y="150" text-anchor="middle">one plan for both</text>
+
+        <!-- 3. optimizer -->
+        <rect class="box" x="40" y="200" width="260" height="116" rx="10" />
+        <text class="t-display" x="170" y="228" text-anchor="middle">Optimizer</text>
+        <text class="t-small" x="170" y="252" text-anchor="middle">predicate &amp; projection pushdown</text>
+        <text class="t-small" x="170" y="272" text-anchor="middle">subquery decorrelation</text>
+        <text class="t-small" x="170" y="292" text-anchor="middle">join order by dynamic programming</text>
+
+        <!-- 4. pipelines -->
+        <rect class="box" x="40" y="352" width="260" height="196" rx="10" />
+        <text class="t-display" x="56" y="380">Pipelines</text>
+        {narrowLanes.map((l) => (
+          <g>
+            <text class="t-lane" x="56" y={l.cy + 4}>{l.label}</text>
+            {l.morsels.map((m) => (
+              <rect x={m.x} y={l.cy - 9} width={m.w} height="18" rx="4" style={`fill: ${m.fill}`} />
+            ))}
+          </g>
+        ))}
+        <text class="t-small" x="170" y="514" text-anchor="middle">morsels in parallel,</text>
+        <text class="t-small" x="170" y="532" text-anchor="middle">spill to disk if needed</text>
+
+        <!-- result -->
+        <rect class="pill-main" x="110" y="592" width="120" height="28" rx="14" />
+        <text class="t-pill" x="170" y="611" text-anchor="middle">Result</text>
+        <rect class="pill-sub" x="15" y="640" width="150" height="28" rx="14" />
+        <text class="t-sub12" x="90" y="658" text-anchor="middle">Arrow batches</text>
+        <rect class="pill-sub" x="175" y="640" width="150" height="28" rx="14" />
+        <text class="t-sub12" x="250" y="658" text-anchor="middle">Parquet / CSV sink</text>
+      </svg>
+    </div>
+
+    <div class="grid grid--3 facts">
+      <div>
+        <h3>Batches of 8,192 rows</h3>
+        <p class="muted small">Columns stay in Arrow arrays from the scan to the result.</p>
+      </div>
+      <div>
+        <h3>Joins of up to 12 tables</h3>
+        <p class="muted small">are ordered by dynamic programming over cardinality estimates from Parquet statistics.</p>
+      </div>
+      <div>
+        <h3>Streams out</h3>
+        <p class="muted small">sink_parquet and iter_batches return rows while the query is still running.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .flow-figure {
+    margin-bottom: 56px;
+  }
+
+  .box {
+    fill: var(--vellum);
+    stroke: var(--rule-strong);
+    stroke-width: 1.5;
+  }
+
+  .flow {
+    fill: none;
+    stroke: var(--ink-3);
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .pill-main {
+    fill: var(--cobalt);
+  }
+
+  .pill-sub {
+    fill: var(--mist-2);
+  }
+
+  .t-display {
+    font-family: var(--font-display);
+    font-size: 17px;
+    fill: var(--ink);
+  }
+
+  .t-mono {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    fill: var(--ink);
+  }
+
+  .t-sub {
+    font-family: var(--font-sans);
+    font-size: 13px;
+    fill: var(--ink-2);
+  }
+
+  .t-small {
+    font-family: var(--font-sans);
+    font-size: 12.5px;
+    fill: var(--ink-2);
+  }
+
+  .t-lane {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    fill: var(--ink-3);
+  }
+
+  .t-pill {
+    font-family: var(--font-sans);
+    font-size: 13px;
+    fill: var(--vellum);
+  }
+
+  .t-sub12 {
+    font-family: var(--font-sans);
+    font-size: 12px;
+    fill: var(--ink);
+  }
+
+  .narrow {
+    display: none;
+  }
+
+  .facts h3 {
+    font-size: 1.1rem;
+  }
+
+  @media (max-width: 980px) {
+    .wide {
+      display: none;
+    }
+
+    .narrow {
+      display: block;
+    }
+  }
+</style>

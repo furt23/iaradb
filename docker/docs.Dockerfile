@@ -15,6 +15,7 @@ WORKDIR /app
 # pnpm reads every workspace manifest, so all of them are copied
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps/docs/package.json apps/docs/
+COPY apps/site/package.json apps/site/
 COPY apps/web/package.json apps/web/
 COPY packages/protocol/package.json packages/protocol/
 COPY packages/ui/package.json packages/ui/
