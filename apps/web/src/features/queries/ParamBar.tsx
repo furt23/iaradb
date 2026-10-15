@@ -95,7 +95,7 @@ function Field({ name, spec, value, error, onValue, onSpec, onRun }: { name: str
     }
   };
   return (
-    <Box sx={{ display: "flex", alignItems: "flex-start", gap: 0.25 }}>
+    <Box sx={{ display: "flex", alignItems: "flex-end", gap: 0.25 }}>
       {spec.type === "boolean" ? (
         <FormControlLabel
           sx={{ ml: 0, height: 40 }}
@@ -124,7 +124,7 @@ function Field({ name, spec, value, error, onValue, onSpec, onRun }: { name: str
             ))}
         </TextField>
       )}
-      <IconButton size="small" aria-label={`${name} settings`} onClick={(e) => setAnchor(e.currentTarget)} sx={{ mt: 0.5, color: "text.disabled" }}>
+      <IconButton size="small" aria-label={`${name} settings`} onClick={(e) => setAnchor(e.currentTarget)} sx={{ mb: 0.5, color: "text.disabled" }}>
         <TuneRounded sx={{ fontSize: 16 }} />
       </IconButton>
       <Popover open={!!anchor} anchorEl={anchor} onClose={() => setAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "left" }}>
@@ -143,7 +143,7 @@ export function ParamBar({ specs, values, onValues, onSpecs, onRun }: { specs: P
   if (names.length === 0) return null;
   const { missing } = resolveParams(specs, values);
   return (
-    <Box aria-label="query parameters" sx={{ display: "flex", flexWrap: "wrap", alignItems: "flex-start", columnGap: 2, rowGap: 1.5, px: 2, py: 1.5, borderBottom: 1, borderColor: "divider", bgcolor: "background.paper", flexShrink: 0 }}>
+    <Box aria-label="query parameters" sx={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", columnGap: 2, rowGap: 1.5, px: 2, py: 1.5, borderBottom: 1, borderColor: "divider", bgcolor: "background.paper", flexShrink: 0 }}>
       {names.map((name) => (
         <Field
           key={name}

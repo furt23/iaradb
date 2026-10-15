@@ -32,6 +32,8 @@ export interface NotebookToolbarProps {
   onClearOutputs(): void;
   /** opens the setup code (absent: the notebook has none) */
   onShowSetup?(): void;
+  autorun: boolean;
+  onAutorun(on: boolean): void;
   /** the side panel: outline and variables */
   onToggleSide(): void;
   sideOpen: boolean;
@@ -133,6 +135,8 @@ export function NotebookToolbar(p: NotebookToolbarProps) {
         onRestartAndRunAll={p.onRestartAndRunAll}
         onClearOutputs={p.onClearOutputs}
         onShowSetup={p.onShowSetup}
+        autorun={p.autorun}
+        onAutorun={p.onAutorun}
       />
       <ToolButton label="Outline" icon={<ViewSidebarOutlined />} onClick={p.onToggleSide} sx={{ color: p.sideOpen ? "secondary.main" : "text.secondary" }} />
       <MoreMenu onOutputs={p.onOutputs} />

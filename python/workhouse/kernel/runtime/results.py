@@ -4,6 +4,10 @@ Results stay in the kernel as Arrow tables (large ones memory-mapped from
 the spool, see ``spool.py``); clients only ever receive pages of JSON-safe
 rows (64-bit integers beyond JavaScript's safe range, decimals, dates and
 binary values are sent as strings).
+
+A preview keeps its first rows as the table (what the grid pages and sorts)
+and the frame it came from as the source: downloads, charts and the
+wrangler read all of it.
 """
 
 from __future__ import annotations
@@ -26,6 +30,8 @@ from workhouse.kernel.runtime.spool import Spool
 
 MAX_SAFE_INT = 2**53 - 1
 DEFAULT_PAGE = 100
+#: rows a preview shows (the full result stays available to downloads)
+PREVIEW_ROWS = 500
 
 
 def _flat_for_csv(table: Any) -> Any:
@@ -75,6 +81,10 @@ class _Entry:
     sorted_key: tuple | None = None
     sorted_table: pa.Table | None = None
     sorted_path: Path | None = None
+    #: all the rows (a workhouse DataFrame or LazyFrame, or an Arrow table) when ``table`` holds only the first ones
+    source: Any = None
+    #: the full collected source, once something needed it as a table
+    full_table: pa.Table | None = None
 
 
 class ResultStore:
@@ -86,12 +96,16 @@ class ResultStore:
         self._lock = threading.Lock()
         self.spool = spool if spool is not None else Spool()
 
-    def put(self, table: pa.Table, label: str = "", path: Path | None = None) -> dict[str, Any]:
-        """Keep a result (``path``: its spool file, deleted with the result)."""
+    def put(
+        self, table: pa.Table, label: str = "", path: Path | None = None, source: Any = None, total: int | None = None
+    ) -> dict[str, Any]:
+        """Keep a result (``path``: its spool file, deleted with the result).
+        ``source``: all the rows when ``table`` holds the first ones; ``total``:
+        how many there are, when known."""
         rid = uuid.uuid4().hex[:12]
         evicted = []
         with self._lock:
-            self._entries[rid] = _Entry(table, label, path)
+            self._entries[rid] = _Entry(table, label, path, source=source)
             while len(self._entries) > self._capacity:
                 evicted.append(self._entries.popitem(last=False)[1])
         for e in evicted:
@@ -100,7 +114,33 @@ class ResultStore:
         out = {"id": rid, "columns": schema_view(table.schema), "num_rows": table.num_rows, "page": self.page(rid, 0, DEFAULT_PAGE)}
         if path is not None:
             out["on_disk"] = True
+        if source is not None:
+            out["truncated"] = True
+            out["total_rows"] = total
         return out
+
+    def _entry(self, rid: str) -> _Entry:
+        with self._lock:
+            entry = self._entries.get(rid)
+            if entry is None:
+                raise KeyError(f"result {rid!r} is no longer available; re-run the cell")
+            self._entries.move_to_end(rid)
+            return entry
+
+    def full(self, rid: str) -> Any:
+        """All the rows of a result, as something ``ws.sql`` takes as a table
+        (a LazyFrame stays lazy)."""
+        entry = self._entry(rid)
+        return entry.table if entry.source is None else entry.source
+
+    def full_table(self, rid: str) -> pa.Table:
+        """All the rows of a result as an Arrow table (a lazy source runs once)."""
+        entry = self._entry(rid)
+        if entry.source is None:
+            return entry.table
+        if entry.full_table is None:
+            entry.full_table = _arrow(entry.source)
+        return entry.full_table
 
     def get(self, rid: str) -> pa.Table:
         with self._lock:
@@ -117,7 +157,11 @@ class ResultStore:
             if entry.sorted_key == key and entry.sorted_table is not None:
                 return entry.sorted_table
             table = entry.table
-        out, path = self._sort(table, key, large=entry.path is not None)
+        if entry.source is not None:
+            # a preview sorts all the rows and shows the first ones (a top-k in the engine)
+            out, path = _top(entry.source, key, table.num_rows), None
+        else:
+            out, path = self._sort(table, key, large=entry.path is not None)
         with self._lock:
             old = entry.sorted_path
             entry.sorted_key, entry.sorted_table, entry.sorted_path = key, out, path
@@ -150,18 +194,64 @@ class ResultStore:
         }
 
     def export(self, rid: str, path: str, fmt: str) -> str:
-        table = self.get(rid)
-        if fmt == "csv":
-            import pyarrow.csv as pcsv
-
-            pcsv.write_csv(_flat_for_csv(table), path)
-        elif fmt == "parquet":
-            import pyarrow.parquet as pq
-
-            pq.write_table(table, path, compression="zstd")
-        else:
+        """Write all the rows (not only the previewed ones); a lazy source is
+        streamed batch by batch."""
+        if fmt not in ("csv", "parquet"):
             raise ValueError(f"unsupported export format {fmt!r}")
+        entry = self._entry(rid)
+        import workhouse as wh
+
+        if isinstance(entry.source, wh.LazyFrame) and entry.full_table is None:
+            reader = entry.source.to_reader()
+            batches = (pa.Table.from_batches([b]) for b in reader)
+            _write(batches, reader.schema, path, fmt)
+        else:
+            table = self.full_table(rid)
+            _write(iter([table]), table.schema, path, fmt)
         return path
+
+
+def _top(source: Any, key: tuple, n: int) -> pa.Table:
+    """The first ``n`` rows of ``source`` sorted by ``key`` (nulls last)."""
+    import workhouse as wh
+
+    lf = source if isinstance(source, wh.LazyFrame) else (source if isinstance(source, wh.DataFrame) else wh.from_arrow(source)).lazy()
+    return lf.sort([c for c, _ in key], descending=[d for _, d in key], nulls_last=True).limit(n).collect().to_arrow()
+
+
+def _arrow(source: Any) -> pa.Table:
+    import workhouse as wh
+
+    if isinstance(source, wh.LazyFrame):
+        return source.collect().to_arrow()
+    if isinstance(source, wh.DataFrame):
+        return source.to_arrow()
+    return source
+
+
+def _write(tables: Any, schema: pa.Schema, path: str, fmt: str) -> None:
+    """Write Arrow tables one after the other into a CSV or Parquet file."""
+    if fmt == "csv":
+        import pyarrow.csv as pcsv
+
+        writer = None
+        try:
+            for t in tables:
+                t = _flat_for_csv(t)
+                if writer is None:
+                    writer = pcsv.CSVWriter(path, t.schema)
+                writer.write_table(t)
+            if writer is None:  # no rows: the header alone
+                pcsv.write_csv(_flat_for_csv(schema.empty_table()), path)
+        finally:
+            if writer is not None:
+                writer.close()
+        return
+    import pyarrow.parquet as pq
+
+    with pq.ParquetWriter(path, schema, compression="zstd") as writer:
+        for t in tables:
+            writer.write_table(t)
 
 
 def image_payload(data: bytes | str, mime: str) -> dict[str, Any]:

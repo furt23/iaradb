@@ -13,7 +13,7 @@ from workhouse.kernel.notebook.analysis import WORKSPACE_VAR, sql_placeholders
 from workhouse.kernel.notebook.graph import CellDeps
 from workhouse.kernel.notebook.model import Cell
 from workhouse.kernel.runtime.capture import capture
-from workhouse.kernel.runtime.display import display, error_output, run_query
+from workhouse.kernel.runtime.display import display, error_output, frames_of, preview_output, run_query
 from workhouse.kernel.runtime.executor import run_python
 from workhouse.kernel.runtime.interrupt import Interruptor
 from workhouse.kernel.runtime.progress import watch
@@ -29,6 +29,8 @@ class Outcome:
     output: dict[str, Any] | None = None
     defs: dict[str, Any] = field(default_factory=dict)
     elapsed_ms: float = 0.0
+    #: the frames the cell made (see ``display.frame_info``)
+    frames: list[dict[str, Any]] = field(default_factory=list)
 
 
 def is_cancellation(exc: BaseException) -> bool:
@@ -67,15 +69,29 @@ class CellRunner:
         # ``:name`` placeholders take the notebook's widget values
         params = widgets.active().params(sql_placeholders(cell.code)) or None
         output, df = self.query(ws, cell.code, tables, cell.output or "result", source, params)
+        self.last_frames = frames_of({cell.output: df} if cell.output else {})
         return output, ({cell.output: df} if cell.output else {})
 
     # -- Python --------------------------------------------------------------
     def _python(self, cell: Cell, defs: frozenset[str], inputs: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+        import workhouse as wh
+
         filename = f"<cell {cell.id}>"
-        res = run_python(cell.code, inputs, defs, filename)
+        label = cell.name if cell.name != "_" else "value"
+        # `preview(frame)` in the cell: its last call is the cell's output
+        previews: list[tuple[Any, int]] = []
+        token = wh._preview_sink.set(lambda frame, n: previews.append((frame, n)))
+        try:
+            res = run_python(cell.code, inputs, defs, filename)
+        finally:
+            wh._preview_sink.reset(token)
         if res.error is not None:
             raise _UserError(res.error, filename)
-        return display(res.value, self.results, cell.name if cell.name != "_" else "value"), res.defs
+        self.last_frames = frames_of(res.defs, res.value)
+        if previews:
+            frame, n = previews[-1]
+            return preview_output(self.results, frame, label, n), res.defs
+        return display(res.value, self.results, label), res.defs
 
     # -- any cell ------------------------------------------------------------
     def run(self, cell: Cell, deps: CellDeps, defs: frozenset[str], inputs: dict[str, Any], emit: Emit, source: str) -> Outcome:
@@ -89,6 +105,7 @@ class CellRunner:
             emit("progress", {"cell_id": cell.id, "queries": queries})
 
         t0 = time.perf_counter()
+        self.last_frames: list[dict[str, Any]] = []
         try:
             with capture(stream), watch(progress), self.interruptor.interruptible():
                 if cell.kind == "sql":
@@ -100,7 +117,7 @@ class CellRunner:
             exc, filename = (e.exc, e.filename) if isinstance(e, _UserError) else (e, None)
             status = "cancelled" if is_cancellation(exc) else "error"
             return Outcome(status, error_output(exc, filename), elapsed_ms=elapsed)
-        return Outcome("done", output, values, (time.perf_counter() - t0) * 1000)
+        return Outcome("done", output, values, (time.perf_counter() - t0) * 1000, self.last_frames)
 
 
 class _UserError(Exception):

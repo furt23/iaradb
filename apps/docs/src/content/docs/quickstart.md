@@ -16,8 +16,8 @@ pip install workhouse
 Import the package and commonly used expression utilities:
 
 ```python
-import workhouse as wh
-from workhouse import col, lit
+import workhouse
+from workhouse import functions as F
 ```
 
 ---
@@ -32,7 +32,7 @@ You can construct Workhouse DataFrames in memory from Python dictionaries or exi
 ...     "dept": ["Eng", "Sales", "Eng", "Sales"],
 ...     "salary": [120000.0, 95000.0, 140000.0, 80000.0],
 ... }
->>> df = wh.from_dict(data)
+>>> df = workhouse.from_dict(data)
 >>> df.show()
 ┌─────┬───────┬──────────┐
 │ id  │ dept  │ salary   │
@@ -54,11 +54,11 @@ Workhouse uses a lazy-first evaluation model. Query chains built with `LazyFrame
 ```python
 >>> lf = df.lazy()
 >>> filtered = (
-...     lf.filter(col("salary") >= 100000.0)
+...     lf.filter(F.col("salary") >= 100000.0)
 ...     .select(
-...         col("id"),
-...         col("dept"),
-...         (col("salary") * 1.10).alias("bonus_salary")
+...         F.col("id"),
+...         F.col("dept"),
+...         (F.col("salary") * 1.10).alias("bonus_salary")
 ...     )
 ...     .sort("bonus_salary", descending=True)
 ... )
@@ -84,9 +84,9 @@ Group by one or more columns and compute summary statistics using `group_by()`:
 ...     df.lazy()
 ...     .group_by("dept")
 ...     .agg(
-...         headcount=wh.len(),
-...         avg_salary=col("salary").mean(),
-...         max_salary=col("salary").max(),
+...         headcount=F.len(),
+...         avg_salary=F.col("salary").mean(),
+...         max_salary=F.col("salary").max(),
 ...     )
 ...     .sort("avg_salary", descending=True)
 ...     .collect()
@@ -105,10 +105,10 @@ Group by one or more columns and compute summary statistics using `group_by()`:
 
 ## 4. Querying with SQL
 
-Execute standard ANSI SQL queries against frames or registered tables using `wh.sql()`:
+Execute standard ANSI SQL queries against frames or registered tables using `workhouse.sql()`:
 
 ```python
->>> sql_result = wh.sql("""
+>>> sql_result = workhouse.sql("""
 ...     SELECT dept, count(*) as count, sum(salary) as total_payroll
 ...     FROM employees
 ...     WHERE salary > 90000
@@ -132,10 +132,10 @@ Scan and write Parquet files locally or over `s3://` URLs:
 
 ```python
 # Lazily scan files matching a glob pattern
-lf = wh.scan_parquet("data/transactions/*.parquet")
+lf = workhouse.scan_parquet("data/transactions/*.parquet")
 
 # Process and stream directly to output files without holding full data in memory
-row_count = lf.filter(col("status") == "COMPLETED").sink_parquet("data/completed_transactions.parquet")
+row_count = lf.filter(F.col("status") == "COMPLETED").sink_parquet("data/completed_transactions.parquet")
 print(f"Wrote {row_count} rows.")
 ```
 

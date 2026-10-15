@@ -17,12 +17,15 @@ export interface StudioUser {
   email: string;
   name: string;
   admin: boolean;
+  /** the identity provider's avatar (an https URL), when it has one */
+  picture?: string;
 }
 
 export interface UserClaims {
   email?: unknown;
   email_verified?: unknown;
   name?: unknown;
+  picture?: unknown;
 }
 
 type Env = Record<string, string | undefined>;
@@ -58,7 +61,9 @@ export function studioUser(claims: UserClaims | null | undefined, env: Env = pro
   const email = claims.email.trim().toLowerCase();
   if (!emailList(env.WORKHOUSE_ALLOWED_EMAILS).has(email)) return null;
   const name = typeof claims.name === "string" && claims.name ? claims.name : email;
-  return { email, name, admin: emailList(env.WORKHOUSE_ADMIN_EMAILS).has(email) };
+  const user: StudioUser = { email, name, admin: emailList(env.WORKHOUSE_ADMIN_EMAILS).has(email) };
+  if (typeof claims.picture === "string" && claims.picture.startsWith("https://")) user.picture = claims.picture;
+  return user;
 }
 
 /** The user when sign-in is off: everything is allowed. */

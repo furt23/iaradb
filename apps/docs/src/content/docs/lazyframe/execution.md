@@ -16,8 +16,9 @@ LazyFrame.collect() -> DataFrame
 
 #### Example
 ```python
->>> import workhouse as wh
->>> df = wh.from_dict({"n": [1, 2, 3]}).lazy().filter(wh.col("n") > 1).collect()
+>>> import workhouse
+>>> from workhouse import functions as F
+>>> df = workhouse.from_dict({"n": [1, 2, 3]}).lazy().filter(F.col("n") > 1).collect()
 >>> df.show()
 ┌─────┐
 │ n   │
@@ -40,7 +41,7 @@ LazyFrame.fetch(n: int = 5) -> DataFrame
 
 #### Example
 ```python
->>> lf = wh.scan_parquet("data/large.parquet")
+>>> lf = workhouse.scan_parquet("data/large.parquet")
 >>> sample = lf.fetch(2)
 >>> len(sample)
 2
@@ -58,7 +59,7 @@ LazyFrame.explain(optimized: bool = True) -> str
 
 #### Example
 ```python
->>> lf = wh.from_dict({"a": [1, 2]}).lazy().filter(wh.col("a") == 1)
+>>> lf = workhouse.from_dict({"a": [1, 2]}).lazy().filter(F.col("a") == 1)
 >>> print(lf.explain())
 PhysicalPlan
   FilterExec: a == 1

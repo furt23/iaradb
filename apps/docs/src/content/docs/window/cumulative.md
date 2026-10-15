@@ -19,15 +19,15 @@ Cumulative methods compute running statistics from the beginning of the partitio
 
 ### Example: Running Ledger Balance
 ```python
->>> import workhouse as wh
->>> from workhouse import col
->>> df = wh.from_dict({
+>>> import workhouse
+>>> from workhouse import functions as F
+>>> df = workhouse.from_dict({
 ...     "account": ["A1", "A1", "A1"],
 ...     "tx": [100.0, -40.0, 25.0]
 ... })
 >>> df.lazy().with_columns(
-...     balance=col("tx").cum_sum().over("account"),
-...     tx_count=col("tx").cum_count().over("account")
+...     balance=F.col("tx").cum_sum().over("account"),
+...     tx_count=F.col("tx").cum_count().over("account")
 ... ).collect().show()
 ┌─────────┬───────┬─────────┬──────────┐
 │ account │ tx    │ balance │ tx_count │

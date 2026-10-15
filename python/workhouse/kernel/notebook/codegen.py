@@ -23,7 +23,7 @@ from workhouse.kernel.notebook.analysis import WORKSPACE_VAR, sql_placeholders
 INDENT = "    "
 #: keyword of a SQL cell's call that binds ``:name`` placeholders to the notebook's widgets
 PARAMS_KEYWORD = "params"
-PARAMS_VALUE = "wh.widgets.params()"
+PARAMS_VALUE = "workhouse.widgets.params()"
 
 
 def _triple_quoted(text: str) -> str:

@@ -123,7 +123,7 @@ class KernelSession:
     def run_notebook(self, p: dict[str, Any], emit: Emit) -> dict[str, Any]:
         self.ws.refresh()
         try:
-            return self.notebook.run(p.get("cells"), p.get("cell_ids"), emit)
+            return self.notebook.run(p.get("cells"), p.get("cell_ids"), emit, bool(p.get("autorun")))
         finally:
             self.report_catalog(emit)
 
@@ -191,7 +191,7 @@ class KernelSession:
             "assist.lint": lambda p, e: self.assist.lint(p),
             "interrupt": lambda p, e: {"interrupted": self.interruptor.interrupt()},
             "result.page": lambda p, e: self.results.page(p["result_id"], p.get("offset", 0), p.get("limit", 100), p.get("sort")),
-            "result.chart": lambda p, e: chart_data(self.results.get(p["result_id"]), p["spec"]),
+            "result.chart": lambda p, e: chart_data(self.results.full_table(p["result_id"]), p["spec"]),
             "result.export": lambda p, e: self.export(p),
             "file.read": lambda p, e: self.read_file(p),
             "catalog.list": lambda p, e: catalog.list_tables(self.ws),

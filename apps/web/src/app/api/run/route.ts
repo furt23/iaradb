@@ -37,7 +37,7 @@ export async function POST(req: Request): Promise<Response> {
       let result: unknown;
       if (body.kind === "notebook") {
         kernel = await kernels.notebookForRun(normalizeRelative(body.path));
-        result = await kernel.request("notebook.run", { cells: body.cells, cell_ids: body.cellIds }, forward);
+        result = await kernel.request("notebook.run", { cells: body.cells, cell_ids: body.cellIds, autorun: body.autorun === true }, forward);
       } else if (body.kind === "widget") {
         const path = normalizeRelative(body.path);
         kernel = await kernels.notebookForRun(path);

@@ -18,6 +18,7 @@ import pyarrow.parquet as pq
 import pytest
 
 import workhouse as wh
+from workhouse import functions as F
 
 sys.path.insert(0, os.path.dirname(__file__))
 from compare import diff  # noqa: E402
@@ -210,7 +211,7 @@ def test_parquet_nested_columns_round_trip(table: pa.Table, parquet_file: str) -
     got = wh.scan_parquet(parquet_file).sort("id").collect().to_arrow()
     assert got.to_pylist() == table.to_pylist()
     # a projection of a few fields, and pushdown on a flat column
-    r = wh.scan_parquet(parquet_file).filter(wh.col("id") > 4).select("id", wh.col("d").struct.field("p")).sort("id").collect()
+    r = wh.scan_parquet(parquet_file).filter(F.col("id") > 4).select("id", F.col("d").struct.field("p")).sort("id").collect()
     assert r.to_arrow().column("p").to_pylist() == [v["p"] if v else None for v in table.column("d").to_pylist()][4:]
 
 
@@ -272,24 +273,24 @@ def test_arrow_round_trip_keeps_struct_types(table: pa.Table) -> None:
 
 
 def test_struct_namespace_matches_polars(table: pa.Table) -> None:
-    both(table, wh.col("s").struct.field("a"), pl.col("s").struct.field("a"))
-    both(table, wh.col("s").struct.field("b"), pl.col("s").struct.field("b"))
-    both(table, wh.col("d").struct.field("p").struct.field("r"), pl.col("d").struct.field("p").struct.field("r"))
-    both(table, wh.col("s").struct.rename_fields(["x", "y"]), pl.col("s").struct.rename_fields(["x", "y"]))
-    both(table, wh.col("s").struct.json_encode(), pl.col("s").struct.json_encode())
-    both(table, wh.col("d").struct.json_encode(), pl.col("d").struct.json_encode())
-    both(table, wh.col("n").struct.field("l").list.len(), pl.col("n").struct.field("l").list.len())
+    both(table, F.col("s").struct.field("a"), pl.col("s").struct.field("a"))
+    both(table, F.col("s").struct.field("b"), pl.col("s").struct.field("b"))
+    both(table, F.col("d").struct.field("p").struct.field("r"), pl.col("d").struct.field("p").struct.field("r"))
+    both(table, F.col("s").struct.rename_fields(["x", "y"]), pl.col("s").struct.rename_fields(["x", "y"]))
+    both(table, F.col("s").struct.json_encode(), pl.col("s").struct.json_encode())
+    both(table, F.col("d").struct.json_encode(), pl.col("d").struct.json_encode())
+    both(table, F.col("n").struct.field("l").list.len(), pl.col("n").struct.field("l").list.len())
 
 
 def test_struct_builder_matches_polars(table: pa.Table) -> None:
-    both(table, wh.struct("id", "txt"), pl.struct("id", "txt"))
-    both(table, wh.struct(wh.col("id").alias("k"), wh.col("g") + 1), pl.struct(pl.col("id").alias("k"), pl.col("g") + 1))
-    both(table, wh.struct(total=wh.col("id") + wh.col("g")), pl.struct(total=pl.col("id") + pl.col("g")))
-    both(table, wh.struct("s", "n"), pl.struct("s", "n"))
+    both(table, F.struct("id", "txt"), pl.struct("id", "txt"))
+    both(table, F.struct(F.col("id").alias("k"), F.col("g") + 1), pl.struct(pl.col("id").alias("k"), pl.col("g") + 1))
+    both(table, F.struct(total=F.col("id") + F.col("g")), pl.struct(total=pl.col("id") + pl.col("g")))
+    both(table, F.struct("s", "n"), pl.struct("s", "n"))
     with pytest.raises(ValueError, match="twice"):
-        wh.struct(wh.col("id"), wh.col("id"))
+        F.struct(F.col("id"), F.col("id"))
     # a dict is a struct literal
-    out = wh.from_arrow(table).lazy().select("id", wh.lit(1).alias("one")).with_columns(c={"a": 1, "b": "x"}).collect().to_arrow()
+    out = wh.from_arrow(table).lazy().select("id", F.lit(1).alias("one")).with_columns(c={"a": 1, "b": "x"}).collect().to_arrow()
     assert out.column("c").to_pylist() == [{"a": 1, "b": "x"}] * 8
 
 
@@ -303,7 +304,7 @@ def test_unnest_matches_polars(table: pa.Table) -> None:
     assert ours.to_arrow().column_names == theirs.columns
     assert values(ours) == values(theirs)
     # inside select: one column per field
-    ours = wh.from_arrow(table).lazy().select("id", wh.col("s").struct.unnest()).collect()
+    ours = wh.from_arrow(table).lazy().select("id", F.col("s").struct.unnest()).collect()
     theirs = pl.from_arrow(table).select("id", pl.col("s").struct.unnest())
     assert values(ours) == values(theirs)
     # eager frames
@@ -311,7 +312,7 @@ def test_unnest_matches_polars(table: pa.Table) -> None:
     with pytest.raises(wh.WorkhouseError, match="not a struct"):
         wh.from_arrow(table).unnest("id")
     with pytest.raises(wh.WorkhouseError, match="twice"):
-        wh.from_arrow(table).lazy().select(wh.col("g").alias("a"), "s").unnest("s").collect()
+        wh.from_arrow(table).lazy().select(F.col("g").alias("a"), "s").unnest("s").collect()
 
 
 def test_explode_then_unnest_a_list_of_structs(table: pa.Table) -> None:
@@ -321,11 +322,11 @@ def test_explode_then_unnest_a_list_of_structs(table: pa.Table) -> None:
 
 
 def test_group_by_agg_keeps_struct_payloads(table: pa.Table) -> None:
-    ours = wh.from_arrow(table).lazy().group_by("g").agg(wh.col("s").implode().alias("ss"), wh.col("id").max().alias("m")).sort("g").collect()
+    ours = wh.from_arrow(table).lazy().group_by("g").agg(F.col("s").implode().alias("ss"), F.col("id").max().alias("m")).sort("g").collect()
     theirs = pl.from_arrow(table).group_by("g").agg(pl.col("s").alias("ss"), pl.col("id").max().alias("m")).sort("g")
     assert values(ours) == values(theirs)
     # first / last skip null structs (the engine's first / last); the payload is carried whole
-    ours = wh.from_arrow(table).lazy().group_by("g").agg(wh.col("s").first().alias("f"), wh.col("s").last().alias("l")).sort("g").collect()
+    ours = wh.from_arrow(table).lazy().group_by("g").agg(F.col("s").first().alias("f"), F.col("s").last().alias("l")).sort("g").collect()
     assert ours.to_arrow().column("f").to_pylist() == [{"a": 1, "b": "x"}, {"a": None, "b": "z"}, {"a": 6, "b": "q"}, {"a": 8, "b": ""}]
     assert ours.to_arrow().column("l").to_pylist() == [{"a": 1, "b": "x"}, {"a": 5, "b": "é"}, {"a": 6, "b": "q"}, {"a": 8, "b": ""}]
 
@@ -407,20 +408,20 @@ def test_json_decode_and_path_match_match_polars(jt: pa.Table) -> None:
     dtype_pl = pl.Struct({"a": pl.Struct({"b": pl.List(pl.Float64)}), "s": pl.String, "t": pl.Boolean})
     docs = [d for d in DOCS if d is not None and "{" in d and '"c"' not in d]
     t = pa.table({"j": docs})
-    ours = wh.from_arrow(t).lazy().select(wh.col("j").str.json_decode(dtype_wh).alias("r")).collect().to_arrow().column("r").to_pylist()
+    ours = wh.from_arrow(t).lazy().select(F.col("j").str.json_decode(dtype_wh).alias("r")).collect().to_arrow().column("r").to_pylist()
     theirs = pl.from_arrow(t).select(pl.col("j").str.json_decode(dtype_pl).alias("r"))["r"].to_list()
     assert ours == theirs
-    both(jt, wh.col("j").str.json_path_match("$.s"), pl.col("j").str.json_path_match("$.s"))
-    both(jt, wh.col("j").str.json_path_match("$.t"), pl.col("j").str.json_path_match("$.t"))
-    both(jt, wh.col("j").str.json_path_match("$.a.b[0]"), pl.col("j").str.json_path_match("$.a.b[0]"))
+    both(jt, F.col("j").str.json_path_match("$.s"), pl.col("j").str.json_path_match("$.s"))
+    both(jt, F.col("j").str.json_path_match("$.t"), pl.col("j").str.json_path_match("$.t"))
+    both(jt, F.col("j").str.json_path_match("$.a.b[0]"), pl.col("j").str.json_path_match("$.a.b[0]"))
     with pytest.raises(TypeError, match="dtype"):
-        wh.col("j").str.json_decode()
+        F.col("j").str.json_decode()
 
 
 def test_json_round_trip_with_struct_dtype(table: pa.Table) -> None:
     dtype = wh.Struct({"a": "int64", "b": "utf8"})
     out = (
-        wh.from_arrow(table).lazy().select("id", wh.col("s").struct.json_encode().str.json_decode(dtype).alias("back")).sort("id").collect()
+        wh.from_arrow(table).lazy().select("id", F.col("s").struct.json_encode().str.json_decode(dtype).alias("back")).sort("id").collect()
     )
     assert out.to_arrow().column("back").to_pylist() == table.column("s").to_pylist()
 
@@ -476,7 +477,7 @@ def test_nested_text_option(ndjson: str) -> None:
     assert json.loads(via_sql.column("user")[0].as_py()) == {"name": "bob", "tags": []}
     # the text can be decoded with the struct dtype
     dtype = wh.Struct({"name": "utf8", "tags": wh.List("utf8")})
-    back = text.lazy().select("id", wh.col("user").str.json_decode(dtype).alias("u")).filter(wh.col("id") == 2).collect()
+    back = text.lazy().select("id", F.col("user").str.json_decode(dtype).alias("u")).filter(F.col("id") == 2).collect()
     assert back.to_arrow().column("u").to_pylist() == [{"name": "bob", "tags": []}]
 
 

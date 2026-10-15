@@ -13,6 +13,7 @@ import pyarrow.parquet as pq
 import pytest
 
 import workhouse as wh
+from workhouse import functions as F
 
 sys.path.insert(0, os.path.dirname(__file__))
 from compare import diff  # noqa: E402
@@ -184,13 +185,13 @@ def test_sql_ordered(ctx, duck, sql):
 
 def test_api_filter_select(tables, duck):
     lf = wh.from_arrow(tables["facts"]).lazy()
-    out = lf.filter((wh.col("x") > 100) & ~wh.col("flag")).select("id", (wh.col("x") * 2).alias("x2"), wh.col("cat"))
+    out = lf.filter((F.col("x") > 100) & ~F.col("flag")).select("id", (F.col("x") * 2).alias("x2"), F.col("cat"))
     check_frame(out, duck, "select id, x * 2 as x2, cat from facts where x > 100 and not flag")
 
 
 def test_api_with_columns_and_naming(tables, duck):
     lf = wh.from_arrow(tables["facts"]).lazy()
-    out = lf.with_columns(wh.col("y") * 10, z=wh.col("x") + wh.col("y")).select("id", "y", "z")
+    out = lf.with_columns(F.col("y") * 10, z=F.col("x") + F.col("y")).select("id", "y", "z")
     assert out.columns == ["id", "y", "z"]
     check_frame(out, duck, "select id, y * 10 as y, x + y as z from facts")
 
@@ -198,12 +199,12 @@ def test_api_with_columns_and_naming(tables, duck):
 def test_api_group_by(tables, duck):
     lf = wh.from_arrow(tables["facts"]).lazy()
     out = lf.group_by("cat", "k_small").agg(
-        wh.col("x").sum().alias("sx"),
-        wh.col("y").mean().alias("my"),
-        wh.col("id").count().alias("n"),
-        wh.col("k_big").n_unique().alias("u"),
-        (wh.col("x").sum() / wh.col("y").count()).alias("ratio"),
-        wh.col("y").filter(wh.col("flag")).sum().alias("yf"),
+        F.col("x").sum().alias("sx"),
+        F.col("y").mean().alias("my"),
+        F.col("id").count().alias("n"),
+        F.col("k_big").n_unique().alias("u"),
+        (F.col("x").sum() / F.col("y").count()).alias("ratio"),
+        F.col("y").filter(F.col("flag")).sum().alias("yf"),
     )
     check_frame(
         out,
@@ -216,13 +217,13 @@ def test_api_group_by(tables, duck):
 
 def test_api_group_by_expression_key(tables, duck):
     lf = wh.from_arrow(tables["facts"]).lazy()
-    out = lf.group_by(wh.col("d").dt.year().alias("yr")).agg(wh.len())
+    out = lf.group_by(F.col("d").dt.year().alias("yr")).agg(F.len())
     check_frame(out, duck, "select year(d) yr, count(*) len from facts group by 1")
 
 
 def test_api_global_agg(tables, duck):
     lf = wh.from_arrow(tables["facts"]).lazy()
-    out = lf.select(wh.col("x").sum(), wh.col("y").max(), wh.col("x").std().alias("sd"))
+    out = lf.select(F.col("x").sum(), F.col("y").max(), F.col("x").std().alias("sd"))
     check_frame(out, duck, "select sum(x) x, max(y) y, stddev(x) sd from facts", rtol=1e-6)
 
 
@@ -290,25 +291,25 @@ def test_api_when_then(tables, duck):
     lf = wh.from_arrow(tables["facts"]).lazy()
     out = lf.select(
         "id",
-        wh.when(wh.col("y") > 500).then(wh.lit("hi")).when(wh.col("y") < -500).then(wh.lit("lo")).otherwise(wh.lit("mid")).alias("b"),
+        F.when(F.col("y") > 500).then(F.lit("hi")).when(F.col("y") < -500).then(F.lit("lo")).otherwise(F.lit("mid")).alias("b"),
     )
     check_frame(out, duck, "select id, case when y > 500 then 'hi' when y < -500 then 'lo' else 'mid' end b from facts")
 
 
 def test_api_str_dt_namespaces(tables, duck):
     lf = wh.from_arrow(tables["facts"]).lazy()
-    out = lf.filter(wh.col("cat").str.starts_with("e")).select(
+    out = lf.filter(F.col("cat").str.starts_with("e")).select(
         "id",
-        wh.col("cat").str.to_uppercase().alias("u"),
-        wh.col("cat").str.len_chars().alias("n"),
-        wh.col("d").dt.month().alias("m"),
+        F.col("cat").str.to_uppercase().alias("u"),
+        F.col("cat").str.len_chars().alias("n"),
+        F.col("d").dt.month().alias("m"),
     )
     check_frame(out, duck, "select id, upper(cat) u, length(cat) n, month(d) m from facts where starts_with(cat, 'e')")
 
 
 def test_api_literal_types(tables, duck):
     lf = wh.from_arrow(tables["facts"]).lazy()
-    out = lf.filter(wh.col("d") >= dt.date(2022, 3, 1)).select("id")
+    out = lf.filter(F.col("d") >= dt.date(2022, 3, 1)).select("id")
     check_frame(out, duck, "select id from facts where d >= date '2022-03-01'")
 
 
@@ -321,7 +322,7 @@ def test_api_unique_union_drop_rename(tables):
 
 
 def test_sql_on_lazyframe(tables, duck):
-    lf = wh.from_arrow(tables["facts"]).lazy().filter(wh.col("flag"))
+    lf = wh.from_arrow(tables["facts"]).lazy().filter(F.col("flag"))
     out = lf.sql("select cat, count(*) c from self group by cat")
     check_frame(out, duck, "select cat, count(*) c from facts where flag group by cat")
 
@@ -340,7 +341,7 @@ def test_parquet_roundtrip_and_pruning(tmp_path, tables, duck):
     path = str(tmp_path / "facts.parquet")
     pq.write_table(tables["facts"], path, row_group_size=10_000)
     lf = wh.scan_parquet(path)
-    q = lf.filter(wh.col("id") < 15_000).select("id", "x")
+    q = lf.filter(F.col("id") < 15_000).select("id", "x")
     plan = q.explain()
     assert "row_groups=2/20" in plan, plan
     check_frame(q, duck, "select id, x from facts where id < 15000")
@@ -356,8 +357,8 @@ def test_parquet_glob_directory(tmp_path, tables, duck):
     t = tables["facts"]
     for i in range(4):
         pq.write_table(t.slice(i * 50_000, 50_000), str(d / f"part-{i}.parquet"))
-    check_frame(wh.scan_parquet(str(d)).group_by("k_small").agg(wh.len()), duck, "select k_small, count(*) len from facts group by 1")
-    check_frame(wh.scan_parquet(str(d / "*.parquet")).select(wh.col("y").sum()), duck, "select sum(y) y from facts")
+    check_frame(wh.scan_parquet(str(d)).group_by("k_small").agg(F.len()), duck, "select k_small, count(*) len from facts group by 1")
+    check_frame(wh.scan_parquet(str(d / "*.parquet")).select(F.col("y").sum()), duck, "select sum(y) y from facts")
 
 
 def test_count_star_parquet_metadata_only(tmp_path, tables):
@@ -375,7 +376,7 @@ def test_csv(tmp_path, tables, duck):
     big = str(tmp_path / "big.csv")
     # note: the CSV reader (like arrow-csv) reads both empty and "" fields as NULL
     duck.execute(f"COPY (select id, k_big, y, nullif(cat, '') cat from facts) TO '{big}' (HEADER)")
-    check_frame(wh.scan_csv(big).group_by("cat").agg(wh.col("y").sum(), wh.len()), duck, "select nullif(cat, '') cat, sum(y) y, count(*) len from facts group by 1")
+    check_frame(wh.scan_csv(big).group_by("cat").agg(F.col("y").sum(), F.len()), duck, "select nullif(cat, '') cat, sum(y) y, count(*) len from facts group by 1")
 
 
 def test_interop_pandas_polars(tables):
@@ -383,10 +384,10 @@ def test_interop_pandas_polars(tables):
     import polars as pl
 
     pdf = pd.DataFrame({"a": [1, 2, 3], "b": ["x", "y", None]})
-    out = wh.from_pandas(pdf).filter(wh.col("a") > 1)
+    out = wh.from_pandas(pdf).filter(F.col("a") > 1)
     assert out.to_pandas()["a"].tolist() == [2, 3]
     plf = pl.DataFrame({"a": [5, 6], "s": ["p", "q"]})
-    out2 = wh.from_polars(plf).select((wh.col("a") * 2).alias("a2"), "s")
+    out2 = wh.from_polars(plf).select((F.col("a") * 2).alias("a2"), "s")
     assert out2.to_polars().to_dict(as_series=False) == {"a2": [10, 12], "s": ["p", "q"]}
     # polars frames (string_view arrays) can be queried directly
     agg = wh.sql("select s, sum(a) t from p group by s order by s", p=plf).collect()
@@ -395,7 +396,7 @@ def test_interop_pandas_polars(tables):
 
 def test_explain_shows_pushdown(tables):
     lf = wh.from_arrow(tables["facts"]).lazy()
-    q = lf.select("id", "x", "y").filter(wh.col("x") > 1).sort("y").limit(5)
+    q = lf.select("id", "x", "y").filter(F.col("x") > 1).sort("y").limit(5)
     plan = q.explain()
     assert "TopK" in plan
     assert "pruning_filters" in plan
@@ -408,4 +409,4 @@ def test_errors(tables):
     with pytest.raises(wh.WorkhouseError):
         wh.sql("select k_small, name from s group by k_small", s=tables["small"]).collect()
     with pytest.raises(TypeError):
-        bool(wh.col("a") > 1)
+        bool(F.col("a") > 1)

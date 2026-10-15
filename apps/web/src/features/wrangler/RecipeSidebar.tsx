@@ -3,11 +3,7 @@
 import CheckBox from "@mui/material/Checkbox";
 import ClearAll from "@mui/icons-material/ClearAll";
 import DeleteOutlined from "@mui/icons-material/DeleteOutlined";
-import History from "@mui/icons-material/History";
 import Box from "@mui/material/Box";
-import Button from "@mui/material/Button";
-import Chip from "@mui/material/Chip";
-import Divider from "@mui/material/Divider";
 import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
@@ -25,15 +21,13 @@ interface Props {
 
 export function RecipeSidebar({ steps, activeStepId, onSelectStep, onToggleStep, onDeleteStep, onClearSteps }: Props) {
   return (
-    <Box sx={{ width: 280, display: "flex", flexDirection: "column", borderRight: 1, borderColor: "divider", bgcolor: "background.paper" }}>
-      <Box sx={{ px: 2, py: 1.5, display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: 1, borderColor: "divider" }}>
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-          <History fontSize="small" sx={{ color: "primary.main" }} />
-          <Typography variant="h4">Applied Steps</Typography>
-          <Chip label={steps.length} size="small" variant="outlined" sx={{ height: 20, fontSize: 11 }} />
-        </Box>
+    <Box sx={{ width: 240, display: "flex", flexDirection: "column", borderRight: 1, borderColor: "divider", bgcolor: "background.paper" }}>
+      <Box sx={{ px: 2, py: 1, display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: 1, borderColor: "divider" }}>
+        <Typography variant="overline" sx={{ color: "text.secondary" }}>
+          Steps{steps.length > 0 && ` · ${steps.length}`}
+        </Typography>
         {steps.length > 0 && (
-          <Tooltip title="Clear all transformation steps">
+          <Tooltip title="Clear all steps">
             <IconButton size="small" onClick={onClearSteps}>
               <ClearAll fontSize="small" />
             </IconButton>
@@ -59,11 +53,8 @@ export function RecipeSidebar({ steps, activeStepId, onSelectStep, onToggleStep,
             justifyContent: "space-between",
           }}
         >
-          <Typography variant="body2" sx={{ fontWeight: 600 }}>
-            0. Source Data
-          </Typography>
-          <Typography variant="caption" sx={{ color: "text.secondary" }}>
-            Initial
+          <Typography variant="body2" sx={{ fontWeight: 500 }}>
+            Source
           </Typography>
         </Box>
 
@@ -113,16 +104,6 @@ export function RecipeSidebar({ steps, activeStepId, onSelectStep, onToggleStep,
           );
         })}
 
-        {steps.length === 0 && (
-          <Box sx={{ textAlign: "center", py: 4, px: 2 }}>
-            <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mb: 1 }}>
-              No steps applied yet.
-            </Typography>
-            <Typography variant="caption" sx={{ color: "text.disabled", fontSize: 11 }}>
-              Use the toolbar above or click on column headers to add filters, clean missing values, or transform text.
-            </Typography>
-          </Box>
-        )}
       </Box>
     </Box>
   );

@@ -20,29 +20,29 @@ Expr.rank(method: str = "average", *, descending: bool = False) -> Expr
 
 ---
 
-### `wh.row_number`
+### `F.row_number`
 
 Returns the 1-based sequential row position within each partition group.
 
 ```python
-wh.row_number() -> Expr
+F.row_number() -> Expr
 ```
 
 ---
 
 ### Example: Top-N per Group
 ```python
->>> import workhouse as wh
->>> from workhouse import col
->>> df = wh.from_dict({
+>>> import workhouse
+>>> from workhouse import functions as F
+>>> df = workhouse.from_dict({
 ...     "dept": ["IT", "IT", "IT", "Sales", "Sales"],
 ...     "name": ["Alice", "Bob", "Charlie", "David", "Emma"],
 ...     "score": [95, 95, 80, 88, 92],
 ... })
 >>> ranked = df.lazy().with_columns(
-...     dense_rk=col("score").rank("dense", descending=True).over("dept"),
-...     row_num=wh.row_number().over("dept", order_by=col("score"), descending=True)
-... ).filter(col("dense_rk") <= 1).collect()
+...     dense_rk=F.col("score").rank("dense", descending=True).over("dept"),
+...     row_num=F.row_number().over("dept", order_by=F.col("score"), descending=True)
+... ).filter(F.col("dense_rk") <= 1).collect()
 >>> ranked.show()
 ┌──────┬───────┬───────┬──────────┬─────────┐
 │ dept │ name  │ score │ dense_rk │ row_num │

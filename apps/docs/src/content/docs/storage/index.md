@@ -6,7 +6,8 @@ description: Querying and writing to cloud object storage.
 Workhouse seamlessly scans and writes datasets directly to Amazon S3 and S3-compatible object storage APIs such as Cloudflare R2 and MinIO.
 
 ```python
-import workhouse as wh
+import workhouse
+from workhouse import functions as F
 ```
 
 ---
@@ -27,7 +28,7 @@ Storage options can be passed per scan or set globally for all URLs matching a p
 
 ```python
 # Set default credentials or endpoint for a bucket prefix
-wh.set_storage_options("s3://analytics-bucket", {
+workhouse.set_storage_options("s3://analytics-bucket", {
     "region": "us-east-1"
 })
 ```
@@ -37,7 +38,7 @@ wh.set_storage_options("s3://analytics-bucket", {
 Cloudflare R2 provides an S3-compatible API with zero egress bandwidth charges. Configure R2 by specifying your account endpoint:
 
 ```python
-wh.set_storage_options("s3://my-r2-bucket", {
+workhouse.set_storage_options("s3://my-r2-bucket", {
     "endpoint": "https://<account_id>.r2.cloudflarestorage.com",
     "region": "auto",
 })
@@ -49,8 +50,8 @@ wh.set_storage_options("s3://my-r2-bucket", {
 
 ```python
 # Lazily scan from S3
-lf = wh.scan_parquet("s3://analytics-bucket/logs/**/*.parquet")
+lf = workhouse.scan_parquet("s3://analytics-bucket/logs/**/*.parquet")
 
 # Stream filtered results back to S3 using multipart uploads
-lf.filter(wh.col("status") >= 500).sink_parquet("s3://analytics-bucket/errors/")
+lf.filter(F.col("status") >= 500).sink_parquet("s3://analytics-bucket/errors/")
 ```

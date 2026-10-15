@@ -49,20 +49,20 @@ packages/ui             Studio UI components
 
 ## Memory and spilling
 
-Aggregation tables, join build sides, sort buffers and window buffers reserve memory from one process-wide pool. Set the limit with `wh.set_memory_limit()` or `WORKHOUSE_MEMORY_LIMIT`. When a reservation would exceed it, the operator spills to disk as LZ4-compressed Arrow IPC files:
+Aggregation tables, join build sides, sort buffers and window buffers reserve memory from one process-wide pool. Set the limit with `workhouse.set_memory_limit()` or `WORKHOUSE_MEMORY_LIMIT`. When a reservation would exceed it, the operator spills to disk as LZ4-compressed Arrow IPC files:
 
 - aggregation spills radix partitions and aggregates them one at a time;
 - joins fall back to a partitioned (grace) hash join;
 - sort writes sorted runs and merges them;
 - window functions spill by `PARTITION BY` partition.
 
-A single partition must still fit in memory. `wh.memory_usage()` returns `{limit, used, peak, spilled}`.
+A single partition must still fit in memory. `workhouse.memory_usage()` returns `{limit, used, peak, spilled}`.
 
 ## Running queries
 
 Each query has a handle that reports finished morsels and row counts and checks a cancel flag between batches.
 
-- `wh.running_queries()` lists running queries, `wh.cancel_query(id)` cancels one and `wh.interrupt()` cancels all of them.
+- `workhouse.running_queries()` lists running queries, `workhouse.cancel_query(id)` cancels one and `workhouse.interrupt()` cancels all of them.
 - `lf.explain_tree()` returns the physical plan as nested dicts.
 - `lf.profile()` returns `(DataFrame, dict)`: the result and a run profile with per-pipeline times, row counts, memory peak and spilled bytes.
 - `lf.analyze()` runs the query and returns `{plan, profile, rows, requests}`, with metrics on every plan node. SQL `EXPLAIN ANALYZE` gives this as text.

@@ -10,10 +10,16 @@ the returned tuple the names it defines::
     app = marimo.App(width="medium")
 
 
+    with app.setup:
+        import workhouse
+
+        ws = workhouse.workspace()
+
+
     @app.cell(id="k3j9x0aq")
-    def _(wh):
-        ws = wh.workspace()
-        return (ws,)
+    def _(ws):
+        orders = ws.table("orders")
+        return (orders,)
 
 
     if __name__ == "__main__":
@@ -39,30 +45,17 @@ from workhouse.kernel.notebook.model import SETUP_CELL_ID, Cell, Notebook, is_va
 
 FOOTER = 'if __name__ == "__main__":\n    app.run()\n'
 
+#: the setup cell of a new notebook: the module by its name (as ``pyspark``)
+#: and the workspace session; cells import ``workhouse.functions`` as they like
 TEMPLATE_CELL = """import marimo as mo
-import workhouse as wh
+import workhouse
 
-ws = wh.workspace()"""
+ws = workhouse.workspace()"""
 
 
 def new_notebook(path: Path) -> Notebook:
     """A notebook whose imports live in the (hidden in the Studio) setup cell."""
     return Notebook(path=path, cells=[Cell(SETUP_CELL_ID, "python", TEMPLATE_CELL, name="setup", setup=True)], app_args='width="medium"')
-
-
-def _lines(code: str) -> list[str]:
-    return [line.strip() for line in code.splitlines() if line.strip()]
-
-
-def migrate_template(nb: Notebook) -> Notebook:
-    """Notebooks made before the setup cell existed start with a cell holding
-    the template imports: that cell becomes the setup cell. Anything else is
-    left alone. Nothing is written; the file changes on the next save."""
-    if nb.cells and not any(c.setup for c in nb.cells):
-        first = nb.cells[0]
-        if first.kind == "python" and _lines(first.code) == _lines(TEMPLATE_CELL):
-            nb.cells[0] = Cell(SETUP_CELL_ID, "python", first.code, name="setup", setup=True)
-    return nb
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +167,7 @@ def parse(src: str, path: Path) -> Notebook:
         elif not _is_boilerplate(node):
             start = (node.decorator_list[0].lineno if getattr(node, "decorator_list", None) else node.lineno) - 1
             nb.extra.append("\n".join(lines[start : node.end_lineno]))
-    return migrate_template(nb)
+    return nb
 
 
 def read(path: Path) -> Notebook:
@@ -229,7 +222,7 @@ def _render_cell(cell: Cell, graph: DependencyGraph, globals_: set[str]) -> str:
     deps = graph.deps[cell.id]
     params = sorted(set(deps.refs) - globals_)
     if cell.kind == "sql":
-        needs = {"ws", "wh"} if sql_placeholders(cell.code) else {"ws"}
+        needs = {"ws", "workhouse"} if sql_placeholders(cell.code) else {"ws"}
         params = sorted(set(params) | (needs - globals_))
     elif cell.kind == "markdown":
         params = ["mo"] if "mo" not in globals_ else []

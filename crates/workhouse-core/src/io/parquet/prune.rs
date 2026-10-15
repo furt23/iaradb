@@ -147,6 +147,10 @@ fn prune_one(e: &Expr, schema: &Schema, b: &dyn Bounds) -> Option<BooleanArray> 
                         if !(crate::types::is_numeric(ft) && crate::types::is_numeric(to)) {
                             return None;
                         }
+                        // fractional -> integer rounds, so the column's own range doesn't bound it
+                        if to.is_integer() && !ft.is_integer() {
+                            return None;
+                        }
                         (c, s, *op)
                     }
                     _ => return None,

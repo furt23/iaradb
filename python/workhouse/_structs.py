@@ -1,5 +1,5 @@
 """Structs, following Polars: the `struct` namespace of expressions
-(`col("s").struct.field("a")`), `wh.struct(...)` to build one, the `Struct` and
+(`col("s").struct.field("a")`), `F.struct(...)` to build one, the `Struct` and
 `List` data types, and the JSON text helpers behind `str.json_decode` /
 `struct.json_encode`.
 
@@ -20,17 +20,17 @@ _PLAIN_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 def _dtype(t: Any) -> str:
     if not isinstance(t, str):
-        raise TypeError(f"a data type is a name such as 'int64' or wh.Struct(..), not {type(t).__name__}")
+        raise TypeError(f"a data type is a name such as 'int64' or workhouse.Struct(..), not {type(t).__name__}")
     return t
 
 
 def List(inner: Any) -> str:  # noqa: N802
-    """The type of lists of `inner`: ``wh.List("int64")``."""
+    """The type of lists of `inner`: ``workhouse.List("int64")``."""
     return f"list<{_dtype(inner)}>"
 
 
 def Struct(fields: Mapping[str, Any] | Iterable[tuple[str, Any]]) -> str:  # noqa: N802
-    """The type of structs: ``wh.Struct({"a": "int64", "b": wh.List("utf8")})``."""
+    """The type of structs: ``workhouse.Struct({"a": "int64", "b": workhouse.List("utf8")})``."""
     items = list(fields.items() if isinstance(fields, Mapping) else fields)
     if not items:
         raise ValueError("a struct type needs at least one field")
@@ -53,8 +53,8 @@ def struct(*exprs: Any, **named: Any) -> Expr:
     """A struct of the given expressions: fields are named like the expressions
     (a column keeps its name, an aliased expression its alias) or by keyword.
 
-        >>> wh.struct("a", "b")
-        >>> wh.struct(total=wh.col("x") + wh.col("y"))
+        >>> F.struct("a", "b")
+        >>> F.struct(total=F.col("x") + F.col("y"))
     """
     import workhouse as wh
     from workhouse import PyExpr
@@ -131,4 +131,4 @@ class StructNamespace:
         """The struct as JSON text; a null struct is the text ``null`` (Polars)."""
         import workhouse as wh
 
-        return wh.when(self._x.is_null()).then(wh.lit("null")).otherwise(self._x._f("to_json"))
+        return wh.functions.when(self._x.is_null()).then(wh.functions.lit("null")).otherwise(self._x._f("to_json"))

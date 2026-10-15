@@ -1,8 +1,12 @@
 """Dependency graph between cells, from their definitions and references.
 
 An edge ``a -> b`` means cell ``b`` reads a name that cell ``a`` defines.
-As in marimo, a name may be defined by a single cell only, and the graph
-must be acyclic; violations are reported per cell instead of being raised.
+
+A name defined by one cell is read from it wherever the reader is (as in
+marimo). A name several cells define (``df = ...`` then ``df = df.filter(...)``)
+is read from the nearest of them above the reader, as in a script; reading
+it above all of them is an error. The graph must be acyclic. Violations are
+reported per cell instead of being raised.
 """
 
 from __future__ import annotations
@@ -22,11 +26,16 @@ class CellDeps:
     #: names this cell reads that other cells define
     refs: tuple[str, ...]
     parents: frozenset[str]
+    #: the cell each of ``refs`` is read from
+    sources: dict[str, str]
+    #: names read above every cell that defines them
+    unresolved: tuple[str, ...] = ()
 
 
 class DependencyGraph:
     def __init__(self, cells: list[Cell]) -> None:
         self.order = [c.id for c in cells]
+        self._position = {cid: i for i, cid in enumerate(self.order)}
         #: the setup cell runs before every other cell (as marimo's does), whether or not they read its names
         self.setup = frozenset(c.id for c in cells if c.setup)
         self.analyses = {c.id: analyze(c) for c in cells}
@@ -42,21 +51,38 @@ class DependencyGraph:
                 self.children[p].add(cid)
         self.errors = self._errors()
 
+    def source(self, cid: str, name: str) -> str | None:
+        """The cell ``cid`` reads ``name`` from (None: no other cell defines it,
+        or it is redefined and no definition is above ``cid``)."""
+        cells = self.definers.get(name, [])
+        if len(cells) == 1:
+            return None if cells[0] == cid else cells[0]
+        above = [d for d in cells if self._position[d] < self._position[cid]]
+        return above[-1] if above else None
+
     def _deps(self, cid: str) -> CellDeps:
         a = self.analyses[cid]
         names = set(a.refs)
         # SQL identifiers name tables case-insensitively
         names |= {self._lower[i.lower()] for i in a.sql_idents if i.lower() in self._lower}
-        refs = sorted(n for n in names if any(d != cid for d in self.definers.get(n, ())))
-        parents = frozenset(d for n in refs for d in self.definers[n] if d != cid)
-        return CellDeps(cid, a, tuple(refs), parents)
+        sources: dict[str, str] = {}
+        unresolved = []
+        for n in sorted(names):
+            if not any(d != cid for d in self.definers.get(n, ())):
+                continue
+            src = self.source(cid, n)
+            if src is None:
+                unresolved.append(n)
+            else:
+                sources[n] = src
+        return CellDeps(cid, a, tuple(sources), frozenset(sources.values()), sources, tuple(unresolved))
 
     def _errors(self) -> dict[str, str]:
         errors = {cid: a.error for cid, a in self.analyses.items() if a.error}
-        for name, cells in self.definers.items():
-            if len(cells) > 1:
-                for cid in cells:
-                    errors.setdefault(cid, f"'{name}' is defined by more than one cell")
+        for cid, d in self.deps.items():
+            if d.unresolved:
+                name = d.unresolved[0]
+                errors.setdefault(cid, f"'{name}' is read before the cells that define it: move this cell below one of them")
         for cycle in self._cycles():
             for cid in cycle:
                 errors.setdefault(cid, "cells form a dependency cycle")

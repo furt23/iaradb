@@ -36,7 +36,8 @@ export interface KernelMethods {
   "notebook.rename": [{ path: string }, NotebookView];
   "notebook.save": [{ cells: Cell[]; persist?: boolean }, NotebookSource];
   /** `cells: null` runs the notebook as opened (a job) */
-  "notebook.run": [{ cells: Cell[] | null; cell_ids: string[] | null }, RunResult];
+  /** `autorun`: dependents of the run cells run too (else they turn stale) */
+  "notebook.run": [{ cells: Cell[] | null; cell_ids: string[] | null; autorun?: boolean }, RunResult];
   /**
    * A widget got a value: the kernel coerces it to the widget's type, then runs the cells that read it
    * (and their descendants). `cells`: the editor's cells, adopted first

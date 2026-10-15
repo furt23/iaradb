@@ -3,7 +3,7 @@ title: DateTime Namespace (Expr.dt)
 description: Extracting date and time components and truncating timestamps.
 ---
 
-Temporal methods are accessed through the `.dt` namespace property on date or timestamp expressions (`col("ts").dt.<method>()`).
+Temporal methods are accessed through the `.dt` namespace property on date or timestamp expressions (`F.col("ts").dt.<method>()`).
 
 ### Date Components
 
@@ -37,16 +37,16 @@ Expr.dt.truncate(unit: str) -> Expr
 
 ### Example
 ```python
->>> import workhouse as wh
->>> from workhouse import col
->>> df = wh.from_dict({"order_date": ["2026-10-09", "2026-12-25"]})
+>>> import workhouse
+>>> from workhouse import functions as F
+>>> df = workhouse.from_dict({"order_date": ["2026-10-09", "2026-12-25"]})
 >>> df.lazy().with_columns(
-...     d=col("order_date").cast("date")
+...     d=F.col("order_date").cast("date")
 ... ).select(
-...     year=col("d").dt.year(),
-...     month=col("d").dt.month(),
-...     quarter=col("d").dt.quarter(),
-...     day=col("d").dt.day()
+...     year=F.col("d").dt.year(),
+...     month=F.col("d").dt.month(),
+...     quarter=F.col("d").dt.quarter(),
+...     day=F.col("d").dt.day()
 ... ).collect().show()
 ┌──────┬───────┬─────────┬─────┐
 │ year │ month │ quarter │ day │

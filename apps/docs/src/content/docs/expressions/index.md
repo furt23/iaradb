@@ -3,59 +3,59 @@ title: Column Expressions (Expr)
 description: Constructing column references, literals, and wildcard expressions.
 ---
 
-In Workhouse, an `Expr` represents a lazily evaluated computation over columns and rows. Expressions compile into vectorized Apache Arrow execution kernels.
+In Workhouse, an `Expr` represents a lazily evaluated computation over columns and rows. Expressions compile into vectorized Apache Arrow execution kernels. The functions that build them live in the `workhouse.functions` module, imported as `F` in these docs (`sum`, `min`, `max`, `all` and `len` are aggregates there, so import the module rather than `*`).
 
 ```python
-import workhouse as wh
-from workhouse import col, lit
+import workhouse
+from workhouse import functions as F
 ```
 
 ---
 
-### `wh.col`
+### `F.col`
 
 Constructs an expression referencing a column by name. Passing `"*"` references all columns; passing multiple names returns a list of expressions.
 
 ```python
-wh.col(name: str, *more: str) -> Expr | list[Expr]
+F.col(name: str, *more: str) -> Expr | list[Expr]
 ```
 
 #### Example
 ```python
->>> col("price")
+>>> F.col("price")
 <Expr col(price)>
->>> col("a", "b", "c")
+>>> F.col("a", "b", "c")
 [<Expr col(a)>, <Expr col(b)>, <Expr col(c)>]
->>> col("*")
+>>> F.col("*")
 <Expr wildcard(*)>
 ```
 
 ---
 
-### `wh.lit`
+### `F.lit`
 
 Constructs a literal constant expression. Python numbers, strings, booleans, dates, and timestamps are converted to Arrow scalar constants.
 
 ```python
-wh.lit(value: Any) -> Expr
+F.lit(value: Any) -> Expr
 ```
 
 #### Example
 ```python
->>> lit(42)
+>>> F.lit(42)
 <Expr lit(42)>
->>> lit("active")
+>>> F.lit("active")
 <Expr lit(active)>
 ```
 
 ---
 
-### `wh.all`
+### `F.all`
 
-Returns a wildcard expression selecting all columns. Equivalent to `col("*")`.
+Returns a wildcard expression selecting all columns. Equivalent to `F.col("*")`.
 
 ```python
-wh.all() -> Expr
+F.all() -> Expr
 ```
 
 ---

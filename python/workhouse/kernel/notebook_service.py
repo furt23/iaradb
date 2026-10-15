@@ -1,7 +1,10 @@
-"""The open notebook: its source, cell states, values and reactive execution.
+"""The open notebook: its source, cell states, values and execution.
 
-Running a cell also runs every cell that depends on it (and ancestors that
-never ran or were edited since), in dependency order, as marimo does.
+Running a cell runs it, and the cells it reads from that have no value yet
+(never ran, or failed). The cells that read its values are marked stale, not
+run: nothing runs unless asked. With ``autorun`` (a notebook setting in the
+Studio) they run too, as marimo does, and so do edited ancestors. Running
+all cells, and changing a widget, runs everything that depends on it.
 
 Notebook files belong to the Studio (protocol v2): it sends a notebook's
 source when opening it and writes back the source the kernel returns on
@@ -35,15 +38,21 @@ class CellState:
     code_run: str | None = None
     #: status before being queued (restored if the run is interrupted)
     prev_status: str = "idle"
+    #: a cell it reads from ran since it last ran
+    inputs_changed: bool = False
+    #: the frames the last run made: name, kind, rows, columns and types
+    frames: list[dict[str, Any]] = field(default_factory=list)
 
     def view(self, code: str) -> dict[str, Any]:
-        stale = self.code_run is not None and self.code_run != code and self.status in ("done", "error")
+        edited = self.code_run is not None and self.code_run != code
+        stale = (edited or self.inputs_changed) and self.status in ("done", "error")
         return {
             "status": self.status,
             "stale": stale,
             "output": self.output,
             "streams": self.streams,
             "elapsed_ms": self.elapsed_ms,
+            "frames": self.frames,
         }
 
 
@@ -71,7 +80,8 @@ class NotebookService:
         self.ws = ws
         self.runner = runner
         self.notebook: Notebook | None = None
-        self.values: dict[str, Any] = {}
+        #: the values each cell defined in its last run, by cell (a name may be redefined by later cells)
+        self.values: dict[str, dict[str, Any]] = {}
         self.states: dict[str, CellState] = {}
         #: the notebook's widgets (definitions per cell, values): they outlive kernel-side re-adoption of cells
         self.widgets = widgets.Registry()
@@ -147,8 +157,8 @@ class NotebookService:
         alive = {c.id for c in nb.cells}
         for cid in list(self.states):
             if cid not in alive:
-                for name in self.states.pop(cid).defs:
-                    self.values.pop(name, None)
+                self.states.pop(cid)
+                self.values.pop(cid, None)
         for cid in [c for c in self.widgets.cell_ids() if c not in alive]:
             self.widgets.forget_cell(cid)
         return nb
@@ -176,7 +186,7 @@ class NotebookService:
                 s = self.states.get(cid)
                 if s is None or s.status in ("queued", "running"):
                     continue
-                s.status, s.output, s.streams, s.elapsed_ms = "idle", None, [], None
+                s.status, s.output, s.streams, s.elapsed_ms, s.frames = "idle", None, [], None, []
                 cleared += 1
         return {"cleared": cleared}
 
@@ -185,15 +195,24 @@ class NotebookService:
         s = self.states.get(cell.id)
         return s is None or s.status != "done" or s.code_run != cell.code
 
-    def _plan(self, graph: DependencyGraph, nb: Notebook, targets: list[str]) -> list[str]:
+    def _has_value(self, cid: str) -> bool:
+        s = self.states.get(cid)
+        return s is not None and s.status == "done"
+
+    def _plan(self, graph: DependencyGraph, nb: Notebook, targets: list[str], autorun: bool = True) -> list[str]:
         seeds = set(targets)
         # the setup cell comes before any cell: it runs when it never did or was edited
         seeds |= {c for c in graph.setup if self._needs_run(nb.cell(c))} if seeds else set()
         for t in targets:
-            seeds |= {a for a in graph.ancestors(t) if self._needs_run(nb.cell(a))}
+            if autorun:
+                seeds |= {a for a in graph.ancestors(t) if self._needs_run(nb.cell(a))}
+            else:
+                # inputs with a value are read as they are (even if edited since)
+                seeds |= {a for a in graph.ancestors(t) if not self._has_value(a)}
         plan = set(seeds)
-        for s in seeds:
-            plan |= graph.descendants(s)
+        if autorun:
+            for s in seeds:
+                plan |= graph.descendants(s)
         ordered = graph.topological(plan)
         ordered = [c for c in ordered if c in graph.setup] + [c for c in ordered if c not in graph.setup]
         # cells inside a dependency cycle are reported as errors, not skipped
@@ -211,22 +230,25 @@ class NotebookService:
     def _finish(self, cell: Cell, outcome: Outcome, defs: tuple[str, ...]) -> None:
         s = self.states[cell.id]
         s.status, s.output, s.elapsed_ms, s.code_run = outcome.status, outcome.output, outcome.elapsed_ms, cell.code
+        s.frames = outcome.frames
         if outcome.status == "done":
-            self.values.update(outcome.defs)
+            self.values[cell.id] = dict(outcome.defs)
             s.defs = defs
 
     @staticmethod
     def _blocked(reason: str) -> Outcome:
         return Outcome("error", {"type": "error", "ename": "Blocked", "evalue": reason, "traceback": ""})
 
-    def run(self, cells: list[dict[str, Any]] | None, targets: list[str] | None, emit: Emit) -> dict[str, Any]:
+    def run(self, cells: list[dict[str, Any]] | None, targets: list[str] | None, emit: Emit, autorun: bool = False) -> dict[str, Any]:
+        """Run ``targets`` (every cell when None: all of them run); ``autorun``:
+        the cells that read their values run too, instead of turning stale."""
         with self._lock:
             nb = self._sync(cells)
             self._emit_widgets(emit)
             # a snapshot: saves arriving during the run may replace nb.cells
             snapshot = {c.id: c for c in nb.cells}
             graph = DependencyGraph(nb.cells)
-            order = self._plan(graph, nb, targets if targets is not None else graph.order)
+            order = self._plan(graph, nb, targets if targets is not None else graph.order, autorun or targets is None)
             for cid in order:
                 st = self.states.setdefault(cid, CellState())
                 st.prev_status, st.status, st.streams = st.status, "queued", []
@@ -239,8 +261,7 @@ class NotebookService:
             deps = graph.deps[cid]
             defs = tuple(sorted(graph.analyses[cid].defs))
             with self._lock:
-                for name in self.states[cid].defs:
-                    self.values.pop(name, None)
+                self.values.pop(cid, None)
                 self.states[cid].defs = ()
             if cid in graph.errors:
                 outcome = self._blocked(graph.errors[cid])
@@ -250,7 +271,7 @@ class NotebookService:
                 outcome = self._blocked("an upstream cell failed")
             else:
                 with self._lock:
-                    inputs = {r: self.values[r] for r in deps.refs if r in self.values}
+                    inputs = {r: self.values[src][r] for r, src in deps.sources.items() if r in self.values.get(src, {})}
                     self.states[cid].status = "running"
                     self._emit_state(emit, cell)
                 with self.widgets.cell(cid):
@@ -264,8 +285,22 @@ class NotebookService:
                 failed.add(cid)
             if outcome.status == "cancelled":
                 self._unqueue([snapshot[c] for c in order[i + 1 :]], emit)
+                self._mark_stale(graph, snapshot, ran, emit)
                 return {"ran": ran, "interrupted": True}
+        self._mark_stale(graph, snapshot, ran, emit)
         return {"ran": ran, "interrupted": False}
+
+    def _mark_stale(self, graph: DependencyGraph, cells: dict[str, Cell], ran: list[str], emit: Emit) -> None:
+        """The cells that read from cells that ran, and did not run themselves, are stale."""
+        done = set(ran)
+        with self._lock:
+            for cid in done:
+                self.states[cid].inputs_changed = False
+            for cid in sorted({d for c in done for d in graph.descendants(c)} - done, key=graph.order.index):
+                s = self.states.setdefault(cid, CellState())
+                if s.status in ("done", "error") and not s.inputs_changed:
+                    s.inputs_changed = True
+                    self._emit_state(emit, cells[cid])
 
     def set_widget(self, name: str, value: Any, cells: list[dict[str, Any]] | None, emit: Emit) -> dict[str, Any]:
         """A widget got a new value (coerced to its type): the cells that read
@@ -277,7 +312,8 @@ class NotebookService:
             self._emit_widgets(emit)
         if not targets:
             return {"ran": [], "interrupted": False}
-        return self.run(None, targets, emit)
+        # a widget is for exploring: what depends on it runs
+        return self.run(None, targets, emit, autorun=True)
 
     def _unqueue(self, rest: list[Cell], emit: Emit) -> None:
         with self._lock:
@@ -301,10 +337,19 @@ class NotebookService:
 
         return forward
 
-    def namespace(self) -> dict[str, Any]:
-        """A snapshot of the values cells defined."""
+    def namespace(self, cell_id: str | None = None) -> dict[str, Any]:
+        """A snapshot of the values cells defined: as the notebook ends (a
+        redefined name has its last value), or as ``cell_id`` sees them (the
+        nearest definition above it)."""
         with self._lock:
-            return dict(self.values)
+            order = [c.id for c in self.notebook.cells] if self.notebook else list(self.values)
+            out: dict[str, Any] = {}
+            for cid in order:
+                out.update(self.values.get(cid, {}))
+            if cell_id in order:
+                for cid in order[: order.index(cell_id)]:
+                    out.update(self.values.get(cid, {}))
+            return out
 
     def cells(self) -> list[Cell] | None:
         """The cells as of the last save (``None``: no notebook is open)."""
@@ -313,9 +358,14 @@ class NotebookService:
 
     def variables(self) -> list[dict[str, Any]]:
         with self._lock:
-            owners = {n: cid for cid, s in self.states.items() for n in s.defs}
+            order = [c.id for c in self.notebook.cells] if self.notebook else list(self.values)
+            # the last definition of each name, in notebook order
+            last: dict[str, tuple[str, Any]] = {}
+            for cid in order:
+                for n, v in self.values.get(cid, {}).items():
+                    last[n] = (cid, v)
             return [
-                {"name": n, "type": type(v).__name__, "summary": summarize(v), "cell_id": owners.get(n)}
-                for n, v in sorted(self.values.items())
+                {"name": n, "type": type(v).__name__, "summary": summarize(v), "cell_id": cid}
+                for n, (cid, v) in sorted(last.items())
                 if not n.startswith("_") and type(v).__name__ != "module"
             ]

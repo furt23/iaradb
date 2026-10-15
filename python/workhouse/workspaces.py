@@ -53,10 +53,13 @@ import sys
 from dataclasses import dataclass, field
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from workhouse.sqlwrite import WriteResult, is_schema_statement, is_write
 from workhouse.storage import is_remote, list_files, secret_keys
+
+if TYPE_CHECKING:  # the return types notebooks' completions follow
+    from workhouse import LazyFrame, SessionContext
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -192,7 +195,7 @@ class Workspace:
         return [MAIN, *sorted(names - {MAIN})]
 
     @property
-    def session(self) -> Any:
+    def session(self) -> SessionContext:
         """A ``SessionContext`` with every catalog table registered (built once)."""
         if self._session is None:
             from workhouse import SessionContext, set_storage_options
@@ -249,7 +252,7 @@ class Workspace:
         """Where created tables go: a local folder (absolute) or a URL."""
         return resolve_path(self.warehouse or "warehouse", self.root)
 
-    def sql(self, query: str, params: Any = None, **tables: Any) -> Any:
+    def sql(self, query: str, params: Any = None, **tables: Any) -> LazyFrame:
         """Run SQL over the catalog plus extra tables given as keyword arguments
         (DataFrames, LazyFrames, pyarrow / pandas / polars tables; other values
         are ignored, so notebooks can pass every name a query mentions).
@@ -269,7 +272,7 @@ class Workspace:
             ctx.register(name, obj)
         return ctx
 
-    def _write(self, query: str, extra: dict[str, Any], params: Any = None) -> Any:
+    def _write(self, query: str, extra: dict[str, Any], params: Any = None) -> LazyFrame:
         """Run a statement that writes or changes schemas; the tables and schemas
         it creates or drops join or leave the catalog (and the main session, when
         it ran on a fork)."""
@@ -391,7 +394,7 @@ class Workspace:
         if self.on_catalog_change:
             self.on_catalog_change({"name": name, "entry": entry, "kind": kind})
 
-    def table(self, name: str) -> Any:
+    def table(self, name: str) -> LazyFrame:
         return self.session.table(name)
 
     def spec(self, name: str) -> TableSpec | None:

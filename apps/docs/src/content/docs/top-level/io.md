@@ -3,14 +3,14 @@ title: I/O & Constructor Functions
 description: Global functions for loading, creating, and querying data.
 ---
 
-### `wh.scan_parquet`
+### `workhouse.scan_parquet`
 
 <span class="api-badge api-badge-lazy">Lazy</span>
 
 Lazily scans a Parquet file, a directory of Parquet files, a glob pattern, or an object store URL (`s3://...`).
 
 ```python
-wh.scan_parquet(path: str, storage_options: dict[str, Any] | None = None) -> LazyFrame
+workhouse.scan_parquet(path: str, storage_options: dict[str, Any] | None = None) -> LazyFrame
 ```
 
 #### Parameters
@@ -22,22 +22,22 @@ wh.scan_parquet(path: str, storage_options: dict[str, Any] | None = None) -> Laz
 
 #### Example
 ```python
->>> import workhouse as wh
->>> lf = wh.scan_parquet("data/users.parquet")
+>>> import workhouse
+>>> lf = workhouse.scan_parquet("data/users.parquet")
 >>> lf.schema
 {'id': 'int64', 'name': 'utf8', 'age': 'int32'}
 ```
 
 ---
 
-### `wh.scan_csv`
+### `workhouse.scan_csv`
 
 <span class="api-badge api-badge-lazy">Lazy</span>
 
 Lazily scans a CSV file or directory of CSV files.
 
 ```python
-wh.scan_csv(
+workhouse.scan_csv(
     path: str,
     has_header: bool = True,
     separator: str = ",",
@@ -60,26 +60,26 @@ wh.scan_csv(
 
 #### Example
 ```python
->>> lf = wh.scan_csv("data/metrics.csv", separator="\t")
+>>> lf = workhouse.scan_csv("data/metrics.csv", separator="\t")
 >>> lf.columns
 ['timestamp', 'metric_name', 'value']
 ```
 
 ---
 
-### `wh.read_parquet`
+### `workhouse.read_parquet`
 
 <span class="api-badge api-badge-eager">Eager</span>
 
-Eagerly reads Parquet files into a materialized in-memory `DataFrame`. Equivalent to `wh.scan_parquet(...).collect()`.
+Eagerly reads Parquet files into a materialized in-memory `DataFrame`. Equivalent to `workhouse.scan_parquet(...).collect()`.
 
 ```python
-wh.read_parquet(path: str, storage_options: dict[str, Any] | None = None) -> DataFrame
+workhouse.read_parquet(path: str, storage_options: dict[str, Any] | None = None) -> DataFrame
 ```
 
 #### Example
 ```python
->>> df = wh.read_parquet("data/small.parquet")
+>>> df = workhouse.read_parquet("data/small.parquet")
 >>> df.show(2)
 ┌─────┬───────┐
 │ id  │ value │
@@ -92,38 +92,38 @@ wh.read_parquet(path: str, storage_options: dict[str, Any] | None = None) -> Dat
 
 ---
 
-### `wh.read_csv`
+### `workhouse.read_csv`
 
 <span class="api-badge api-badge-eager">Eager</span>
 
 Eagerly reads CSV files into an in-memory `DataFrame`.
 
 ```python
-wh.read_csv(path: str, **kwargs: Any) -> DataFrame
+workhouse.read_csv(path: str, **kwargs: Any) -> DataFrame
 ```
 
 #### Example
 ```python
->>> df = wh.read_csv("data/cities.csv")
+>>> df = workhouse.read_csv("data/cities.csv")
 >>> len(df)
 250
 ```
 
 ---
 
-### `wh.from_dict`
+### `workhouse.from_dict`
 
 <span class="api-badge api-badge-eager">Eager</span>
 
 Constructs an in-memory `DataFrame` from a dictionary mapping column names to sequences.
 
 ```python
-wh.from_dict(data: Mapping[str, Sequence[Any]]) -> DataFrame
+workhouse.from_dict(data: Mapping[str, Sequence[Any]]) -> DataFrame
 ```
 
 #### Example
 ```python
->>> df = wh.from_dict({"item": ["apple", "banana"], "stock": [50, 120]})
+>>> df = workhouse.from_dict({"item": ["apple", "banana"], "stock": [50, 120]})
 >>> df.show()
 ┌────────┬───────┐
 │ item   │ stock │
@@ -136,77 +136,77 @@ wh.from_dict(data: Mapping[str, Sequence[Any]]) -> DataFrame
 
 ---
 
-### `wh.from_arrow`
+### `workhouse.from_arrow`
 
 <span class="api-badge api-badge-eager">Eager</span>
 
 Imports any tabular object implementing the Arrow C Stream protocol (`pyarrow.Table`, `pyarrow.RecordBatchReader`, etc.) zero-copy.
 
 ```python
-wh.from_arrow(data: Any) -> DataFrame
+workhouse.from_arrow(data: Any) -> DataFrame
 ```
 
 #### Example
 ```python
 >>> import pyarrow as pa
 >>> table = pa.table({"x": [1, 2], "y": [3.5, 4.5]})
->>> df = wh.from_arrow(table)
+>>> df = workhouse.from_arrow(table)
 >>> df.shape
 (2, 2)
 ```
 
 ---
 
-### `wh.from_pandas`
+### `workhouse.from_pandas`
 
 <span class="api-badge api-badge-eager">Eager</span>
 
 Constructs a Workhouse `DataFrame` from a Pandas DataFrame without index preservation.
 
 ```python
-wh.from_pandas(df: Any) -> DataFrame
+workhouse.from_pandas(df: Any) -> DataFrame
 ```
 
 #### Example
 ```python
 >>> import pandas as pd
 >>> pdf = pd.DataFrame({"a": [10, 20], "b": ["x", "y"]})
->>> df = wh.from_pandas(pdf)
+>>> df = workhouse.from_pandas(pdf)
 >>> df.columns
 ['a', 'b']
 ```
 
 ---
 
-### `wh.from_polars`
+### `workhouse.from_polars`
 
 <span class="api-badge api-badge-eager">Eager</span>
 
 Constructs a Workhouse `DataFrame` from a Polars DataFrame via the Arrow C Stream interface.
 
 ```python
-wh.from_polars(df: Any) -> DataFrame
+workhouse.from_polars(df: Any) -> DataFrame
 ```
 
 #### Example
 ```python
 >>> import polars as pl
 >>> pldf = pl.DataFrame({"k": ["alpha", "beta"], "v": [1, 2]})
->>> df = wh.from_polars(pldf)
+>>> df = workhouse.from_polars(pldf)
 >>> df.height
 2
 ```
 
 ---
 
-### `wh.sql`
+### `workhouse.sql`
 
 <span class="api-badge api-badge-lazy">Lazy</span>
 
 Executes an ANSI SQL query against passed frames or registered tables.
 
 ```python
-wh.sql(query: str, **tables: Any) -> LazyFrame
+workhouse.sql(query: str, **tables: Any) -> LazyFrame
 ```
 
 #### Parameters
@@ -218,8 +218,8 @@ wh.sql(query: str, **tables: Any) -> LazyFrame
 
 #### Example
 ```python
->>> orders = wh.from_dict({"order_id": [101, 102], "amount": [45.0, 80.0]})
->>> lf = wh.sql("SELECT order_id, amount * 1.05 AS total FROM t WHERE amount > 50", t=orders)
+>>> orders = workhouse.from_dict({"order_id": [101, 102], "amount": [45.0, 80.0]})
+>>> lf = workhouse.sql("SELECT order_id, amount * 1.05 AS total FROM t WHERE amount > 50", t=orders)
 >>> lf.collect().show()
 ┌──────────┬───────┐
 │ order_id │ total │
@@ -231,17 +231,17 @@ wh.sql(query: str, **tables: Any) -> LazyFrame
 
 ---
 
-### `wh.workspace`
+### `workhouse.workspace`
 
 Loads an engine session configured from a local or parent `workhouse.toml` catalog file.
 
 ```python
-wh.workspace(path: str | None = None) -> Any
+workhouse.workspace(path: str | None = None) -> Any
 ```
 
 #### Example
 ```python
->>> ws = wh.workspace()
+>>> ws = workhouse.workspace()
 >>> ws.tables()
 ['nation', 'region', 'customer', 'orders']
 >>> lf = ws.table("orders")

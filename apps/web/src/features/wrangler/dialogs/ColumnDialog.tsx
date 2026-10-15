@@ -18,9 +18,10 @@ import Tabs from "@mui/material/Tabs";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import type { ColumnInfo } from "@workhouse/protocol";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { CastTargetType, WranglerStep } from "../types";
+import { typeLabel } from "@/lib/format";
 
 interface Props {
   open: boolean;
@@ -31,12 +32,12 @@ interface Props {
 }
 
 const DATA_TYPES: { type: CastTargetType; label: string }[] = [
-  { type: "int64", label: "Integer (int64)" },
-  { type: "float64", label: "Floating point (float64)" },
-  { type: "utf8", label: "String / Text (utf8)" },
-  { type: "bool", label: "Boolean (true / false)" },
-  { type: "date", label: "Date (YYYY-MM-DD)" },
-  { type: "timestamp", label: "Timestamp (Date & Time)" },
+  { type: "int64", label: "Integer" },
+  { type: "float64", label: "Float" },
+  { type: "utf8", label: "Text" },
+  { type: "bool", label: "Boolean" },
+  { type: "date", label: "Date" },
+  { type: "timestamp", label: "Timestamp" },
 ];
 
 export function ColumnDialog({ open, columns, defaultColumn, onClose, onApply }: Props) {
@@ -46,6 +47,15 @@ export function ColumnDialog({ open, columns, defaultColumn, onClose, onApply }:
   const [targetType, setTargetType] = useState<CastTargetType>("int64");
   const [dropList, setDropList] = useState<string[]>(defaultColumn ? [defaultColumn] : []);
   const [roundDecimals, setRoundDecimals] = useState<number>(2);
+
+  useEffect(() => {
+    if (open) {
+      const col = defaultColumn || columns[0]?.name || "";
+      setColumn(col);
+      setNewName(col ? `${col}_renamed` : "");
+      setDropList(col ? [col] : []);
+    }
+  }, [open, defaultColumn, columns]);
 
   const handleApply = () => {
     if (tab === "rename") {
@@ -94,7 +104,7 @@ export function ColumnDialog({ open, columns, defaultColumn, onClose, onApply }:
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
-      <DialogTitle>Column Transformations</DialogTitle>
+      <DialogTitle>Columns</DialogTitle>
       <Tabs
         value={tab}
         onChange={(_, v) => setTab(v)}
@@ -103,10 +113,10 @@ export function ColumnDialog({ open, columns, defaultColumn, onClose, onApply }:
         sx={{ px: 2, borderBottom: 1, borderColor: "divider" }}
       >
         <Tab value="rename" label="Rename" />
-        <Tab value="cast" label="Change Type" />
+        <Tab value="cast" label="Change type" />
         <Tab value="drop" label="Drop" />
         <Tab value="round" label="Round" />
-        <Tab value="encode" label="One-Hot" />
+        <Tab value="encode" label="One-hot" />
       </Tabs>
 
       <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, pt: 2 }}>
@@ -116,7 +126,7 @@ export function ColumnDialog({ open, columns, defaultColumn, onClose, onApply }:
             <Select value={column} label="Column" onChange={(e) => setColumn(e.target.value)}>
               {columns.map((c) => (
                 <MenuItem key={c.name} value={c.name}>
-                  {c.name} ({c.type})
+                  {c.name} ({typeLabel(c.type)})
                 </MenuItem>
               ))}
             </Select>
@@ -125,19 +135,19 @@ export function ColumnDialog({ open, columns, defaultColumn, onClose, onApply }:
 
         {tab === "rename" && (
           <TextField
-            label="New Column Name"
+            label="New name"
             size="small"
             fullWidth
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
-            placeholder="Enter new name..."
+            placeholder="customer_name"
           />
         )}
 
         {tab === "cast" && (
           <FormControl fullWidth size="small">
-            <InputLabel>Target Data Type</InputLabel>
-            <Select value={targetType} label="Target Data Type" onChange={(e) => setTargetType(e.target.value as CastTargetType)}>
+            <InputLabel>Type</InputLabel>
+            <Select value={targetType} label="Type" onChange={(e) => setTargetType(e.target.value as CastTargetType)}>
               {DATA_TYPES.map((d) => (
                 <MenuItem key={d.type} value={d.type}>
                   {d.label}
@@ -154,13 +164,13 @@ export function ColumnDialog({ open, columns, defaultColumn, onClose, onApply }:
               multiple
               value={dropList}
               onChange={(e) => setDropList(typeof e.target.value === "string" ? e.target.value.split(",") : e.target.value)}
-              input={<OutlinedInput label="Columns to Drop" />}
+              input={<OutlinedInput label="Columns to drop" />}
               renderValue={(selected) => selected.join(", ")}
             >
               {columns.map((c) => (
                 <MenuItem key={c.name} value={c.name}>
                   <Checkbox size="small" checked={dropList.indexOf(c.name) > -1} />
-                  <ListItemText primary={c.name} secondary={c.type} />
+                  <ListItemText primary={c.name} secondary={typeLabel(c.type)} />
                 </MenuItem>
               ))}
             </Select>
@@ -169,7 +179,7 @@ export function ColumnDialog({ open, columns, defaultColumn, onClose, onApply }:
 
         {tab === "round" && (
           <TextField
-            label="Decimal Places"
+            label="Decimal places"
             type="number"
             size="small"
             fullWidth
@@ -189,7 +199,7 @@ export function ColumnDialog({ open, columns, defaultColumn, onClose, onApply }:
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
         <Button variant="contained" onClick={handleApply}>
-          Apply Transformation
+          Apply
         </Button>
       </DialogActions>
     </Dialog>

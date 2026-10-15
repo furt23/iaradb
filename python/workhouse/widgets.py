@@ -1,9 +1,9 @@
 """Notebook widgets: named inputs a notebook reads, like Databricks' ``dbutils.widgets``.
 
     >>> import workhouse as wh
-    >>> wh.widgets.dropdown("region", "north", ["north", "south"])
+    >>> workhouse.widgets.dropdown("region", "north", ["north", "south"])
     'north'
-    >>> wh.widgets.get("region")
+    >>> workhouse.widgets.get("region")
     'north'
 
 Each call defines (or updates) the widget and returns its current value.
@@ -272,7 +272,7 @@ class Registry:
                 return self._values.get(name, d.default)
             if self.env and env_name(name) in os.environ:
                 return os.environ[env_name(name)]
-        raise ValueError(f"widget {name!r} is not defined: define it first, e.g. wh.widgets.text({name!r})")
+        raise ValueError(f"widget {name!r} is not defined: define it first, e.g. workhouse.widgets.text({name!r})")
 
     def set(self, name: str, value: Any) -> Any:
         """Set a defined widget (the value is coerced; ``ValueError`` when it is invalid)."""

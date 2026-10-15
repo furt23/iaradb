@@ -29,6 +29,8 @@ describe("missingAuth0Config", () => {
 describe("studioUser", () => {
   it("accepts verified emails on the allowlist, ignoring case", () => {
     expect(studioUser({ email: "a@X.com", email_verified: true, name: "A" }, env)).toEqual({ email: "a@x.com", name: "A", admin: true });
+    expect(studioUser({ email: "a@x.com", email_verified: true, picture: "https://cdn/a.png" }, env)?.picture).toBe("https://cdn/a.png");
+    expect(studioUser({ email: "a@x.com", email_verified: true, picture: "javascript:alert(1)" }, env)?.picture).toBeUndefined();
     expect(studioUser({ email: "b@x.com", email_verified: true }, env)).toEqual({ email: "b@x.com", name: "b@x.com", admin: false });
   });
   it("refuses unverified, unlisted and missing emails", () => {

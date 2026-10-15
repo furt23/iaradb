@@ -9,6 +9,7 @@ import pyarrow.compute as pc
 import pytest
 
 import workhouse as wh
+from workhouse import functions as F
 from workhouse.kernel.runtime.results import ResultStore
 from workhouse.kernel.runtime.spool import Spool, parse_size
 
@@ -44,9 +45,9 @@ def test_small_results_stay_in_memory(lf: wh.LazyFrame, tmp_path: Path) -> None:
 
 def test_large_results_go_to_disk(lf: wh.LazyFrame, tmp_path: Path) -> None:
     spool = Spool(threshold=64 << 10, root=str(tmp_path))
-    spooled = spool.collect(lf.filter(wh.col("g") < 10).stream())
+    spooled = spool.collect(lf.filter(F.col("g") < 10).stream())
     assert spooled.path is not None and spooled.path.is_file() and tmp_path in spooled.path.parents
-    expected = lf.filter(wh.col("g") < 10).collect().to_arrow()
+    expected = lf.filter(F.col("g") < 10).collect().to_arrow()
     assert spooled.table.equals(expected)
     # the DataFrame of the cell's output variable reads the mapped file
     assert wh.from_arrow(spooled.table).height == expected.num_rows

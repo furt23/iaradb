@@ -1,10 +1,10 @@
-import { catalogTables } from "@/server/workspace/catalog";
 import { WranglePageContent } from "@/features/wrangler/WranglePageContent";
+import { catalogTables } from "@/server/workspace/catalog";
 
 export const dynamic = "force-dynamic";
 
-/** Visual Data Wrangler page: interactive data preparation and recipe builder. */
+/** The wrangler before a table is picked in the catalog. */
 export default async function WranglePage() {
   const tables = await catalogTables().catch(() => []);
-  return <WranglePageContent tables={tables} />;
+  return <WranglePageContent table={null} known={false} hasTables={tables.length > 0} />;
 }

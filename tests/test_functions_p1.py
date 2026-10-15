@@ -17,6 +17,7 @@ import pyarrow.compute as pc
 import pytest
 
 import workhouse as wh
+from workhouse import functions as F
 
 sys.path.insert(0, os.path.dirname(__file__))
 from compare import diff  # noqa: E402
@@ -181,7 +182,7 @@ def both(table: pa.Table, build_wh, build_pl) -> None:
 
 
 def test_expr_math(table):
-    w, p = wh.col, pl.col
+    w, p = F.col, pl.col
     both(table, lambda: w("n").clip(-1, 3).alias("r"), lambda: p("n").clip(-1, 3).alias("r"))
     both(table, lambda: w("n").clip(None, 3).alias("r"), lambda: p("n").clip(upper_bound=3).alias("r"))
     both(table, lambda: w("n").sign().alias("r"), lambda: p("n").sign().alias("r"))
@@ -191,7 +192,7 @@ def test_expr_math(table):
 
 
 def test_expr_dates(table):
-    w, p = wh.col, pl.col
+    w, p = F.col, pl.col
     both(table, lambda: w("ts").dt.strftime("%Y-%m-%d %H:%M").alias("r"), lambda: p("ts").dt.strftime("%Y-%m-%d %H:%M").alias("r"))
     both(table, lambda: w("d").dt.month_end().alias("r"), lambda: p("d").dt.month_end().alias("r"))
     both(table, lambda: w("d").dt.month_start().alias("r"), lambda: p("d").dt.month_start().alias("r"))
@@ -203,11 +204,11 @@ def test_expr_dates(table):
     both(table, lambda: w("tss").str.to_datetime("%Y-%m-%d %H:%M:%S", strict=False).alias("r"),
          lambda: p("tss").str.to_datetime("%Y-%m-%d %H:%M:%S", strict=False).alias("r"))
     with pytest.raises(Exception):
-        wh.from_arrow(table).select(wh.col("ds").str.to_date("%Y-%m-%d"))
+        wh.from_arrow(table).select(F.col("ds").str.to_date("%Y-%m-%d"))
 
 
 def test_expr_strings(table):
-    w, p = wh.col, pl.col
+    w, p = F.col, pl.col
     both(table, lambda: w("s").str.contains("^a").alias("r"), lambda: p("s").str.contains("^a").alias("r"))
     both(table, lambda: w("s").str.contains("l.", literal=True).alias("r"), lambda: p("s").str.contains("l.", literal=True).alias("r"))
     both(table, lambda: w("s").str.replace("[0-9]+", "#").alias("r"), lambda: p("s").str.replace("[0-9]+", "#").alias("r"))

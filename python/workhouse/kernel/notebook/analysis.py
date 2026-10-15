@@ -27,7 +27,8 @@ WORKSPACE_VAR = "ws"
 class Analysis:
     #: public names bound at the cell's top level
     defs: frozenset[str] = frozenset()
-    #: free names the cell reads (candidates for references to other cells)
+    #: names the cell reads from outside: free names, and names it reads
+    #: before binding them itself (candidates for references to other cells)
     refs: frozenset[str] = frozenset()
     #: identifiers that may name tables (SQL cells; matched case-insensitively)
     sql_idents: frozenset[str] = frozenset()
@@ -96,7 +97,9 @@ def analyze_python(code: str) -> Analysis:
     except SyntaxError as e:
         return Analysis(error=f"SyntaxError: {e.msg} (line {e.lineno})")
     scope = module_scope(tree)
-    refs = {n for n in scope.free() - scope.bound if n not in _BUILTINS and not is_private(n)}
+    # free names, and names read before the cell rebinds them (`df = df.filter(...)`)
+    read = (scope.free() - scope.bound) | (scope.early & scope.bound)
+    refs = {n for n in read if n not in _BUILTINS and not is_private(n)}
     defs = {n for n in scope.bound if not is_private(n)}
     private = {n for n in scope.bound if is_private(n)}
     wdefs, wreads = widget_calls(tree)

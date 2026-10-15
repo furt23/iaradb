@@ -11,6 +11,7 @@ import pyarrow as pa
 import pytest
 
 import workhouse as wh
+from workhouse import functions as F
 from workhouse.kernel import catalog
 from workhouse.workspaces import parse_config
 
@@ -104,7 +105,7 @@ def test_write_and_read_back(endpoint: str) -> None:
     rows = 3_000_000  # ~24 MB uncompressed: more than one 16 MiB part
     df = wh.from_arrow(pa.table({"i": np.arange(rows), "x": np.random.default_rng(1).random(rows)}))
     df.write_parquet(f"s3://{BUCKET}/out/big.parquet", compression="none")
-    back = wh.scan_parquet(f"s3://{BUCKET}/out/big.parquet").select(wh.col("i").sum().alias("s")).collect().item()
+    back = wh.scan_parquet(f"s3://{BUCKET}/out/big.parquet").select(F.col("i").sum().alias("s")).collect().item()
     assert back == rows * (rows - 1) // 2
     small = wh.from_dict({"a": [1, 2, 3], "b": ["x", "y", "z"]})
     small.write_csv(f"s3://{BUCKET}/out/small.csv")

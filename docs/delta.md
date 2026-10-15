@@ -54,8 +54,8 @@ SELECT * FROM read_delta('s3://my-bucket/orders', version => 3);
 ```
 
 ```python
-wh.read_delta("warehouse/sales/orders", version=3)
-wh.scan_delta("warehouse/sales/orders", timestamp="2026-10-01 12:00:00")
+workhouse.read_delta("warehouse/sales/orders", version=3)
+workhouse.scan_delta("warehouse/sales/orders", timestamp="2026-10-01 12:00:00")
 ```
 
 Time travel needs a Delta table. On another format it is refused.
@@ -97,8 +97,8 @@ An overwrite keeps the table's schema and partitioning. `schema_mode="merge"` (P
 ## Python
 
 ```python
-lf = wh.scan_delta("warehouse/sales/orders", version=None)
-df = wh.read_delta("warehouse/sales/orders", version=3)
+lf = workhouse.scan_delta("warehouse/sales/orders", version=None)
+df = workhouse.read_delta("warehouse/sales/orders", version=3)
 
 lf.sink_delta("warehouse/sales/daily", mode="overwrite", partition_by=["region"])
 df.write_delta("warehouse/sales/copy", mode="append", schema_mode="merge")
@@ -123,7 +123,7 @@ A commit writes the next `_delta_log/<version>.json` only if the file does not e
 Object stores without conditional writes cannot do this. For those, set the storage option `single_writer` to `true`. The engine then checks for the file and writes it, in two steps. Use it only when one process writes to the table.
 
 ```python
-wh.set_storage_options("s3://my-bucket", {"single_writer": "true"})
+workhouse.set_storage_options("s3://my-bucket", {"single_writer": "true"})
 ```
 
 Checkpoints are written after every 10 commits (versions 10, 20, ...), so readers do not replay the whole log.

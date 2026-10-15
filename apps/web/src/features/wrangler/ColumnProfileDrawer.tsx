@@ -15,6 +15,7 @@ import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 
 import type { WrangleProfile } from "@workhouse/protocol";
+import { typeLabel } from "@/lib/format";
 
 interface Props {
   /** "loading" while the kernel computes it */
@@ -51,12 +52,12 @@ export function ColumnProfileDrawer({ profile, onClose, onFilterValue }: Props) 
       </Box>
 
       <Box sx={{ display: "flex", gap: 1, mb: 2 }}>
-        <Chip label={profile.type} size="small" variant="outlined" sx={{ fontFamily: "var(--mono)", fontSize: 11 }} />
+        <Chip label={typeLabel(profile.type)} title={profile.type} size="small" variant="outlined" sx={{ fontSize: 11 }} />
         <Chip label={`${profile.total} rows`} size="small" variant="outlined" />
       </Box>
 
       <Typography variant="overline" sx={{ color: "text.secondary", fontSize: 10 }}>
-        Data Quality & Completeness
+        Completeness
       </Typography>
       <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 1, my: 1 }}>
         <Box sx={{ p: 1, border: 1, borderColor: "divider", borderRadius: 1, textAlign: "center" }}>
@@ -83,7 +84,7 @@ export function ColumnProfileDrawer({ profile, onClose, onFilterValue }: Props) 
         <>
           <Divider sx={{ my: 2 }} />
           <Typography variant="overline" sx={{ color: "text.secondary", fontSize: 10 }}>
-            Numeric Statistics
+            Statistics
           </Typography>
           <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, my: 1 }}>
             <Box sx={{ display: "flex", justifyContent: "space-between", py: 0.25 }}>
@@ -113,7 +114,7 @@ export function ColumnProfileDrawer({ profile, onClose, onFilterValue }: Props) 
             {profile.std !== null && profile.std !== undefined && (
               <Box sx={{ display: "flex", justifyContent: "space-between", py: 0.25, gridColumn: "span 2" }}>
                 <Typography variant="body2" sx={{ color: "text.secondary" }}>
-                  Std Dev:
+                  Std dev:
                 </Typography>
                 <Typography variant="mono">{profile.std}</Typography>
               </Box>
@@ -125,7 +126,7 @@ export function ColumnProfileDrawer({ profile, onClose, onFilterValue }: Props) 
       <Divider sx={{ my: 2 }} />
       <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 1 }}>
         <Typography variant="overline" sx={{ color: "text.secondary", fontSize: 10 }}>
-          Top Values Frequency
+          Top values
         </Typography>
         <Typography variant="caption" sx={{ color: "text.secondary" }}>
           {profile.top.length} of {profile.distinct}

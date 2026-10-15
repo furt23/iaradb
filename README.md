@@ -3,19 +3,19 @@
 A parallel query engine for analytics on a single machine. The core is written in Rust on Apache Arrow. It is used from Python, through a lazy DataFrame API and SQL, and from Workhouse Studio, a web workspace for notebooks and SQL.
 
 ```python
-import workhouse as wh
-from workhouse import col
+import workhouse
+from workhouse import functions as F
 
 revenue = (
-    wh.scan_parquet("data/lineitem")
-    .join(wh.scan_parquet("data/orders"), left_on="l_orderkey", right_on="o_orderkey")
+    workhouse.scan_parquet("data/lineitem")
+    .join(workhouse.scan_parquet("data/orders"), left_on="l_orderkey", right_on="o_orderkey")
     .group_by("o_orderpriority")
-    .agg(revenue=(col("l_extendedprice") * (1 - col("l_discount"))).sum())
+    .agg(revenue=(F.col("l_extendedprice") * (1 - F.col("l_discount"))).sum())
     .sort("revenue", descending=True)
     .collect()
 )
 
-wh.sql("select k, sum(v) from t group by k", t=arrow_table)   # pyarrow, pandas or polars inputs
+workhouse.sql("select k, sum(v) from t group by k", t=arrow_table)   # pyarrow, pandas or polars inputs
 ```
 
 ## What it does

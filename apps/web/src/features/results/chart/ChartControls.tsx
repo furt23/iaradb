@@ -42,7 +42,7 @@ export function ChartControls({ spec, columns, onChange }: { spec: ChartSpec; co
   const histogram = spec.kind === "histogram";
   const counting = spec.agg === "count";
   return (
-    <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 1.5, px: 1.5, py: 1, borderBottom: 1, borderColor: "divider" }}>
+    <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: 1.5, px: 1.5, py: 1, borderBottom: 1, borderColor: "divider" }}>
       <ToggleButtonGroup size="small" exclusive value={spec.kind} onChange={(_, kind: ChartKind | null) => kind && set({ kind })} aria-label="chart kind">
         {KINDS.map((k) => (
           <Tooltip key={k.kind} title={k.label}>

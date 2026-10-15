@@ -156,14 +156,14 @@ function WidgetInput(p: InputProps) {
   }
 }
 
-/** The notebook's widgets (`wh.widgets.*`), set from here; nothing is shown while the notebook has none. */
+/** The notebook's widgets (`workhouse.widgets.*`), set from here; nothing is shown while the notebook has none. */
 export function WidgetBar({ widgets, onChange }: WidgetBarProps) {
   if (widgets.definitions.length === 0) return null;
   return (
     <Box
       role="group"
       aria-label="Notebook widgets"
-      sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 1.5, px: { xs: 1, md: 4 }, py: 1.25, flexShrink: 0, borderBottom: 1, borderColor: "divider" }}
+      sx={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: 1.5, px: { xs: 1, md: 4 }, py: 1.25, flexShrink: 0, borderBottom: 1, borderColor: "divider" }}
     >
       {widgets.definitions.map((def) => (
         <WidgetInput key={def.name} def={def} value={widgets.values[def.name]} onChange={onChange} />

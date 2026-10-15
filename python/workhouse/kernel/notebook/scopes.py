@@ -5,6 +5,10 @@ are inlined (PEP 709) and their loop variables show up as module bindings.
 This visitor follows the language rules instead: function, lambda, class and
 comprehension scopes; walrus targets binding in the enclosing function or
 module; ``global`` declarations; class scopes not enclosing nested functions.
+
+Statements are visited in evaluation order (the value of an assignment before
+its targets), so ``early`` holds the names the module reads before binding
+them: ``df = df.filter(...)`` reads the ``df`` another cell defined.
 """
 
 from __future__ import annotations
@@ -20,6 +24,8 @@ class Scope:
     loads: set[str] = field(default_factory=set)
     globals: set[str] = field(default_factory=set)
     children: list[Scope] = field(default_factory=list)
+    #: (module) names read before the module binds them
+    early: set[str] = field(default_factory=set)
 
     def free(self) -> set[str]:
         """Names read in this scope or nested ones that are not bound here."""
@@ -56,11 +62,54 @@ class ScopeVisitor(ast.NodeVisitor):
         self.stack.pop()
 
     # -- names ---------------------------------------------------------------
+    def _load(self, name: str) -> None:
+        self.scope.loads.add(name)
+        if self.scope is self.module and name not in self.module.bound:
+            self.module.early.add(name)
+
     def visit_Name(self, node: ast.Name) -> None:
         if isinstance(node.ctx, ast.Store):
             self._bind(node.id)
         elif isinstance(node.ctx, ast.Load):
-            self.scope.loads.add(node.id)
+            self._load(node.id)
+
+    # -- evaluation order: what an assignment reads comes before what it binds
+    def visit_Assign(self, node: ast.Assign) -> None:
+        self.visit(node.value)
+        for t in node.targets:
+            self.visit(t)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        if isinstance(node.target, ast.Name):
+            self._load(node.target.id)  # `x += 1` reads x
+        self.visit(node.value)
+        self.visit(node.target)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        self.visit(node.annotation)
+        if node.value is not None:
+            self.visit(node.value)
+        self.visit(node.target)
+
+    def _for(self, node: ast.For | ast.AsyncFor) -> None:
+        self.visit(node.iter)
+        self.visit(node.target)
+        for stmt in [*node.body, *node.orelse]:
+            self.visit(stmt)
+
+    visit_For = _for
+    visit_AsyncFor = _for
+
+    def _with(self, node: ast.With | ast.AsyncWith) -> None:
+        for item in node.items:
+            self.visit(item.context_expr)
+            if item.optional_vars is not None:
+                self.visit(item.optional_vars)
+        for stmt in node.body:
+            self.visit(stmt)
+
+    visit_With = _with
+    visit_AsyncWith = _with
 
     def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
         self.visit(node.value)
@@ -161,6 +210,10 @@ class ScopeVisitor(ast.NodeVisitor):
         else:
             self.visit(node.elt)
         self._leave()
+        # a comprehension runs where it stands: what it reads from outside is read now
+        if self.scope is self.module:
+            child = self.scope.children[-1]
+            self.module.early |= {n for n in child.free() if n not in self.module.bound}
 
     visit_ListComp = _comprehension
     visit_SetComp = _comprehension

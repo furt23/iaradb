@@ -34,7 +34,7 @@ export interface NotebookState {
   running: boolean;
   current: RunProgress | null;
   lastRun: RunSummary | null;
-  /** the widgets the cells defined (`wh.widgets.*`) and their values */
+  /** the widgets the cells defined (`workhouse.widgets.*`) and their values */
   widgets: WidgetsState;
 }
 

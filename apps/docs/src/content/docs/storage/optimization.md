@@ -21,7 +21,7 @@ Object stores charge per API operation (LIST and PUT operations are the most exp
 Inspect cumulative storage API usage across your session:
 
 ```python
->>> wh.storage_requests()
+>>> workhouse.storage_requests()
 {'list': 1, 'head': 0, 'get': 12, 'bytes': 35651584}
 ```
 

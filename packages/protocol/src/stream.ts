@@ -11,7 +11,8 @@ export type RunStreamEvent =
 
 /** What a run request asks for. */
 export type RunRequest =
-  | { kind: "notebook"; path: string; cells: Cell[]; cellIds: string[] | null }
+  /** `autorun`: the cells that read the run cells' values run too (else they turn stale) */
+  | { kind: "notebook"; path: string; cells: Cell[]; cellIds: string[] | null; autorun?: boolean }
   /** a widget got a value: the cells that read it run */
   | { kind: "widget"; path: string; cells: Cell[]; name: string; value: WidgetValue }
   | ({ kind: "sql"; query: string } & QueryParams);

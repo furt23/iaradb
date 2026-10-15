@@ -17,9 +17,10 @@ import Tabs from "@mui/material/Tabs";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import type { ColumnInfo } from "@workhouse/protocol";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { TextCaseMode, WranglerStep } from "../types";
+import { typeLabel } from "@/lib/format";
 
 interface Props {
   open: boolean;
@@ -31,13 +32,23 @@ interface Props {
 
 export function TextDialog({ open, columns, defaultColumn, onClose, onApply }: Props) {
   const [tab, setTab] = useState<"trim" | "case" | "replace" | "split">("trim");
-  const [column, setColumn] = useState<string>(defaultColumn || columns.find((c) => c.type.includes("string") || c.type.includes("utf8"))?.name || columns[0]?.name || "");
+  const [column, setColumn] = useState<string>(
+    defaultColumn || columns.find((c) => c.type.toLowerCase().includes("string") || c.type.toLowerCase().includes("utf8"))?.name || columns[0]?.name || ""
+  );
   const [caseMode, setCaseMode] = useState<TextCaseMode>("upper");
   const [pattern, setPattern] = useState<string>("");
   const [replacement, setReplacement] = useState<string>("");
   const [isRegex, setIsRegex] = useState<boolean>(false);
   const [delimiter, setDelimiter] = useState<string>(" ");
   const [parts, setParts] = useState<number>(2);
+
+  useEffect(() => {
+    if (open) {
+      setColumn(
+        defaultColumn || columns.find((c) => c.type.toLowerCase().includes("string") || c.type.toLowerCase().includes("utf8"))?.name || columns[0]?.name || ""
+      );
+    }
+  }, [open, defaultColumn, columns]);
 
   const handleApply = () => {
     if (!column) return;
@@ -76,7 +87,7 @@ export function TextDialog({ open, columns, defaultColumn, onClose, onApply }: P
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
-      <DialogTitle>Text & String Operations</DialogTitle>
+      <DialogTitle>Text</DialogTitle>
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ px: 2, borderBottom: 1, borderColor: "divider" }}>
         <Tab value="trim" label="Trim" />
         <Tab value="case" label="Case" />
@@ -90,7 +101,7 @@ export function TextDialog({ open, columns, defaultColumn, onClose, onApply }: P
           <Select value={column} label="Column" onChange={(e) => setColumn(e.target.value)}>
             {columns.map((c) => (
               <MenuItem key={c.name} value={c.name}>
-                {c.name} ({c.type})
+                {c.name} ({typeLabel(c.type)})
               </MenuItem>
             ))}
           </Select>
@@ -104,11 +115,11 @@ export function TextDialog({ open, columns, defaultColumn, onClose, onApply }: P
 
         {tab === "case" && (
           <FormControl fullWidth size="small">
-            <InputLabel>Target Case</InputLabel>
-            <Select value={caseMode} label="Target Case" onChange={(e) => setCaseMode(e.target.value as TextCaseMode)}>
+            <InputLabel>Case</InputLabel>
+            <Select value={caseMode} label="Case" onChange={(e) => setCaseMode(e.target.value as TextCaseMode)}>
               <MenuItem value="upper">UPPERCASE (all caps)</MenuItem>
               <MenuItem value="lower">lowercase (all small)</MenuItem>
-              <MenuItem value="title">Title Case (Capitalize Each Word)</MenuItem>
+              <MenuItem value="title">Title case (capitalize each word)</MenuItem>
             </Select>
           </FormControl>
         )}
@@ -116,12 +127,12 @@ export function TextDialog({ open, columns, defaultColumn, onClose, onApply }: P
         {tab === "replace" && (
           <>
             <TextField
-              label="Text / Pattern to Find"
+              label="Find"
               size="small"
               fullWidth
               value={pattern}
               onChange={(e) => setPattern(e.target.value)}
-              placeholder="e.g. Inc. or regex"
+              placeholder="Inc."
             />
             <TextField
               label="Replacement"
@@ -129,7 +140,7 @@ export function TextDialog({ open, columns, defaultColumn, onClose, onApply }: P
               fullWidth
               value={replacement}
               onChange={(e) => setReplacement(e.target.value)}
-              placeholder="e.g. Incorporated"
+              placeholder="Incorporated"
             />
             <FormControlLabel
               control={<Checkbox size="small" checked={isRegex} onChange={(e) => setIsRegex(e.target.checked)} />}
@@ -146,7 +157,7 @@ export function TextDialog({ open, columns, defaultColumn, onClose, onApply }: P
               fullWidth
               value={delimiter}
               onChange={(e) => setDelimiter(e.target.value)}
-              placeholder="e.g. comma, space, hyphen"
+              placeholder=","
             />
             <TextField
               label="Number of output columns"
@@ -164,7 +175,7 @@ export function TextDialog({ open, columns, defaultColumn, onClose, onApply }: P
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
         <Button variant="contained" onClick={handleApply}>
-          Apply Transformation
+          Apply
         </Button>
       </DialogActions>
     </Dialog>

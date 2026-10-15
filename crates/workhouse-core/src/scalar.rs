@@ -80,7 +80,7 @@ impl Scalar {
             return Ok(self.clone());
         }
         let opts = CastOptions { safe: false, ..Default::default() };
-        Ok(Scalar(cast_with_options(&self.0, dt, &opts)?))
+        Ok(Scalar(crate::types::cast_array(&self.0, dt, &opts)?))
     }
 
     /// Cast that only succeeds when the value round-trips exactly.

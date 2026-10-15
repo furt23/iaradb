@@ -8,13 +8,13 @@ description: Configuring threads, memory thresholds, and disk spill behavior.
 Workhouse utilizes a global Rayon work-stealing thread pool. By default, it allocates one worker thread per physical CPU core.
 
 ```python
-import workhouse as wh
+import workhouse
 
 # Size the worker pool before running queries
-wh.set_num_threads(8)
+workhouse.set_num_threads(8)
 
 # Check active thread count
-print(wh.num_threads())
+print(workhouse.num_threads())
 ```
 
 ---
@@ -25,10 +25,10 @@ The engine manages operator memory through a centralized memory pool. Beyond the
 
 ```python
 # Set memory limit to 4 gigabytes
-wh.set_memory_limit("4GB")
+workhouse.set_memory_limit("4GB")
 
 # Inspect active memory usage
-metrics = wh.memory_usage()
+metrics = workhouse.memory_usage()
 print(f"Used: {metrics['used']} bytes, Peak: {metrics['peak']} bytes, Spilled: {metrics['spilled']} bytes")
 ```
 

@@ -9,6 +9,7 @@ import { streamEvents } from "@/lib/sse";
 import { interruptKernel, restartKernel } from "@/server/actions/kernels";
 import { clearNotebookOutputs, saveNotebook } from "@/server/actions/notebooks";
 
+import { useAutorun } from "./autorun";
 import { initialState, makeCell, notebookReducer } from "./notebookState";
 
 const AUTOSAVE_MS = 1200;
@@ -25,6 +26,7 @@ export function useNotebook(view: NotebookView, onRunFinished?: () => void) {
   const cellsRef = useRef(state.cells);
   cellsRef.current = state.cells;
   const kernelKey = kernelKeyOf(state.path);
+  const [autorun, setAutorun] = useAutorun(state.path);
 
   const save = useCallback(async () => {
     const r = await saveNotebook(state.path, cellsRef.current);
@@ -75,7 +77,10 @@ export function useNotebook(view: NotebookView, onRunFinished?: () => void) {
     [notify, onRunFinished, save, refreshCatalog],
   );
 
-  const run = useCallback((cellIds: string[] | null) => execute({ kind: "notebook", path: state.path, cells: cellsRef.current, cellIds }), [execute, state.path]);
+  const run = useCallback(
+    (cellIds: string[] | null) => execute({ kind: "notebook", path: state.path, cells: cellsRef.current, cellIds, autorun }),
+    [execute, state.path, autorun],
+  );
 
   /** A widget got a value: the cells that read it run. Changes go to the kernel one after the other. */
   const widgetQueue = useRef<Promise<unknown>>(Promise.resolve());
@@ -140,6 +145,8 @@ export function useNotebook(view: NotebookView, onRunFinished?: () => void) {
   return {
     state,
     kernelKey,
+    autorun,
+    setAutorun,
     save,
     run,
     setWidget,

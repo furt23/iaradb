@@ -15,6 +15,7 @@ import pyarrow as pa
 import pytest
 
 import workhouse as wh
+from workhouse import functions as F
 
 sys.path.insert(0, os.path.dirname(__file__))
 from compare import diff  # noqa: E402
@@ -180,10 +181,10 @@ def _ours(table: pa.Table, *aggs: wh.Expr) -> pa.Table:
 def test_expr_quantile_median_product(table: pa.Table) -> None:
     out = _ours(
         table,
-        wh.col("y").quantile(0.3).alias("q"),
-        wh.col("y").median().alias("m"),
-        wh.col("x").quantile(0.5, "disc").alias("d"),
-        wh.col("x").product().alias("p"),
+        F.col("y").quantile(0.3).alias("q"),
+        F.col("y").median().alias("m"),
+        F.col("x").quantile(0.5, "disc").alias("d"),
+        F.col("x").product().alias("p"),
     )
     exp = _pl(table).group_by("g").agg(
         pl.col("y").quantile(0.3, "linear").alias("q"),
@@ -198,11 +199,11 @@ def test_expr_quantile_median_product(table: pa.Table) -> None:
 def test_expr_bool_and_by(table: pa.Table) -> None:
     out = _ours(
         table,
-        wh.col("b").all().alias("a"),
-        wh.col("b").any().alias("o"),
-        wh.col("s").max_by("x").alias("mx"),
-        wh.col("s").min_by("x").alias("mn"),
-        wh.count_if(wh.col("x") > 2).alias("c"),
+        F.col("b").all().alias("a"),
+        F.col("b").any().alias("o"),
+        F.col("s").max_by("x").alias("mx"),
+        F.col("s").min_by("x").alias("mn"),
+        F.count_if(F.col("x") > 2).alias("c"),
     ).to_pydict()
     assert out["a"] == [False, True, None, False, False]
     assert out["o"] == [True, True, None, True, False]
@@ -210,8 +211,8 @@ def test_expr_bool_and_by(table: pa.Table) -> None:
 
 
 def test_expr_corr_and_trig(table: pa.Table) -> None:
-    out = wh.from_arrow(table).lazy().agg(wh.col("x").corr(wh.col("y")).alias("r")).collect().to_dicts()[0]["r"]
+    out = wh.from_arrow(table).lazy().agg(F.col("x").corr(F.col("y")).alias("r")).collect().to_dicts()[0]["r"]
     exp = _pl(table).select(pl.corr("x", "y")).item()
     assert out == pytest.approx(exp)
-    t = wh.from_arrow(table).lazy().select(wh.col("y").sin().alias("s"), wh.col("y").arctan2(wh.col("y")).alias("a")).collect().to_arrow()
+    t = wh.from_arrow(table).lazy().select(F.col("y").sin().alias("s"), F.col("y").arctan2(F.col("y")).alias("a")).collect().to_arrow()
     assert t.column("s").to_pylist() == pytest.approx(_pl(table).select(pl.col("y").sin()).to_series().to_list(), nan_ok=True)

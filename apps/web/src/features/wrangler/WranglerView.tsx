@@ -1,6 +1,5 @@
 "use client";
 
-import AutoFixHigh from "@mui/icons-material/AutoFixHigh";
 import BarChartOutlined from "@mui/icons-material/BarChartOutlined";
 import CleaningServicesOutlined from "@mui/icons-material/CleaningServicesOutlined";
 import Code from "@mui/icons-material/Code";
@@ -9,7 +8,6 @@ import TextFieldsOutlined from "@mui/icons-material/TextFieldsOutlined";
 import ViewColumnOutlined from "@mui/icons-material/ViewColumnOutlined";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
-import Chip from "@mui/material/Chip";
 import IconButton from "@mui/material/IconButton";
 import Alert from "@mui/material/Alert";
 import LinearProgress from "@mui/material/LinearProgress";
@@ -19,7 +17,7 @@ import { DataGrid, type GridColDef } from "@mui/x-data-grid";
 import type { CellValue, WranglePreview, WrangleProfile, WrangleSource } from "@workhouse/protocol";
 import { useEffect, useMemo, useState } from "react";
 
-import { isNumericType } from "@/lib/format";
+import { formatCount, isNumericType, typeLabel } from "@/lib/format";
 import { ColumnProfileDrawer } from "./ColumnProfileDrawer";
 import { QualityBar } from "./QualityBar";
 import { RecipeSidebar } from "./RecipeSidebar";
@@ -28,7 +26,6 @@ import { ColumnDialog } from "./dialogs/ColumnDialog";
 import { ExportDialog } from "./dialogs/ExportDialog";
 import { FilterDialog } from "./dialogs/FilterDialog";
 import { TextDialog } from "./dialogs/TextDialog";
-import { formatCount } from "@/lib/format";
 import { previewRecipe, profileRecipeColumn } from "@/server/actions/wrangle";
 import type { WranglerStep } from "./types";
 
@@ -180,8 +177,8 @@ export function WranglerView({ kernelKey, source, label, height = "100%" }: Prop
               </Box>
 
               <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mt: 0.25 }}>
-                <Typography variant="mono" sx={{ fontSize: 10.5, color: "text.disabled" }}>
-                  {c.type}
+                <Typography sx={{ fontSize: 10.5, color: "text.disabled" }} title={c.type}>
+                  {typeLabel(c.type)}
                 </Typography>
               </Box>
 
@@ -210,17 +207,12 @@ export function WranglerView({ kernelKey, source, label, height = "100%" }: Prop
           flexWrap: "wrap",
         }}
       >
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1, mr: 1 }}>
-          <AutoFixHigh sx={{ color: "primary.main", fontSize: 20 }} />
-          <Typography variant="h4" sx={{ fontWeight: 700 }}>
-            Data Wrangler
-          </Typography>
-          <Chip label={label} size="small" variant="outlined" />
-        </Box>
+        <Typography variant="mono" noWrap sx={{ fontWeight: 600, mr: 1, maxWidth: 260 }} title={label}>
+          {label}
+        </Typography>
 
         <Button
           size="small"
-          variant="outlined"
           startIcon={<FilterList fontSize="small" />}
           onClick={() => {
             setSelectedColumn(undefined);
@@ -232,31 +224,28 @@ export function WranglerView({ kernelKey, source, label, height = "100%" }: Prop
 
         <Button
           size="small"
-          variant="outlined"
           startIcon={<CleaningServicesOutlined fontSize="small" />}
           onClick={() => {
             setSelectedColumn(undefined);
             setCleanOpen(true);
           }}
         >
-          Clean & Impute
+          Clean and impute
         </Button>
 
         <Button
           size="small"
-          variant="outlined"
           startIcon={<TextFieldsOutlined fontSize="small" />}
           onClick={() => {
             setSelectedColumn(undefined);
             setTextOpen(true);
           }}
         >
-          Text Ops
+          Text
         </Button>
 
         <Button
           size="small"
-          variant="outlined"
           startIcon={<ViewColumnOutlined fontSize="small" />}
           onClick={() => {
             setSelectedColumn(undefined);
@@ -281,11 +270,11 @@ export function WranglerView({ kernelKey, source, label, height = "100%" }: Prop
           onClick={() => setExportOpen(true)}
           disabled={!data}
         >
-          Export Code
+          Export code
         </Button>
       </Box>
 
-      {/* Main Workspace Split: Applied Steps Sidebar + DataGrid */}
+      {/* steps on the left, the preview on the right */}
       <Box sx={{ display: "flex", flex: 1, minHeight: 0 }}>
         <RecipeSidebar
           steps={steps}
@@ -314,8 +303,16 @@ export function WranglerView({ kernelKey, source, label, height = "100%" }: Prop
               border: 0,
               fontFamily: "'JetBrains Mono Variable', monospace",
               fontSize: 12.5,
+              backgroundColor: "transparent",
               "& .MuiDataGrid-columnHeaders": { fontFamily: "inherit" },
+              "& .MuiDataGrid-columnHeader, & .MuiDataGrid-filler, & .MuiDataGrid-scrollbarFiller": {
+                backgroundColor: "transparent",
+                borderBottom: "1px solid",
+                borderColor: "text.primary",
+              },
+              "& .MuiDataGrid-columnSeparator": { display: "none" },
               "& .MuiDataGrid-cell": { borderColor: "divider" },
+              "& .MuiDataGrid-row:hover": { backgroundColor: "action.hover" },
             }}
           />
         </Box>

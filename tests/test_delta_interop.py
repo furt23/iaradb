@@ -14,6 +14,7 @@ import pyarrow.compute as pc
 import pytest
 
 import workhouse as wh
+from workhouse import functions as F
 
 deltalake = pytest.importorskip("deltalake")
 from deltalake import DeltaTable, write_deltalake  # noqa: E402
@@ -296,7 +297,7 @@ def test_dl_partitioned(tmp_path: Path) -> None:
     t = _basic(12).append_column("d", pa.array([dt.date(2024, 1, 1 + i % 3) for i in range(12)], pa.date32()))
     write_deltalake(path, t, partition_by=["grp", "d"])
     _same(_wh_read(path), t)
-    got = wh.scan_delta(path).filter(wh.col("grp") == "a").collect().to_arrow()
+    got = wh.scan_delta(path).filter(F.col("grp") == "a").collect().to_arrow()
     _same(got, t.filter(pc.equal(t.column("grp"), "a")))
 
 

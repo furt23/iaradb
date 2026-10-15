@@ -20,6 +20,7 @@ from typing import Any, Sequence
 import pyarrow as pa
 
 import workhouse as wh
+from workhouse import functions as F
 
 _IDX = "__row_index"
 _RN = "__rank"
@@ -66,11 +67,11 @@ def _lazy(x: Any) -> wh.LazyFrame:
 
 
 def _height(lf: wh.LazyFrame) -> int:
-    return int(lf.agg(wh.len().alias("n")).collect().item())
+    return int(lf.agg(F.len().alias("n")).collect().item())
 
 
 def _nan() -> wh.Expr:
-    return wh.lit(math.nan)
+    return F.lit(math.nan)
 
 
 # ---- nulls and NaN --------------------------------------------------------
@@ -91,18 +92,18 @@ def fill_null(
 
 
 def _fill_expr(name: str, value: Any, strategy: str | None) -> wh.Expr:
-    c = wh.col(name)
+    c = F.col(name)
     if strategy is None:
-        fill = wh.lit(value)
+        fill = F.lit(value)
     elif strategy == "zero":
-        fill = wh.lit(0)
+        fill = F.lit(0)
     elif strategy == "one":
-        fill = wh.lit(1)
+        fill = F.lit(1)
     elif strategy in ("min", "max", "mean"):
         fill = getattr(c, strategy)().over()
     else:
         raise ValueError(f"unknown fill strategy: {strategy!r}")
-    return wh.coalesce(c, fill).alias(name)
+    return F.coalesce(c, fill).alias(name)
 
 
 def _fill_directional(lf: wh.LazyFrame, names: list[str], strategy: str) -> wh.LazyFrame:
@@ -112,9 +113,9 @@ def _fill_directional(lf: wh.LazyFrame, names: list[str], strategy: str) -> wh.L
         frame, pick = ("rows", None, 0), "last"
     else:
         frame, pick = ("rows", 0, None), "first"
-    order = wh.col(_IDX)
+    order = F.col(_IDX)
     exprs = [
-        getattr(wh.col(n), pick)().over(order_by=order, frame=frame).alias(n)
+        getattr(F.col(n), pick)().over(order_by=order, frame=frame).alias(n)
         for n in names
     ]
     return lf.with_row_index(_IDX).with_columns(exprs).drop(_IDX)
@@ -124,8 +125,8 @@ def fill_nan(self: wh.LazyFrame, value: Any, subset: Any = None) -> wh.LazyFrame
     """Replace NaN with `value` in float columns (all of them by default)."""
     exprs = []
     for n in _float_names(self, subset):
-        c = wh.col(n)
-        exprs.append(wh.when(c == _nan()).then(wh.lit(value)).otherwise(c).alias(n))
+        c = F.col(n)
+        exprs.append(F.when(c == _nan()).then(F.lit(value)).otherwise(c).alias(n))
     return self.with_columns(exprs) if exprs else self
 
 
@@ -134,7 +135,7 @@ def drop_nulls(self: wh.LazyFrame, subset: Any = None) -> wh.LazyFrame:
     names = _names(self, subset)
     if not names:
         return self
-    return self.filter(*[wh.col(n).is_not_null() for n in names])
+    return self.filter(*[F.col(n).is_not_null() for n in names])
 
 
 def drop_nans(self: wh.LazyFrame, subset: Any = None) -> wh.LazyFrame:
@@ -142,7 +143,7 @@ def drop_nans(self: wh.LazyFrame, subset: Any = None) -> wh.LazyFrame:
     names = _float_names(self, subset)
     if not names:
         return self
-    keep = [wh.col(n).is_null() | (wh.col(n) != _nan()) for n in names]
+    keep = [F.col(n).is_null() | (F.col(n) != _nan()) for n in names]
     return self.filter(*keep)
 
 
@@ -165,15 +166,15 @@ def unique(
     if keep == "any" and subset is None:
         return wh.LazyFrame(self._lf.distinct())
     ranked = self.with_row_index(_IDX).with_columns(
-        wh.row_number().over(names, order_by=wh.col(_IDX)).alias(_RN),
-        wh.count().over(names).alias(_CNT),
+        F.row_number().over(names, order_by=F.col(_IDX)).alias(_RN),
+        F.count().over(names).alias(_CNT),
     )
     if keep == "last":
-        pred = wh.col(_RN) == wh.col(_CNT)
+        pred = F.col(_RN) == F.col(_CNT)
     elif keep == "none":
-        pred = wh.col(_CNT) == 1
+        pred = F.col(_CNT) == 1
     else:
-        pred = wh.col(_RN) == 1
+        pred = F.col(_RN) == 1
     out = ranked.filter(pred)
     if maintain_order:
         out = out.sort(_IDX)
@@ -209,16 +210,16 @@ def sample(
 
 def _uniform(x: wh.Expr, seed: int) -> wh.Expr:
     """A float in [0, 1) that depends only on (seed, x)."""
-    return wh.rand(seed % _P, x)
+    return F.rand(seed % _P, x)
 
 
 def _sample_without(lf: wh.LazyFrame, n: int, seed: int) -> wh.LazyFrame:
-    idx = wh.col(_IDX)
+    idx = F.col(_IDX)
     keyed = lf.with_row_index(_IDX).with_columns(_uniform(idx, seed).alias(_KEY))
     ranked = keyed.with_columns(
-        wh.row_number().over(order_by=[wh.col(_KEY), idx]).alias(_RN)
+        F.row_number().over(order_by=[F.col(_KEY), idx]).alias(_RN)
     )
-    return ranked.filter(wh.col(_RN) <= n).sort(_IDX).drop(_IDX, _KEY, _RN)
+    return ranked.filter(F.col(_RN) <= n).sort(_IDX).drop(_IDX, _KEY, _RN)
 
 
 def _sample_with_replacement(lf: wh.LazyFrame, n: int, seed: int, total: int) -> wh.LazyFrame:
@@ -227,7 +228,7 @@ def _sample_with_replacement(lf: wh.LazyFrame, n: int, seed: int, total: int) ->
     draws = wh.from_arrow(
         pa.table({_DRAW: pa.array(range(n), type=pa.int64())})
     ).lazy()
-    draws = draws.with_columns((_uniform(wh.col(_DRAW), seed) * total).cast("Int64").alias(_POS))
+    draws = draws.with_columns((_uniform(F.col(_DRAW), seed) * total).floor().cast("Int64").alias(_POS))
     joined = lf.with_row_index(_IDX).join(draws, left_on=_IDX, right_on=_POS, how="inner")
     return joined.sort(_DRAW).drop(_IDX, _POS, _DRAW)
 
@@ -237,8 +238,8 @@ def with_row_index(self: wh.LazyFrame, name: str = "index", offset: int = 0) -> 
     """Add a 0-based (plus `offset`) Int64 row number as the first column."""
     if name in self.columns:
         raise ValueError(f"column {name!r} already exists")
-    index = wh.row_number().over() + (offset - 1)
-    return self.select(index.alias(name), *[wh.col(c) for c in self.columns])
+    index = F.row_number().over() + (offset - 1)
+    return self.select(index.alias(name), *[F.col(c) for c in self.columns])
 
 
 # ---- union by name / concat -----------------------------------------------
@@ -273,11 +274,11 @@ def _align(frames: Sequence[wh.LazyFrame], names: list[str], types: dict[str, st
         for name in names:
             dt = types[name]
             if name not in schema:
-                e = wh.lit(None).cast(dt)
+                e = F.lit(None).cast(dt)
             elif schema[name] != dt:
-                e = wh.col(name).cast(dt)
+                e = F.col(name).cast(dt)
             else:
-                e = wh.col(name)
+                e = F.col(name)
             exprs.append(e.alias(name))
         out.append(f.select(exprs))
     return out
@@ -319,7 +320,7 @@ def describe(self: wh.DataFrame) -> wh.DataFrame:
     linearly. Every column is summarized in one pass over the data."""
     lf = self.lazy()
     schema = lf.schema
-    aggs = [wh.len().alias("__rows")]
+    aggs = [F.len().alias("__rows")]
     for i, (name, dtype) in enumerate(schema.items()):
         aggs += _column_aggs(i, name, _is_numeric(dtype))
     row = lf.agg(*aggs).collect().to_dicts()[0]
@@ -333,7 +334,7 @@ def describe(self: wh.DataFrame) -> wh.DataFrame:
 
 def _column_aggs(i: int, name: str, numeric: bool) -> list[wh.Expr]:
     """The aggregates of one column, named by its position (names may clash)."""
-    c = wh.col(name)
+    c = F.col(name)
     aggs = [c.count().alias(f"{i}:count"), c.min().alias(f"{i}:min"), c.max().alias(f"{i}:max")]
     if numeric:
         aggs += [c.mean().alias(f"{i}:mean"), c.std().alias(f"{i}:std")]

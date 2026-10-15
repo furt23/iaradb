@@ -4,9 +4,14 @@ export function tableHref(name: string | null): string {
   return name ? `/data/${encodeURIComponent(name)}` : "/data";
 }
 
-/** The table a pathname shows (`/data/<name>`), if any. */
+/** The wrangler on a table. */
+export function wrangleHref(name: string | null): string {
+  return name ? `/wrangle/${encodeURIComponent(name)}` : "/wrangle";
+}
+
+/** The table a pathname shows (`/data/<name>` or `/wrangle/<name>`), if any. */
 export function tableFromPathname(pathname: string): string | null {
-  const m = /^\/data\/([^/]+)$/.exec(pathname);
+  const m = /^\/(?:data|wrangle)\/([^/]+)$/.exec(pathname);
   return m ? decodeURIComponent(m[1]) : null;
 }
 

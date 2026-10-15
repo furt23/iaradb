@@ -173,7 +173,7 @@ impl PhysExpr {
                 let s = v.is_scalar();
                 let a = v.into_array(if s { 1 } else { n })?;
                 let opts = CastOptions { safe: *safe, ..Default::default() };
-                wrap(cast_with_options(&a, to, &opts)?, s)
+                wrap(cast_array(&a, to, &opts)?, s)
             }
             PhysExpr::Case { when_then, otherwise, dt } => {
                 let mut acc = match otherwise {

@@ -18,6 +18,7 @@ import pyarrow.parquet as pq
 import pytest
 
 import workhouse as wh
+from workhouse import functions as F
 
 sys.path.insert(0, os.path.dirname(__file__))
 from compare import diff  # noqa: E402
@@ -258,7 +259,7 @@ def both(table: pa.Table, wh_expr, pl_expr, sort_lists: bool = False) -> None:
     assert ours == theirs
 
 
-L = wh.col("l")
+L = F.col("l")
 PL = pl.col("l")
 
 
@@ -291,29 +292,29 @@ def test_list_namespace_matches_polars(table: pa.Table) -> None:
 
 
 def test_list_join_and_str_split_match_polars(table: pa.Table) -> None:
-    S = wh.col("s")
+    S = F.col("s")
     both(table, S.list.join(","), pl.col("s").list.join(","))
     both(table, S.list.join(", ", ignore_nulls=False), pl.col("s").list.join(", ", ignore_nulls=False))
-    both(table, wh.col("txt").str.split(","), pl.col("txt").str.split(","))
-    both(table, wh.col("txt").str.split(";").list.len(), pl.col("txt").str.split(";").list.len())
+    both(table, F.col("txt").str.split(","), pl.col("txt").str.split(","))
+    both(table, F.col("txt").str.split(";").list.len(), pl.col("txt").str.split(";").list.len())
 
 
 def test_concat_list_matches_polars(table: pa.Table) -> None:
-    both(table, wh.concat_list("l", "l"), pl.concat_list("l", "l"))
-    both(table, wh.concat_list("l", wh.col("x")), pl.concat_list("l", "x"))
-    both(table, wh.concat_list("x", "id"), pl.concat_list("x", "id"))
+    both(table, F.concat_list("l", "l"), pl.concat_list("l", "l"))
+    both(table, F.concat_list("l", F.col("x")), pl.concat_list("l", "x"))
+    both(table, F.concat_list("x", "id"), pl.concat_list("x", "id"))
 
 
 def test_implode_and_group_by_agg_list(table: pa.Table) -> None:
     ours = (
-        wh.from_arrow(table).lazy().group_by("g").agg(wh.col("x").implode().alias("xs"), wh.col("l").implode().alias("ls")).sort("g").collect()
+        wh.from_arrow(table).lazy().group_by("g").agg(F.col("x").implode().alias("xs"), F.col("l").implode().alias("ls")).sort("g").collect()
     )
     theirs = pl.from_arrow(table).group_by("g").agg(pl.col("x").alias("xs"), pl.col("l").alias("ls")).sort("g")
     assert values(ours) == values(theirs)
-    whole = wh.from_arrow(table).lazy().select(wh.col("x").implode().alias("xs")).collect().to_arrow().to_pylist()
+    whole = wh.from_arrow(table).lazy().select(F.col("x").implode().alias("xs")).collect().to_arrow().to_pylist()
     assert whole == [{"xs": table.column("x").to_pylist()}]
     # filtered
-    f = wh.from_arrow(table).lazy().group_by("g").agg(wh.col("x").filter(wh.col("id") > 3).implode().alias("xs")).sort("g").collect()
+    f = wh.from_arrow(table).lazy().group_by("g").agg(F.col("x").filter(F.col("id") > 3).implode().alias("xs")).sort("g").collect()
     p = pl.from_arrow(table).group_by("g").agg(pl.col("x").filter(pl.col("id") > 3).alias("xs")).sort("g")
     assert values(f) == values(p)
 
@@ -338,7 +339,7 @@ def test_schema_names_and_arrow_types(table: pa.Table) -> None:
     lf = wh.from_arrow(table).lazy()
     assert lf.schema["l"] == "List<Int64>"
     assert lf.schema["s"] == "List<Utf8>"
-    out = lf.select(wh.col("l").list.len().alias("n"), wh.col("s")).collect().to_arrow()
+    out = lf.select(F.col("l").list.len().alias("n"), F.col("s")).collect().to_arrow()
     assert out.schema.field("s").type == pa.list_(pa.string())
     nested = wh.sql("select [[1, 2], [3]] as ll").collect()
     assert nested.to_arrow().schema.field("ll").type == pa.list_(pa.list_(pa.int64()))
@@ -359,7 +360,7 @@ def test_large_list_and_other_element_names_are_normalized() -> None:
     df = wh.from_arrow(t).lazy().collect().to_arrow()
     assert df.schema.field("a").type == pa.list_(pa.int64())
     assert df.to_pylist() == t.to_pylist()
-    assert wh.from_arrow(t).lazy().select(wh.col("a").list.sum()).collect().to_arrow().column(0).to_pylist() == [3, None, 3]
+    assert wh.from_arrow(t).lazy().select(F.col("a").list.sum()).collect().to_arrow().column(0).to_pylist() == [3, None, 3]
 
 
 def test_parquet_nested_columns_round_trip(table: pa.Table) -> None:
@@ -370,7 +371,7 @@ def test_parquet_nested_columns_round_trip(table: pa.Table) -> None:
         assert lf.schema["l"] == "List<Int64>"
         got = lf.sort("id").collect().to_arrow()
         assert got.to_pylist() == table.to_pylist()
-        n = lf.filter(wh.col("g") >= 3).select(wh.col("l").list.len().alias("n"), "id").sort("id").collect().to_arrow()
+        n = lf.filter(F.col("g") >= 3).select(F.col("l").list.len().alias("n"), "id").sort("id").collect().to_arrow()
         expected = [len(v) if v is not None else None for v in table.column("l").to_pylist()][5:]
         assert n.column("n").to_pylist() == expected
         out = os.path.join(d, "o.parquet")

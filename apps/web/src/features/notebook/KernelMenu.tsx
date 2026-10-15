@@ -1,6 +1,7 @@
 "use client";
 
 import ArrowDropDown from "@mui/icons-material/ArrowDropDown";
+import Check from "@mui/icons-material/Check";
 import ClearAll from "@mui/icons-material/ClearAll";
 import CodeOutlined from "@mui/icons-material/CodeOutlined";
 import PlayCircleOutline from "@mui/icons-material/PlayCircleOutlineOutlined";
@@ -23,6 +24,9 @@ export interface KernelMenuProps {
   onClearOutputs(): void;
   /** the notebook's setup code (absent: the notebook has none) */
   onShowSetup?(): void;
+  /** running a cell also runs the cells that read its values (off: they turn stale) */
+  autorun: boolean;
+  onAutorun(on: boolean): void;
 }
 
 function Item({ icon, children, ...props }: MenuItemProps & { icon: ReactNode }) {
@@ -35,7 +39,7 @@ function Item({ icon, children, ...props }: MenuItemProps & { icon: ReactNode })
 }
 
 /** The kernel's actions: interrupt, restarts, clearing outputs. */
-export function KernelMenu({ running, onInterrupt, onRestart, onRestartAndClear, onRestartAndRunAll, onClearOutputs, onShowSetup }: KernelMenuProps) {
+export function KernelMenu({ running, onInterrupt, onRestart, onRestartAndClear, onRestartAndRunAll, onClearOutputs, onShowSetup, autorun, onAutorun }: KernelMenuProps) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const run = (fn: () => void) => () => {
     setAnchor(null);
@@ -75,6 +79,20 @@ export function KernelMenu({ running, onInterrupt, onRestart, onRestartAndClear,
         <Item icon={<ClearAll fontSize="small" />} onClick={run(onClearOutputs)}>
           Clear all outputs
         </Item>
+        <Divider />
+        <Tooltip
+          placement="left"
+          title="Off: the cells that read a cell's values are marked stale when it runs, and run when you run them. On: they run right away."
+        >
+          <Item
+            icon={autorun ? <Check fontSize="small" sx={{ color: "primary.main" }} /> : <span />}
+            role="menuitemcheckbox"
+            aria-checked={autorun}
+            onClick={run(() => onAutorun(!autorun))}
+          >
+            Run dependent cells automatically
+          </Item>
+        </Tooltip>
         {onShowSetup && <Divider />}
         {onShowSetup && (
           <Item icon={<CodeOutlined fontSize="small" />} onClick={run(onShowSetup)}>

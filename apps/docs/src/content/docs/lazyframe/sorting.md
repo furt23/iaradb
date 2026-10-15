@@ -24,8 +24,8 @@ LazyFrame.sort(
 
 #### Example: Single Column Sort
 ```python
->>> import workhouse as wh
->>> df = wh.from_dict({"city": ["Paris", "Tokyo", "Berlin"], "pop_m": [2.1, 14.0, 3.6]})
+>>> import workhouse
+>>> df = workhouse.from_dict({"city": ["Paris", "Tokyo", "Berlin"], "pop_m": [2.1, 14.0, 3.6]})
 >>> df.lazy().sort("pop_m", descending=True).collect().show()
 ┌────────┬───────┐
 │ city   │ pop_m │
@@ -39,7 +39,7 @@ LazyFrame.sort(
 
 #### Example: Multi-Key Sort with Mixed Directions
 ```python
->>> df = wh.from_dict({
+>>> df = workhouse.from_dict({
 ...     "dept": ["IT", "Sales", "IT", "Sales"],
 ...     "salary": [90000, 80000, 110000, 95000],
 ... })

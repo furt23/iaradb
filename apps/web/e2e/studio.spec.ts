@@ -18,7 +18,7 @@ test("runs the example notebook: SQL, DataFrame API, profile and plan", async ({
 
 test("python and SQL cells react to each other", async ({ page }) => {
   await newNotebook(page, "notebooks/e2e_reactive.py");
-  await runCell(cells(page).first()); // the setup cell: ws = wh.workspace()
+  await runCell(cells(page).first()); // the setup cell: ws = workhouse.workspace()
 
   const factor = await addCell(page, "Python");
   await setCode(factor, "n = 3");

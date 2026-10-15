@@ -112,6 +112,8 @@ export function NotebookEditor({ initial, schema }: { initial: NotebookView; sch
         onRestartAndRunAll={nb.restartAndRunAll}
         onClearOutputs={() => clearOutputs(null)}
         onShowSetup={setup ? () => setSetupOpen(true) : undefined}
+        autorun={nb.autorun}
+        onAutorun={nb.setAutorun}
         onToggleSide={() => setShowSide((v) => !v)}
         sideOpen={showSide}
         onOutputs={(hide) => outputs.setHidden(hide ? new Set(cells.map((c) => c.id)) : new Set())}

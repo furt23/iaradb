@@ -41,7 +41,7 @@ def test_clear_resets_the_chosen_cells_only(session: KernelSession):
     result = call(session, "notebook.clear", {"path": "notebooks/clear.py", "cells": ["a"]})
     assert result == {"cleared": 1}
     states = session.notebook.view()["states"]
-    assert states["a"] == {"status": "idle", "stale": False, "output": None, "streams": [], "elapsed_ms": None}
+    assert states["a"] == {"status": "idle", "stale": False, "output": None, "streams": [], "elapsed_ms": None, "frames": []}
     assert states["b"]["status"] == "done" and states["b"]["output"] == {"type": "text", "text": "2"}
 
 

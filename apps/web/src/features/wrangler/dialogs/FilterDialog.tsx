@@ -12,9 +12,10 @@ import MenuItem from "@mui/material/MenuItem";
 import Select from "@mui/material/Select";
 import TextField from "@mui/material/TextField";
 import type { ColumnInfo } from "@workhouse/protocol";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { FilterOperator, WranglerStep } from "../types";
+import { typeLabel } from "@/lib/format";
 
 interface Props {
   open: boolean;
@@ -36,8 +37,8 @@ const OPERATORS: { op: FilterOperator; label: string; needsValue: boolean; needs
   { op: "not_contains", label: "Does not contain text", needsValue: true },
   { op: "starts_with", label: "Starts with", needsValue: true },
   { op: "ends_with", label: "Ends with", needsValue: true },
-  { op: "is_null", label: "Is Null / Missing", needsValue: false },
-  { op: "is_not_null", label: "Is Not Null", needsValue: false },
+  { op: "is_null", label: "Is null", needsValue: false },
+  { op: "is_not_null", label: "Is not null", needsValue: false },
 ];
 
 export function FilterDialog({ open, columns, defaultColumn, onClose, onApply }: Props) {
@@ -45,6 +46,12 @@ export function FilterDialog({ open, columns, defaultColumn, onClose, onApply }:
   const [operator, setOperator] = useState<FilterOperator>("equals");
   const [val1, setVal1] = useState<string>("");
   const [val2, setVal2] = useState<string>("");
+
+  useEffect(() => {
+    if (open) {
+      setColumn(defaultColumn || columns[0]?.name || "");
+    }
+  }, [open, defaultColumn, columns]);
 
   const opConfig = OPERATORS.find((o) => o.op === operator) || OPERATORS[0];
 
@@ -74,14 +81,14 @@ export function FilterDialog({ open, columns, defaultColumn, onClose, onApply }:
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
-      <DialogTitle>Filter Rows</DialogTitle>
+      <DialogTitle>Filter rows</DialogTitle>
       <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, pt: 1 }}>
         <FormControl fullWidth size="small">
           <InputLabel>Column</InputLabel>
           <Select value={column} label="Column" onChange={(e) => setColumn(e.target.value)}>
             {columns.map((c) => (
               <MenuItem key={c.name} value={c.name}>
-                {c.name} ({c.type})
+                {c.name} ({typeLabel(c.type)})
               </MenuItem>
             ))}
           </Select>
@@ -105,25 +112,25 @@ export function FilterDialog({ open, columns, defaultColumn, onClose, onApply }:
             fullWidth
             value={val1}
             onChange={(e) => setVal1(e.target.value)}
-            placeholder="Enter match value..."
+            placeholder="42"
           />
         )}
 
         {opConfig.needsValue2 && (
           <TextField
-            label="Second Value"
+            label="And"
             size="small"
             fullWidth
             value={val2}
             onChange={(e) => setVal2(e.target.value)}
-            placeholder="Upper bound..."
+            placeholder="100"
           />
         )}
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
         <Button variant="contained" onClick={handleApply}>
-          Apply Filter
+          Apply
         </Button>
       </DialogActions>
     </Dialog>

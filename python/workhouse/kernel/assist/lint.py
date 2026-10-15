@@ -1,9 +1,9 @@
 """Diagnostics for cells.
 
-Python: syntax errors (with Python's own messages), names that no cell
-defines, and names another cell already defines (marimo cells cannot
-redefine each other's names). SQL: parse and planning errors, located in the
-query when the message says where.
+Python: syntax errors (with Python's own messages) and names that no cell
+defines. A cell may redefine another cell's names: the cells below it read
+its value. SQL: parse and planning errors, located in the query when the
+message says where.
 """
 
 from __future__ import annotations
@@ -57,24 +57,6 @@ def _module_level(node: ast.AST) -> Iterator[ast.AST]:
             yield from _module_level(child)
 
 
-def _binding_sites(tree: ast.Module, pos: Positions) -> Iterator[tuple[str, int, int]]:
-    """Where the cell binds names at its top level: ``(name, start, end)``."""
-    for node in _module_level(tree):
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
-            yield (node.id, *_span(pos, node))
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            start = pos.offset_bytes(node.lineno, node.col_offset)
-            line = pos.lines[node.lineno - 1]
-            at = line.find(node.name, start - pos.offset(node.lineno, 0))
-            a = pos.offset(node.lineno, at) if at >= 0 else start
-            yield node.name, a, a + len(node.name)
-        elif isinstance(node, (ast.Import, ast.ImportFrom)):
-            for alias in node.names:
-                name = alias.asname or alias.name.split(".")[0]
-                if name != "*" and hasattr(alias, "lineno"):
-                    yield (name, *_span(pos, alias))
-
-
 def has_star_import(tree: ast.AST) -> bool:
     return any(isinstance(n, ast.ImportFrom) and any(a.name == "*" for a in n.names) for n in ast.walk(tree))
 
@@ -83,7 +65,7 @@ def lint_python(code: str, others: Iterable[str] | None, available: Iterable[str
     """Diagnostics for a Python cell.
 
     ``others``: names the notebook's other cells define (``None`` when they
-    are unknown: undefined and redefined names are then not reported);
+    are unknown: undefined names are then not reported);
     ``available``: further names a cell can read (values in the kernel).
     """
     pos = Positions(code)
@@ -102,13 +84,14 @@ def lint_python(code: str, others: Iterable[str] | None, available: Iterable[str
         for node in ast.walk(tree)
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in undefined
     ]
-    redefined = {n for n in scope.bound if not n.startswith("_") and n in others}
-    seen: set[str] = set()
-    for name, start, end in _binding_sites(tree, pos):
-        if name in redefined and name not in seen:
-            seen.add(name)
-            message = f"'{name}' is also defined by another cell: rename it, or prefix it with _ to keep it private to this cell"
-            out.append(diagnostic(start, end, message))
+    # `df = df.filter(...)` with no other cell defining df: its first read fails
+    for name in sorted((scope.early & scope.bound) - known):
+        first = next(
+            (n for n in _module_level(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id == name),
+            None,
+        )
+        if first is not None:
+            out.append(diagnostic(*_span(pos, first), f"'{name}' is read before it is defined", "warning"))
     return out
 
 

@@ -29,15 +29,15 @@ Expr.diff(n: int = 1) -> Expr
 
 ### Example: Timeseries Day-over-Day Changes
 ```python
->>> import workhouse as wh
->>> from workhouse import col
->>> df = wh.from_dict({
+>>> import workhouse
+>>> from workhouse import functions as F
+>>> df = workhouse.from_dict({
 ...     "ticker": ["AAPL", "AAPL", "AAPL"],
 ...     "price": [150.0, 155.0, 153.0]
 ... })
 >>> df.lazy().with_columns(
-...     prev_price=col("price").shift(1).over("ticker"),
-...     price_change=col("price").diff(1).over("ticker")
+...     prev_price=F.col("price").shift(1).over("ticker"),
+...     price_change=F.col("price").diff(1).over("ticker")
 ... ).collect().show()
 ┌────────┬───────┬────────────┬──────────────┐
 │ ticker │ price │ prev_price │ price_change │

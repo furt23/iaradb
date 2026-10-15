@@ -1,7 +1,8 @@
 """The Data Wrangler's recipes, run in the kernel.
 
 A recipe is a list of steps (``{"id", "enabled", "op": {"kind", ...}}``).
-It compiles to one SQL query, a chain of CTEs over the source: that query
+It compiles to one SQL query, the steps folded into as few SELECTs as SQL
+allows (see ``Compiler``): that query
 produces the preview, the column quality bars and the column profiles, and
 it is also the exported code, so what the Studio shows is what the code
 does. Profiles and counts run over the whole result, not a sample.
@@ -23,6 +24,10 @@ PREVIEW_ROWS = 500
 TOP_VALUES = 10
 #: most values a one-hot encoding turns into columns
 MAX_ONE_HOT = 50
+#: deepest a column's expression nests before a new stage starts (the SQL parser has a recursion limit)
+MAX_NESTING = 12
+#: most predicates in a stage's WHERE before a new stage starts
+MAX_PREDICATES = 32
 
 _NUMERIC = re.compile(r"^(U?Int\d+|Float\d+|Decimal\d*\(.*\))$")
 _CASTS = {"int64": "BIGINT", "float64": "DOUBLE", "utf8": "VARCHAR", "bool": "BOOLEAN", "date": "DATE", "timestamp": "TIMESTAMP"}
@@ -58,31 +63,124 @@ def literal(value: Any, type_name: str) -> str:
     return text(value)
 
 
-class Compiler:
-    """Turns steps into CTEs; needs the columns (and types) after each step."""
+class Stage:
+    """One SELECT over a relation: steps fold into it while SQL allows.
 
-    def __init__(self, ws: Any, source_sql: str, tables: dict[str, Any]) -> None:
+    Each output column keeps its expression over the relation's columns, so
+    row-wise steps compose (``upper(trim("name"))``) and a filter on a changed
+    column uses the changed value. It prints as ``SELECT * EXCLUDE/REPLACE/RENAME``
+    plus any added columns, so only what the steps touch is spelled out.
+    """
+
+    def __init__(self, relation: str, columns: list[str]) -> None:
+        self.relation = relation
+        self.inputs = list(columns)
+        #: [output name, expression, input column it comes from (None: added)]
+        self.cols: list[list[Any]] = [[c, ident(c), c] for c in columns]
+        self.where: list[str] = []
+        self.distinct = False
+        self.qualify: str | None = None
+
+    def entry(self, name: str) -> list[Any]:
+        for e in self.cols:
+            if e[0] == name:
+                return e
+        raise ValueError(f"unknown column {name!r}")
+
+    def expr(self, name: str) -> str:
+        return self.entry(name)[1]
+
+    def plain(self, name: str) -> bool:
+        """The column is still its input column, untouched."""
+        e = self.entry(name)
+        return e[2] is not None and e[1] == ident(e[2])
+
+    def set(self, name: str, expr: str) -> None:
+        self.entry(name)[1] = expr
+
+    def add(self, name: str, expr: str) -> None:
+        self.cols = [e for e in self.cols if e[0] != name] + [[name, expr, None]]
+
+    def changed(self) -> bool:
+        same = [(e[0], e[1]) for e in self.cols] == [(c, ident(c)) for c in self.inputs]
+        return bool(self.where or self.distinct or self.qualify) or not same
+
+    def projection(self) -> str:
+        if not self.cols:
+            raise ValueError("no columns left")
+        kept = {e[2] for e in self.cols if e[2] is not None}
+        exclude = [ident(c) for c in self.inputs if c not in kept]
+        replace = [f"{e[1]} AS {ident(e[2])}" for e in self.cols if e[2] is not None and e[1] != ident(e[2])]
+        rename = [f"{ident(e[2])} AS {ident(e[0])}" for e in self.cols if e[2] is not None and e[0] != e[2]]
+        added = [f"{e[1]} AS {ident(e[0])}" for e in self.cols if e[2] is None]
+        items = []
+        if kept:
+            mods = [f"{k} ({', '.join(v)})" for k, v in (("EXCLUDE", exclude), ("REPLACE", replace), ("RENAME", rename)) if v]
+            star = " ".join(["*", *mods])
+            items.append(star if len(star) <= 80 else "*\n" + "\n".join(f"  {m}" for m in mods))
+        items += added
+        return ",\n  ".join(items)
+
+    def sql(self) -> str:
+        lines = [f"SELECT {'DISTINCT ' if self.distinct else ''}{self.projection()}", f"FROM {self.relation}"]
+        if self.where:
+            lines.append("WHERE " + "\n  AND ".join(self.where))
+        if self.qualify:
+            lines.append(f"QUALIFY {self.qualify}")
+        return "\n".join(lines)
+
+
+#: steps that change columns row by row (they fold into a stage after its filters)
+_ROWWISE = {"rename_column", "cast", "text_case", "text_trim", "text_replace", "split_column", "math_round", "drop_columns", "one_hot_encode"}
+
+
+class Compiler:
+    """Folds steps into as few SELECTs as SQL allows. A new stage (a CTE)
+    starts only where a step needs the previous rows as they are: a filter
+    after a dedup, a column change after DISTINCT, a fill whose mean, median
+    or mode must see the rows the earlier steps left."""
+
+    #: what queries over the recipe's result call it
+    prev = "wrangled"
+
+    def __init__(self, ws: Any, relation: str, tables: dict[str, Any]) -> None:
         self.ws = ws
         self.tables = tables
-        self.ctes: list[str] = []
-        self.prev = "source_rows"
-        self.ctes.append(f"source_rows AS ({source_sql})")
-        self.order: str | None = None
+        self.ctes: list[tuple[str, str]] = []
+        self.order: tuple[str, bool] | None = None
+        #: each step applied, with the columns it saw (for the Python export)
+        self.applied: list[tuple[dict[str, Any], dict[str, str]]] = []
+        columns = list(dict(self.ws.sql(f"SELECT * FROM {relation}", **tables).schema))
+        self.stage = Stage(relation, columns)
+
+    def _with(self, extra: list[tuple[str, str]]) -> str:
+        ctes = self.ctes + extra
+        if not ctes:
+            return ""
+        return "WITH\n" + ",\n".join(f"  {n} AS (\n{_indent(q, 4)}\n  )" for n, q in ctes) + "\n"
 
     def query(self, select: str | None = None) -> str:
-        body = select or f"SELECT * FROM {self.prev}"
-        return "WITH\n  " + ",\n  ".join(self.ctes) + "\n" + body
+        """A query over the recipe's result (named ``wrangled``); all of it by default."""
+        return self._with([(self.prev, self.stage.sql())]) + (select or f"SELECT * FROM {self.prev}")
 
     def final(self) -> str:
-        return self.query(f"SELECT * FROM {self.prev}" + (f"\nORDER BY {self.order}" if self.order else ""))
+        """The recipe as one query: the exported code."""
+        sql = self._with([]) + self.stage.sql()
+        if self.order:
+            sql += f"\nORDER BY {ident(self.order[0])} {'DESC' if self.order[1] else 'ASC'} NULLS LAST"
+        return sql
 
     def schema(self) -> dict[str, str]:
         return dict(self.ws.sql(self.query(), **self.tables).schema)
 
-    def push(self, select: str) -> None:
-        name = f"step_{len(self.ctes)}"
-        self.ctes.append(f"{name} AS ({select})")
-        self.prev = name
+    def flush(self) -> Stage:
+        """Start a new stage over the current one's rows (if it changed them)."""
+        if self.stage.changed():
+            columns = list(self.schema())
+            name = f"stage_{len(self.ctes) + 1}"
+            self.ctes.append((name, self.stage.sql()))
+            self.stage = Stage(name, columns)
+        return self.stage
 
     def column(self, schema: dict[str, str], name: str) -> str:
         if name not in schema:
@@ -90,16 +188,37 @@ class Compiler:
         return schema[name]
 
     def step(self, op: dict[str, Any]) -> None:
-        kind = op["kind"]
         schema = self.schema()
-        p = self.prev
+        values = self._step(op, schema)
+        if op["kind"] != "sort":
+            self.applied.append(({**op, "values": values} if values is not None else op, schema))
+
+    def _step(self, op: dict[str, Any], schema: dict[str, str]) -> list[Any] | None:
+        """Fold one step into the stage; a one-hot step returns the values it found."""
+        kind = op["kind"]
+        st = self.stage
+        rowwise = kind in _ROWWISE or (kind == "fill_null" and op.get("strategy") == "constant")
+        # DISTINCT dedups the projection: a later column change must see its rows;
+        # WHERE runs before QUALIFY: a later filter must see the deduped rows
+        if (rowwise and st.distinct) or (not rowwise and kind != "sort" and (st.distinct or st.qualify)):
+            st = self.flush()
+        # folding nests expressions and chains predicates: keep both within what the parser takes
+        col = op.get("column") or op.get("from")
+        if any(e[0] == col for e in st.cols) and _depth(st.expr(col)) >= MAX_NESTING:
+            st = self.flush()
+        elif kind in ("filter", "drop_nulls") and len(st.where) >= MAX_PREDICATES:
+            st = self.flush()
         if kind == "sort":
             self.column(schema, op["column"])
-            self.order = f"{ident(op['column'])} {'DESC' if op.get('descending') else 'ASC'} NULLS LAST"
-            return
+            self.order = (op["column"], bool(op.get("descending")))
+            return None
         if kind == "filter":
-            c, t = ident(op["column"]), self.column(schema, op["column"])
-            o = op["op"]
+            t = self.column(schema, op["column"])
+            # a filled column carries its statistic's subquery: filter the stage's result instead of repeating it
+            if "SELECT" in st.expr(op["column"]):
+                st = self.flush()
+            c, o = st.expr(op["column"]), op["op"]
+            txt = _as_text(c, t)
             if o == "is_null":
                 pred = f"{c} IS NULL"
             elif o == "is_not_null":
@@ -109,99 +228,135 @@ class Compiler:
             elif o == "between":
                 pred = f"{c} BETWEEN {literal(op.get('value'), t)} AND {literal(op.get('value2'), t)}"
             elif o in ("contains", "not_contains"):
-                pred = f"{'NOT ' if o == 'not_contains' else ''}contains(CAST({c} AS VARCHAR), {text(op.get('value', ''))})"
+                pred = f"{'NOT ' if o == 'not_contains' else ''}contains({txt}, {text(op.get('value', ''))})"
             elif o == "starts_with":
-                pred = f"starts_with(CAST({c} AS VARCHAR), {text(op.get('value', ''))})"
+                pred = f"starts_with({txt}, {text(op.get('value', ''))})"
             elif o == "ends_with":
-                pred = f"ends_with(CAST({c} AS VARCHAR), {text(op.get('value', ''))})"
+                pred = f"ends_with({txt}, {text(op.get('value', ''))})"
             else:
                 raise ValueError(f"unknown filter {o!r}")
-            self.push(f"SELECT * FROM {p} WHERE {pred}")
+            st.where.append(pred)
         elif kind == "drop_columns":
             for c in op["columns"]:
                 self.column(schema, c)
-            self.push(f"SELECT * EXCLUDE ({', '.join(ident(c) for c in op['columns'])}) FROM {p}")
+            st.cols = [e for e in st.cols if e[0] not in op["columns"]]
+            if self.order and self.order[0] in op["columns"]:
+                self.order = None
         elif kind == "rename_column":
             self.column(schema, op["from"])
-            self.push(f"SELECT * RENAME ({ident(op['from'])} AS {ident(op['to'])}) FROM {p}")
+            st.entry(op["from"])[0] = op["to"]
+            if self.order and self.order[0] == op["from"]:
+                self.order = (op["to"], self.order[1])
         elif kind == "cast":
             self.column(schema, op["column"])
-            to = _CASTS[op["toType"]]
-            self.push(f"SELECT * REPLACE (CAST({ident(op['column'])} AS {to}) AS {ident(op['column'])}) FROM {p}")
+            st.set(op["column"], f"CAST({st.expr(op['column'])} AS {_CASTS[op['toType']]})")
         elif kind == "fill_null":
-            c, t = ident(op["column"]), self.column(schema, op["column"])
-            s = op["strategy"]
-            if s == "constant":
-                value = literal(op.get("value"), t)
-            elif s in ("mean", "median"):
-                if not is_numeric(t):
-                    raise ValueError(f"{s} needs a numeric column; {op['column']} is {t}")
-                value = f"(SELECT {'avg' if s == 'mean' else 'median'}({c}) FROM {p})"
-            elif s == "mode":
-                value = f"(SELECT {c} FROM {p} WHERE {c} IS NOT NULL GROUP BY {c} ORDER BY count(*) DESC, {c} LIMIT 1)"
-            else:
-                raise ValueError(f"unknown fill strategy {s!r}")
-            self.push(f"SELECT * REPLACE (CAST(coalesce({c}, {value}) AS {_sql_type(t)}) AS {c}) FROM {p}")
+            self._fill(schema, op)
         elif kind == "drop_nulls":
             cols = op.get("columns") or list(schema)
             for c in cols:
                 self.column(schema, c)
-            self.push(f"SELECT * FROM {p} WHERE " + " AND ".join(f"{ident(c)} IS NOT NULL" for c in cols))
+            st.where += [f"{st.expr(c)} IS NOT NULL" for c in cols]
         elif kind == "text_case":
             fn = {"upper": "upper", "lower": "lower", "title": "initcap"}[op["mode"]]
-            self._text(schema, op["column"], f"{fn}({ident(op['column'])})")
+            self._text(schema, op["column"], lambda c: f"{fn}({c})")
         elif kind == "text_trim":
-            self._text(schema, op["column"], f"trim({ident(op['column'])})")
+            self._text(schema, op["column"], lambda c: f"trim({c})")
         elif kind == "text_replace":
-            c = ident(op["column"])
+            pattern, replacement = text(op["pattern"]), text(op.get("replacement", ""))
             if op.get("isRegex"):
-                expr = f"regexp_replace({c}, {text(op['pattern'])}, {text(op.get('replacement', ''))}, 'g')"
+                self._text(schema, op["column"], lambda c: f"regexp_replace({c}, {pattern}, {replacement}, 'g')")
             else:
-                expr = f"replace({c}, {text(op['pattern'])}, {text(op.get('replacement', ''))})"
-            self._text(schema, op["column"], expr)
+                self._text(schema, op["column"], lambda c: f"replace({c}, {pattern}, {replacement})")
         elif kind == "split_column":
-            self.column(schema, op["column"])
+            t = self.column(schema, op["column"])
             n = max(1, int(op.get("numParts") or 2))
-            parts = ", ".join(
-                f"split_part(CAST({ident(op['column'])} AS VARCHAR), {text(op['delimiter'])}, {i}) AS {ident(str(op['column']) + '_' + str(i))}"
-                for i in range(1, n + 1)
-            )
-            self.push(f"SELECT *, {parts} FROM {p}")
+            c = _as_text(st.expr(op["column"]), t)
+            for i in range(1, n + 1):
+                # a missing part is null (as the Python export's `list.get`), not ''
+                st.add(f"{op['column']}_{i}", f"string_split({c}, {text(op['delimiter'])})[{i}]")
         elif kind == "deduplicate":
             subset = op.get("subset") or []
-            if not subset:
-                self.push(f"SELECT DISTINCT * FROM {p}")
+            for c in subset:
+                self.column(schema, c)
+            if subset:
+                st.qualify = f"row_number() OVER (PARTITION BY {', '.join(st.expr(c) for c in subset)}) = 1"
             else:
-                for c in subset:
-                    self.column(schema, c)
-                keys = ", ".join(ident(c) for c in subset)
-                self.push(f"SELECT * FROM {p} QUALIFY row_number() OVER (PARTITION BY {keys}) = 1")
+                st.distinct = True
         elif kind == "one_hot_encode":
-            col = op["column"]
-            self.column(schema, col)
-            got = self.ws.sql(
-                self.query(f"SELECT DISTINCT {ident(col)} AS v FROM {p} WHERE {ident(col)} IS NOT NULL ORDER BY 1 LIMIT {MAX_ONE_HOT + 1}"),
-                **self.tables,
-            ).collect().to_arrow()
-            values = got.column("v").to_pylist()
-            if len(values) > MAX_ONE_HOT:
-                raise ValueError(f"{col} has more than {MAX_ONE_HOT} distinct values: too many for one-hot columns")
-            flags = ", ".join(
-                f"CASE WHEN {ident(col)} = {literal(v, schema[col])} THEN 1 ELSE 0 END AS {ident(str(col) + '_' + str(v))}" for v in values
-            )
-            self.push(f"SELECT *{', ' + flags if flags else ''} FROM {p}")
+            return self._one_hot(schema, op["column"])
         elif kind == "math_round":
-            c, t = ident(op["column"]), self.column(schema, op["column"])
+            t = self.column(schema, op["column"])
             if not is_numeric(t):
                 raise ValueError(f"round needs a numeric column; {op['column']} is {t}")
-            self.push(f"SELECT * REPLACE (round({c}, {int(op['decimals'])}) AS {c}) FROM {p}")
+            st.set(op["column"], f"round({st.expr(op['column'])}, {int(op['decimals'])})")
         else:
             raise ValueError(f"unknown step {kind!r}")
+        return None
 
-    def _text(self, schema: dict[str, str], col: str, expr: str) -> None:
+    def _fill(self, schema: dict[str, str], op: dict[str, Any]) -> None:
+        col, t = op["column"], self.column(schema, op["column"])
+        s, st = op["strategy"], self.stage
+        if s == "constant":
+            st.set(col, f"CAST(coalesce({st.expr(col)}, {literal(op.get('value'), t)}) AS {_sql_type(t)})")
+            return
+        if s not in ("mean", "median", "mode"):
+            raise ValueError(f"unknown fill strategy {s!r}")
+        if s != "mode" and not is_numeric(t):
+            raise ValueError(f"{s} needs a numeric column; {col} is {t}")
+        # the statistic reads the stage's input: it must hold the rows and the column the earlier steps left
+        if st.where or not st.plain(col):
+            st = self.flush()
+        c, rel = st.expr(col), st.relation
+        if s == "mode":
+            value = f"(SELECT {c} FROM {rel} WHERE {c} IS NOT NULL GROUP BY {c} ORDER BY count(*) DESC, {c} LIMIT 1)"
+        else:
+            value = f"(SELECT {'avg' if s == 'mean' else 'median'}({c}) FROM {rel})"
+        st.set(col, f"CAST(coalesce({c}, {value}) AS {_sql_type(t)})")
+
+    def _one_hot(self, schema: dict[str, str], col: str) -> list[Any]:
+        self.column(schema, col)
+        got = self.ws.sql(
+            self.query(f"SELECT DISTINCT {ident(col)} AS v FROM {self.prev} WHERE {ident(col)} IS NOT NULL ORDER BY 1 LIMIT {MAX_ONE_HOT + 1}"),
+            **self.tables,
+        ).collect().to_arrow()
+        values = got.column("v").to_pylist()
+        if len(values) > MAX_ONE_HOT:
+            raise ValueError(f"{col} has more than {MAX_ONE_HOT} distinct values: too many for one-hot columns")
+        # each flag repeats the column's expression: keep it a plain column
+        st = self.stage if self.stage.plain(col) else self.flush()
+        c = st.expr(col)
+        for v in values:
+            st.add(f"{col}_{v}", f"CASE WHEN {c} = {literal(v, schema[col])} THEN 1 ELSE 0 END")
+        return values
+
+    def _text(self, schema: dict[str, str], col: str, wrap: Any) -> None:
         if not is_text(self.column(schema, col)):
             raise ValueError(f"{col} is not a text column")
-        self.push(f"SELECT * REPLACE ({expr} AS {ident(col)}) FROM {self.prev}")
+        self.stage.set(col, wrap(self.stage.expr(col)))
+
+
+def _depth(expr: str) -> int:
+    """How deep the parentheses of an expression nest (string literals aside)."""
+    depth = deepest = 0
+    quoted = False
+    for ch in expr:
+        if ch == "'":
+            quoted = not quoted
+        elif not quoted and ch == "(":
+            depth += 1
+            deepest = max(deepest, depth)
+        elif not quoted and ch == ")":
+            depth -= 1
+    return deepest
+
+
+def _as_text(expr: str, type_name: str) -> str:
+    return expr if is_text(type_name) else f"CAST({expr} AS VARCHAR)"
+
+
+def _indent(sql: str, n: int) -> str:
+    return "\n".join(" " * n + line for line in sql.splitlines())
 
 
 def _sql_type(type_name: str) -> str:
@@ -220,16 +375,16 @@ def _sql_type(type_name: str) -> str:
 
 
 def _source(results: Any, source: dict[str, Any]) -> tuple[str, dict[str, Any], str]:
-    """(SQL of the source rows, extra tables, how the exported code names it)."""
+    """(the relation the recipe reads, extra tables, how the exported code names it)."""
     if "table" in source:
-        return f"SELECT * FROM {ident(source['table'])}", {}, source["table"]
-    table = results.get(source["result_id"])
-    return "SELECT * FROM source", {"source": table}, "source"
+        return ident(source["table"]), {}, source["table"]
+    table = results.full(source["result_id"])
+    return "source", {"source": table}, "source"
 
 
 def compile_recipe(ws: Any, results: Any, source: dict[str, Any], steps: list[dict[str, Any]]) -> tuple[Compiler, str]:
-    source_sql, tables, name = _source(results, source)
-    comp = Compiler(ws, source_sql, tables)
+    relation, tables, name = _source(results, source)
+    comp = Compiler(ws, relation, tables)
     for s in steps:
         if s.get("enabled", True):
             try:
@@ -240,12 +395,9 @@ def compile_recipe(ws: Any, results: Any, source: dict[str, Any], steps: list[di
 
 
 def code(comp: Compiler, name: str, from_result: bool) -> dict[str, str]:
-    sql = comp.final()
-    if from_result:
-        python = f'# `df`: the result to wrangle\nwrangled = ws.sql("""\n{sql}\n""", source=df)'
-    else:
-        python = f'wrangled = ws.sql("""\n{sql}\n""")'
-    return {"sql": sql, "python": python}
+    from workhouse.kernel.wrangle_python import python_code
+
+    return {"sql": comp.final(), "python": python_code(comp.applied, name, from_result, comp.order)}
 
 
 def preview(ws: Any, results: Any, source: dict[str, Any], steps: list[dict[str, Any]]) -> dict[str, Any]:

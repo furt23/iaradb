@@ -1455,15 +1455,7 @@ impl<'a> SqlPlanner<'a> {
             }
             E::Cast { kind, expr, data_type, .. } => {
                 let to = parse_data_type(&data_type.to_string())?;
-                let mut x = self.sql_expr(expr, scope)?;
-                // SQL semantics: casting a fractional number to an integer rounds
-                if to.is_integer() {
-                    if let Ok(src) = x.data_type(scope.schema) {
-                        if crate::types::is_float(&src) || crate::types::is_decimal(&src) {
-                            x = Expr::Function { func: ScalarFunc::Round, args: vec![x] };
-                        }
-                    }
-                }
+                let x = self.sql_expr(expr, scope)?;
                 Expr::Cast { expr: b(x), to, try_cast: matches!(kind, sql::CastKind::TryCast | sql::CastKind::SafeCast) }
             }
             E::Extract { field, expr, .. } => {

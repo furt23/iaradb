@@ -169,7 +169,7 @@ def test_graph_finds_widget_readers():
 
 def test_sql_cell_with_placeholders_round_trips():
     code = sql_source("top", "select * from sales where grp = :grp", ["recent"])
-    assert "params=wh.widgets.params()," in code
+    assert "params=workhouse.widgets.params()," in code
     assert detect_sql(code) == ("select * from sales where grp = :grp", "top")
     ast.parse(code)
     plain = sql_source("top", "select 1", [])
@@ -178,10 +178,10 @@ def test_sql_cell_with_placeholders_round_trips():
 
 def test_notebook_with_placeholder_cell_serializes_and_parses(tmp_path: Path):
     nb = marimo_io.new_notebook(tmp_path / "n.py")
-    nb.cells.append(Cell("w", "python", 'grp = wh.widgets.number("grp", 1)'))
+    nb.cells.append(Cell("w", "python", 'grp = workhouse.widgets.number("grp", 1)'))
     nb.cells.append(Cell("q", "sql", "select * from sales where grp = :grp", output="df"))
     text = marimo_io.serialize(nb)
-    assert "params=wh.widgets.params()" in text
+    assert "params=workhouse.widgets.params()" in text
     ast.parse(text)
     back = marimo_io.parse(text, tmp_path / "n.py")
     q = back.cell("q")
@@ -308,8 +308,8 @@ def test_restart_keeps_values_through_preset(session: KernelSession, workspace: 
 def job_source(workspace: Path) -> str:
     nb = marimo_io.new_notebook(workspace / "notebooks" / "job.py")
     nb.cells += [
-        Cell("w", "python", 'n = wh.widgets.number("n", 1)\nregion = wh.widgets.dropdown("region", "north", ["north", "south"])'),
-        Cell("p", "python", 'print(f"n={n} region={region} tags={wh.widgets.multiselect(\'tags\', [], [\'x\', \'y\'])}")'),
+        Cell("w", "python", 'n = workhouse.widgets.number("n", 1)\nregion = workhouse.widgets.dropdown("region", "north", ["north", "south"])'),
+        Cell("p", "python", 'print(f"n={n} region={region} tags={workhouse.widgets.multiselect(\'tags\', [], [\'x\', \'y\'])}")'),
     ]
     return marimo_io.serialize(nb)
 
@@ -355,8 +355,8 @@ def test_sql_cell_binds_widget_values(session: KernelSession):
     run(session, cells)
     states = session.notebook.view()["states"]
     assert states["q"]["status"] == "done", states["q"]["output"]
-    first = session.notebook.values["q"].to_arrow().column("n")[0].as_py()
+    first = session.notebook.namespace()["q"].to_arrow().column("n")[0].as_py()
     assert first == len([i for i in range(1000) if i % 7 == 1])
     result = session.notebook.set_widget("grp", 3, None, Recorder())
     assert result["ran"] == ["w", "q"]
-    assert session.notebook.values["q"].to_arrow().column("n")[0].as_py() == len([i for i in range(1000) if i % 7 == 3])
+    assert session.notebook.namespace()["q"].to_arrow().column("n")[0].as_py() == len([i for i in range(1000) if i % 7 == 3])

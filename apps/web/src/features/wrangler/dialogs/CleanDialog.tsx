@@ -14,9 +14,10 @@ import Tab from "@mui/material/Tab";
 import Tabs from "@mui/material/Tabs";
 import TextField from "@mui/material/TextField";
 import type { ColumnInfo } from "@workhouse/protocol";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { FillNullStrategy, WranglerStep } from "../types";
+import { typeLabel } from "@/lib/format";
 
 interface Props {
   open: boolean;
@@ -32,6 +33,12 @@ export function CleanDialog({ open, columns, defaultColumn, onClose, onApply }: 
   const [fillStrategy, setFillStrategy] = useState<FillNullStrategy>("median");
   const [constantVal, setConstantVal] = useState<string>("0");
   const [dedupBy, setDedupBy] = useState<"row" | "column">("row");
+
+  useEffect(() => {
+    if (open) {
+      setColumn(defaultColumn || columns[0]?.name || "");
+    }
+  }, [open, defaultColumn, columns]);
 
   const handleApply = () => {
     if (tab === "fill") {
@@ -64,20 +71,20 @@ export function CleanDialog({ open, columns, defaultColumn, onClose, onApply }: 
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
-      <DialogTitle>Clean & Impute Data</DialogTitle>
+      <DialogTitle>Clean and impute</DialogTitle>
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ px: 2, borderBottom: 1, borderColor: "divider" }}>
-        <Tab value="fill" label="Fill Nulls" />
-        <Tab value="drop" label="Drop Nulls" />
+        <Tab value="fill" label="Fill nulls" />
+        <Tab value="drop" label="Drop nulls" />
         <Tab value="dedup" label="Deduplicate" />
       </Tabs>
       <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, pt: 2 }}>
         {(tab !== "dedup" || dedupBy === "column") && (
           <FormControl fullWidth size="small">
-            <InputLabel>Target Column</InputLabel>
-            <Select value={column} label="Target Column" onChange={(e) => setColumn(e.target.value)}>
+            <InputLabel>Column</InputLabel>
+            <Select value={column} label="Column" onChange={(e) => setColumn(e.target.value)}>
               {columns.map((c) => (
                 <MenuItem key={c.name} value={c.name}>
-                  {c.name} ({c.type})
+                  {c.name} ({typeLabel(c.type)})
                 </MenuItem>
               ))}
             </Select>
@@ -87,8 +94,8 @@ export function CleanDialog({ open, columns, defaultColumn, onClose, onApply }: 
         {tab === "fill" && (
           <>
             <FormControl fullWidth size="small">
-              <InputLabel>Imputation Strategy</InputLabel>
-              <Select value={fillStrategy} label="Imputation Strategy" onChange={(e) => setFillStrategy(e.target.value as FillNullStrategy)}>
+              <InputLabel>Fill with</InputLabel>
+              <Select value={fillStrategy} label="Fill with" onChange={(e) => setFillStrategy(e.target.value as FillNullStrategy)}>
                 <MenuItem value="median">Median (numeric)</MenuItem>
                 <MenuItem value="mean">Mean / Average (numeric)</MenuItem>
                 <MenuItem value="mode">Mode (most frequent value)</MenuItem>
@@ -98,12 +105,12 @@ export function CleanDialog({ open, columns, defaultColumn, onClose, onApply }: 
 
             {fillStrategy === "constant" && (
               <TextField
-                label="Replacement Value"
+                label="Value"
                 size="small"
                 fullWidth
                 value={constantVal}
                 onChange={(e) => setConstantVal(e.target.value)}
-                placeholder="Enter constant value..."
+                placeholder="0"
               />
             )}
           </>
@@ -128,7 +135,7 @@ export function CleanDialog({ open, columns, defaultColumn, onClose, onApply }: 
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
         <Button variant="contained" onClick={handleApply}>
-          Apply Clean Step
+          Apply
         </Button>
       </DialogActions>
     </Dialog>

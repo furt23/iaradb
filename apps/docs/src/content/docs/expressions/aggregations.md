@@ -10,26 +10,26 @@ Aggregation methods calculate summary values over groups or entire frames.
 #### `Expr.sum`
 Returns the arithmetic sum of non-null values.
 ```python
->>> col("revenue").sum()
+>>> F.col("revenue").sum()
 ```
 
 #### `Expr.mean` / `Expr.avg`
 Returns the arithmetic mean of non-null values.
 ```python
->>> col("latency_ms").mean()
+>>> F.col("latency_ms").mean()
 ```
 
 #### `Expr.min` / `Expr.max`
 Returns the minimum or maximum value.
 ```python
->>> col("temperature").min()
->>> col("temperature").max()
+>>> F.col("temperature").min()
+>>> F.col("temperature").max()
 ```
 
 #### `Expr.median`
 Returns the 50th percentile (median) value.
 ```python
->>> col("salary").median()
+>>> F.col("salary").median()
 ```
 
 ---
@@ -39,13 +39,13 @@ Returns the 50th percentile (median) value.
 #### `Expr.count`
 Counts the number of non-null values in the column.
 ```python
->>> col("user_id").count()
+>>> F.col("user_id").count()
 ```
 
 #### `Expr.n_unique`
 Counts the number of distinct, unique non-null values.
 ```python
->>> col("country").n_unique()
+>>> F.col("country").n_unique()
 ```
 
 ---
@@ -55,13 +55,13 @@ Counts the number of distinct, unique non-null values.
 #### `Expr.std`
 Returns sample standard deviation (`ddof=1` by default) or population standard deviation (`ddof=0`).
 ```python
->>> col("measurement").std()
+>>> F.col("measurement").std()
 ```
 
 #### `Expr.var`
 Returns sample variance (`ddof=1` by default) or population variance (`ddof=0`).
 ```python
->>> col("measurement").var()
+>>> F.col("measurement").var()
 ```
 
 ---
@@ -71,8 +71,8 @@ Returns sample variance (`ddof=1` by default) or population variance (`ddof=0`).
 #### `Expr.first` / `Expr.last`
 Returns the first or last non-null value encountered in the group.
 ```python
->>> col("event_type").first()
->>> col("event_type").last()
+>>> F.col("event_type").first()
+>>> F.col("event_type").last()
 ```
 
 ---
@@ -81,18 +81,18 @@ Returns the first or last non-null value encountered in the group.
 
 The `.filter()` method restricts an aggregate calculation to rows matching a boolean predicate without affecting the rest of the query.
 
-Works both as `col("x").sum().filter(p)` and `col("x").filter(p).sum()`.
+Works both as `F.col("x").sum().filter(p)` and `F.col("x").filter(p).sum()`.
 
 ```python
->>> import workhouse as wh
->>> from workhouse import col
->>> df = wh.from_dict({
+>>> import workhouse
+>>> from workhouse import functions as F
+>>> df = workhouse.from_dict({
 ...     "amount": [10.0, 50.0, 100.0, 20.0],
 ...     "status": ["OK", "FAILED", "OK", "OK"],
 ... })
 >>> df.lazy().agg(
-...     total_ok=col("amount").sum().filter(col("status") == "OK"),
-...     count_failed=wh.len().filter(col("status") == "FAILED")
+...     total_ok=F.col("amount").sum().filter(F.col("status") == "OK"),
+...     count_failed=F.len().filter(F.col("status") == "FAILED")
 ... ).collect().show()
 ┌──────────┬──────────────┐
 │ total_ok │ count_failed │

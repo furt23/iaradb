@@ -29,9 +29,9 @@ workhouse-core (Rust)
 A workspace is a directory with a `workhouse.toml` that lists its tables. `workhouse init [directory]` creates one. Notebooks and the SQL editor query the tables by name. A script can use the same catalog:
 
 ```python
-import workhouse as wh
+import workhouse
 
-ws = wh.workspace()      # finds workhouse.toml from the current directory upward
+ws = workhouse.workspace()      # finds workhouse.toml from the current directory upward
 ws.sql("select count(*) from lineitem").collect()
 ```
 
@@ -39,21 +39,24 @@ Tables can be Parquet, CSV or JSON files, directories or globs, local or `s3://`
 
 ## Notebooks
 
-- A notebook is a `.py` file in marimo format. Each cell is a function: its parameters are the variables it reads and its return values are the variables it defines. The file can be opened in marimo and run with `python notebook.py`.
-- Running a cell also runs the cells that depend on it, and any stale cells it depends on, in dependency order.
+- A notebook is a `.py` file in marimo format. Each cell is a function: its parameters are the variables it reads and its return values are the variables it defines. The file runs with `python notebook.py`. A notebook that redefines a variable in several cells does not run in marimo itself.
+- Running a cell runs it, and the cells it reads from that have no value yet. The cells that read its values are marked stale; they run when you run them. Kernel → Run dependent cells automatically (a per-notebook choice, kept by the browser) runs them right away instead, as marimo does. Run all, and changing a widget, run everything that depends on it.
+- A variable can be redefined by later cells (`df = df.filter(...)`). A cell reads the nearest definition above it. A variable defined by one cell only is read from that cell wherever it is.
 - Python and SQL cells share data. A DataFrame from a Python cell can be queried by name in SQL, and a SQL cell's result is a variable in later Python cells.
 - Notebooks and queries have an 8-character id, so links such as `/notebooks/12yd3sx9` survive renames and moves. A cell has an id too, and "Copy link to cell" links to it.
 - The file menu renames, moves, duplicates, exports (`.py`, `.ipynb`, Markdown), schedules as a job and deletes. The kernel menu interrupts, restarts, restarts and clears outputs, or restarts and runs all.
 - The side panel shows an outline built from Markdown headings and the variables defined in the kernel.
-- Python cells have completion (Jedi). Syntax errors, undefined names, names defined twice and SQL errors are marked while you type.
-- The imports of a notebook live in a setup cell (`with app.setup:`). The Studio hides it from the cell list. Kernel → Show setup code opens it. New notebooks start with `import marimo as mo`, `import workhouse as wh` and `ws = wh.workspace()`.
+- Python cells have completion (Jedi). Syntax errors, undefined names and SQL errors are marked while you type.
+- The imports of a notebook live in a setup cell (`with app.setup:`). The Studio hides it from the cell list. Kernel → Show setup code opens it. New notebooks start with `import marimo as mo`, `import workhouse` and `ws = workhouse.workspace()`.
+- Frames, readers and `sql` are on `workhouse` (`workhouse.scan_parquet(...)`). Expression functions are in `workhouse.functions`: import it under the name you like, e.g. `from workhouse import functions as F`, then `F.col("x") > 5`, `F.sum("amount")`, `F.when(...)`. Its `sum`, `min`, `max`, `all` and `len` are aggregates, so import the module rather than `*`.
+- A cell does not show the frame it ends with, and `collect()` only collects: a frame shows its first 500 rows with `df.preview()` (or `workhouse.preview(df)`, `df.preview(50)` for fewer). A LazyFrame runs with a limit, and its profile and plan come along. The table's CSV and Parquet downloads, charts and the Wrangle tab use all the rows. SQL cells and the SQL editor show the first 500 rows of their result; the cell's variable has all of them. Other tables (pandas, pyarrow, polars) a cell ends with are shown as before, their first 500 rows.
 
 ## Widgets
 
-`wh.widgets` defines named inputs for a notebook: `text`, `number`, `dropdown`, `multiselect`, `checkbox` and `date`. Each call defines the widget and returns its value.
+`workhouse.widgets` defines named inputs for a notebook: `text`, `number`, `dropdown`, `multiselect`, `checkbox` and `date`. Each call defines the widget and returns its value.
 
 ```python
-region = wh.widgets.dropdown("region", "north", ["north", "south"], label="Region")
+region = workhouse.widgets.dropdown("region", "north", ["north", "south"], label="Region")
 ```
 
 The notebook's widget bar shows the widgets. Changing a value re-runs the cells that read it. A SQL cell binds `:name` placeholders to widget values. Outside the Studio (a script or a job without a kernel), a widget takes its value from the environment variable `WORKHOUSE_PARAM_<NAME>` (the name in upper case) when it is set, and from its default otherwise.

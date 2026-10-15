@@ -13,8 +13,12 @@ import Paper from "@mui/material/Paper";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
+import { useGuard } from "@/features/shell/notify";
+import { unwrap } from "@/lib/action";
 import { formatMinutes, minutesSince } from "@/lib/clusterTime";
+import { setDefaultCluster } from "@/server/actions/clusters";
 import type { ClusterView } from "@/server/compute/types";
 
 import { machineSummary, StateChip } from "./ClusterState";
@@ -29,6 +33,13 @@ export interface ClusterActions {
 
 /** One cluster: state, machine, limits, attached notebooks and its actions. */
 export function ClusterRow({ cluster: c, now, actions, cloud }: { cluster: ClusterView; now: number; actions: ClusterActions; cloud: boolean }) {
+  const guard = useGuard();
+  const router = useRouter();
+  const makeDefault = () =>
+    guard(async () => {
+      unwrap(await setDefaultCluster(c.id));
+      router.refresh();
+    });
   const stopped = c.state === "terminated" || c.state === "error";
   const details = [machineSummary(c)];
   if (c.kind === "ec2") details.push(`terminates after ${c.autoTerminateMinutes} min idle`);
@@ -65,8 +76,16 @@ export function ClusterRow({ cluster: c, now, actions, cloud }: { cluster: Clust
           </Typography>
         </Tooltip>
       </Box>
-      {c.kind === "ec2" && (
-        <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, flexShrink: 0 }}>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, flexShrink: 0 }}>
+        {!c.isDefault && !c.job && (
+          <Tooltip title="The SQL editor, the catalog and new notebooks run on the default cluster">
+            <Button size="small" onClick={makeDefault}>
+              Make default
+            </Button>
+          </Tooltip>
+        )}
+        {c.kind === "ec2" && (
+          <>
           {stopped ? (
             <Button variant="contained" size="small" startIcon={<PlayArrow />} onClick={() => actions.start(c)} disabled={!cloud}>
               Start
@@ -97,8 +116,9 @@ export function ClusterRow({ cluster: c, now, actions, cloud }: { cluster: Clust
               </Tooltip>
             </>
           )}
-        </Box>
-      )}
+          </>
+        )}
+      </Box>
     </Paper>
   );
 }

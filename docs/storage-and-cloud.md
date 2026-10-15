@@ -9,18 +9,18 @@ Any path can be an `s3://` URL: `scan_parquet`, `scan_csv`, `scan_json`, `write_
 Credentials come from `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` and `AWS_REGION`, or from the EC2 instance profile. Other settings are storage options, passed per call or set once for a URL prefix.
 
 ```python
-import workhouse as wh
+import workhouse
 
-lf = wh.scan_parquet("s3://my-bucket/tpch/lineitem/**/*.parquet")
+lf = workhouse.scan_parquet("s3://my-bucket/tpch/lineitem/**/*.parquet")
 
 # options for one call
-lf = wh.scan_parquet("s3://my-bucket/events/", storage_options={"region": "us-east-1"})
+lf = workhouse.scan_parquet("s3://my-bucket/events/", storage_options={"region": "us-east-1"})
 
 # options for every URL under a prefix
-wh.set_storage_options("s3://my-bucket", {"region": "us-east-1"})
+workhouse.set_storage_options("s3://my-bucket", {"region": "us-east-1"})
 
 # register a table in a session; lazy=True lists the files on first use
-ctx = wh.SessionContext()
+ctx = workhouse.SessionContext()
 ctx.register_parquet("events", "s3://my-bucket/events/", lazy=True)
 
 # write
@@ -28,14 +28,14 @@ lf.sink_parquet("s3://my-bucket/output/summary.parquet")      # while the query 
 lf.collect().write_parquet("s3://my-bucket/output/copy.parquet")
 ```
 
-Common options: `region`, `endpoint`, `allow_http`, `skip_signature` (public buckets), `access_key_id`, `secret_access_key`, `session_token`. `wh.list_files(pattern)` returns `[(url, size), ...]`. After changing credentials, call `workhouse.storage.clear_object_stores()`.
+Common options: `region`, `endpoint`, `allow_http`, `skip_signature` (public buckets), `access_key_id`, `secret_access_key`, `session_token`. `workhouse.list_files(pattern)` returns `[(url, size), ...]`. After changing credentials, call `workhouse.storage.clear_object_stores()`.
 
 ### R2, MinIO and other S3-compatible stores
 
 Set `endpoint`. For R2 also set `region` to `auto`.
 
 ```python
-wh.set_storage_options(
+workhouse.set_storage_options(
     "s3://my-bucket",
     {"endpoint": "https://<account_id>.r2.cloudflarestorage.com", "region": "auto"},
 )
@@ -58,9 +58,9 @@ Object stores charge per request, and LIST is the most expensive. To keep the co
 To see what was requested:
 
 ```python
-before = wh.storage_requests()   # {"list": ..., "head": ..., "get": ..., "bytes": ...}
+before = workhouse.storage_requests()   # {"list": ..., "head": ..., "get": ..., "bytes": ...}
 lf.collect()
-after = wh.storage_requests()
+after = workhouse.storage_requests()
 
 result = lf.analyze()
 result["requests"]               # the requests this query made

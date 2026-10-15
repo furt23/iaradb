@@ -4,6 +4,7 @@ import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 
 import type { Columns, Load } from "./DataProvider";
+import { typeLabel } from "@/lib/format";
 
 /** The columns of a table, under its row; `indent` as the row's. */
 export function ColumnList({ name, indent, columns }: { name: string; indent: number; columns: Load<Columns> | null }) {
@@ -24,7 +25,7 @@ export function ColumnList({ name, indent, columns }: { name: string; indent: nu
             {c.name}
           </Typography>
           <Typography noWrap variant="mono" sx={{ fontSize: 11, color: "text.disabled", ml: "auto", flexShrink: 0, maxWidth: "45%" }}>
-            {c.type}
+            {typeLabel(c.type)}
           </Typography>
         </Box>
       ))}

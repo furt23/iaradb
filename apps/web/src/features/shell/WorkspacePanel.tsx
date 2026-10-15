@@ -11,7 +11,6 @@ import Tooltip from "@mui/material/Tooltip";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
-import { DefaultClusterChip } from "@/features/compute/DefaultClusterChip";
 import { FileTree } from "@/features/files/FileTree";
 import { NewFolderDialog } from "@/features/files/NewFolderDialog";
 import { NewNotebookDialog } from "@/features/files/NewNotebookDialog";
@@ -82,7 +81,6 @@ export function WorkspacePanel({ name, tree }: { name: string; tree: FileNode[] 
           </>
         }
       />
-      <DefaultClusterChip />
       <Box sx={{ flex: 1, overflow: "auto", px: 0.5 }}>
         <FileTree nodes={showData ? tree : filtered.nodes} />
       </Box>

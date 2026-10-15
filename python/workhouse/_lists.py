@@ -39,8 +39,8 @@ class ListNamespace:
 
         if isinstance(index, int):
             return self._f("list_extract", index + 1 if index >= 0 else index)
-        index = wh.lit(index) if not hasattr(index, "_e") else index
-        return self._f("list_extract", wh.when(index >= 0).then(index + 1).otherwise(index))
+        index = wh.functions.lit(index) if not hasattr(index, "_e") else index
+        return self._f("list_extract", wh.functions.when(index >= 0).then(index + 1).otherwise(index))
 
     def first(self) -> Expr:
         return self.get(0)
@@ -90,7 +90,7 @@ class ListNamespace:
         r = self._f(name)
         if empty is None:
             return r
-        return wh.when(self._x.is_null()).then(wh.lit(None)).otherwise(r.fill_null(empty))
+        return wh.functions.when(self._x.is_null()).then(wh.functions.lit(None)).otherwise(r.fill_null(empty))
 
     def sum(self) -> Expr:
         """Sum of the non-null elements (0 for an empty list)."""
@@ -115,6 +115,6 @@ class ListNamespace:
         joined = self._f("array_to_string", separator)
         if ignore_nulls:
             # a list of only nulls joins to '' (the engine's SQL function gives NULL)
-            return wh.when(self._x.is_null()).then(wh.lit(None)).otherwise(joined.fill_null(""))
+            return wh.functions.when(self._x.is_null()).then(wh.functions.lit(None)).otherwise(joined.fill_null(""))
         has_null = self._f("array_length") != self._f("list_count")
-        return wh.when(has_null).then(wh.lit(None)).otherwise(joined)
+        return wh.functions.when(has_null).then(wh.functions.lit(None)).otherwise(joined)

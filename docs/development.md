@@ -83,7 +83,7 @@ cargo test -p workhouse-core
 | `WORKHOUSE_PYTHON` | | Python interpreter Studio uses for kernels. |
 | `WORKHOUSE_KERNEL_IDLE_MINUTES` | `60` | Idle time before Studio stops a kernel. |
 
-The thread count defaults to the number of cores. Change it with `wh.set_num_threads(n)` before the first query. Object store variables are in [storage-and-cloud.md](storage-and-cloud.md); Studio's are in [studio.md](studio.md).
+The thread count defaults to the number of cores. Change it with `workhouse.set_num_threads(n)` before the first query. Object store variables are in [storage-and-cloud.md](storage-and-cloud.md); Studio's are in [studio.md](studio.md).
 
 ## Known limits
 

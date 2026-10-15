@@ -70,7 +70,7 @@ export function ExportDialog({ open, sql, python, onClose }: Props) {
       </DialogContent>
       <DialogActions sx={{ px: 3, pb: 2, justifyContent: "space-between" }}>
         <Box>
-          {lang === "sql" && !sql.includes("FROM source") && (
+          {lang === "sql" && !/\bFROM\s+source(?:\s|\)|;|,|$)/i.test(sql) && (
             <Button variant="outlined" size="small" startIcon={<TerminalOutlined />} component={Link} href={sqlHref(sql)} onClick={onClose}>
               Open in SQL editor
             </Button>

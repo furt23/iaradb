@@ -44,6 +44,38 @@ export function formatRelative(ms: number, now = Date.now()): string {
 
 const NUMERIC = /^(u?int\d+|float\d*|double|halffloat|decimal)/;
 
+/** A column type is numeric (Arrow's spelling, `int64`, or the engine's, `Int64`). */
 export function isNumericType(arrowType: string): boolean {
-  return NUMERIC.test(arrowType);
+  return NUMERIC.test(arrowType.toLowerCase());
+}
+
+/**
+ * The name a column type is shown by: `text`, `integer`, `float`, `decimal(10,2)`,
+ * `date`, `timestamp`… Arrow's and the engine's spellings (`string_view`,
+ * `Utf8View`, `int64`, `Int64`) both map to it; the exact type goes in a tooltip.
+ */
+export function typeLabel(type: string): string {
+  const s = type.trim().toLowerCase();
+  if (/^(large_?)?(string|utf8)(_?view)?$/.test(s)) return "text";
+  if (/^u?int\d+$/.test(s)) return "integer";
+  if (/^(float\d*|double|halffloat)$/.test(s)) return "float";
+  const dec = /^decimal\d*\((\d+),\s*(-?\d+)\)/.exec(s);
+  if (dec) return `decimal(${dec[1]},${dec[2]})`;
+  if (s.startsWith("decimal")) return "decimal";
+  if (s === "bool" || s === "boolean") return "boolean";
+  if (s.startsWith("date")) return "date";
+  if (s.startsWith("timestamp")) return /tz=|"|some\(/.test(s) ? "timestamp with time zone" : "timestamp";
+  if (s.startsWith("time")) return "time";
+  if (s.startsWith("duration")) return "duration";
+  if (s.includes("interval")) return "interval";
+  if (s.includes("binary")) return "binary";
+  const list = /^(?:large_|fixed_size_)?list<[^:]+:\s*(.+)>$/.exec(type.trim());
+  if (list) return `list of ${typeLabel(list[1])}`;
+  if (/^(large_|fixed_size_)?list/.test(s)) return "list";
+  if (s.startsWith("struct")) return "struct";
+  if (s.startsWith("map")) return "map";
+  const dict = /^dictionary<values=([^,]+)/.exec(s) ?? /^dictionary\([^,]+,\s*([^)]+)\)/.exec(s);
+  if (dict) return typeLabel(dict[1]);
+  if (s === "null") return "null";
+  return type;
 }

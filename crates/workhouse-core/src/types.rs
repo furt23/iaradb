@@ -1,8 +1,11 @@
 //! Type coercion rules shared by logical type inference and physical planning.
 
-use arrow::array::new_empty_array;
+use std::sync::Arc;
+
+use arrow::array::{ArrayRef, AsArray, new_empty_array};
 use arrow::compute::kernels::numeric;
-use arrow::datatypes::{DataType, TimeUnit};
+use arrow::compute::{CastOptions, cast_with_options};
+use arrow::datatypes::{DataType, Float64Type, TimeUnit};
 
 use crate::error::{Result, WhError};
 use crate::expr::Operator;
@@ -30,6 +33,33 @@ pub fn is_numeric(dt: &DataType) -> bool {
 
 pub fn is_temporal(dt: &DataType) -> bool {
     dt.is_temporal()
+}
+
+/// The engine's value cast. Same as Arrow's, except a fractional number cast to
+/// an integer is rounded instead of truncated, as in DuckDB and Postgres:
+/// floats round half to even, decimals round half away from zero.
+pub fn cast_array(a: &ArrayRef, to: &DataType, opts: &CastOptions) -> Result<ArrayRef> {
+    let src = a.data_type();
+    if !to.is_integer() || !(is_float(src) || is_decimal(src)) {
+        return Ok(cast_with_options(a, to, opts)?);
+    }
+    let rounded: ArrayRef = match *src {
+        DataType::Decimal128(p, s) if s > 0 => {
+            // Arrow rounds half away from zero when it lowers a decimal's scale
+            let p = (p as i16 - s as i16 + 1).clamp(1, 38) as u8;
+            cast_with_options(a, &DataType::Decimal128(p, 0), opts)?
+        }
+        DataType::Decimal256(p, s) if s > 0 => {
+            let p = (p as i16 - s as i16 + 1).clamp(1, 76) as u8;
+            cast_with_options(a, &DataType::Decimal256(p, 0), opts)?
+        }
+        DataType::Decimal128(..) | DataType::Decimal256(..) => a.clone(),
+        _ => {
+            let f = cast_with_options(a, &DataType::Float64, opts)?;
+            Arc::new(f.as_primitive::<Float64Type>().unary::<_, Float64Type>(f64::round_ties_even))
+        }
+    };
+    Ok(cast_with_options(&rounded, to, opts)?)
 }
 
 fn int_rank(dt: &DataType) -> (bool, u8) {

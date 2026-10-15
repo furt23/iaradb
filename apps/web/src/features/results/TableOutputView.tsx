@@ -30,10 +30,16 @@ function ExportButton({ kernelKey, output, format }: { kernelKey: string; output
       window.location.href = `/api/download?kernel=${encodeURIComponent(kernelKey)}&path=${encodeURIComponent(path)}`;
     });
   return (
-    <Button size="small" startIcon={<Download fontSize="small" />} onClick={run} sx={{ color: "text.secondary" }}>
+    <Button size="small" startIcon={<Download fontSize="small" />} onClick={run} sx={{ color: "text.secondary" }} title={`Download all the rows as ${format.toUpperCase()}`}>
       {format.toUpperCase()}
     </Button>
   );
+}
+
+/** "1,204 rows", or "first 500 of 1,204 rows" for a preview. */
+export function rowsLabel(result: { num_rows: number; truncated?: boolean; total_rows?: number | null }): string {
+  if (!result.truncated) return `${formatCount(result.num_rows)} rows`;
+  return result.total_rows != null ? `first ${formatCount(result.num_rows)} of ${formatCount(result.total_rows)} rows` : `first ${formatCount(result.num_rows)} rows`;
 }
 
 export interface ChartProps {
@@ -60,7 +66,7 @@ export function TableOutputView({ kernelKey, output, height, chart, onChart }: {
           {plan && <Tab value="plan" label="Plan" />}
         </Tabs>
         <Typography variant="body2" sx={{ color: "text.secondary", px: 1 }}>
-          {formatCount(result.num_rows)} rows × {result.columns.length} columns
+          {rowsLabel(result)} × {result.columns.length} columns
           {profile && ` · ${formatDuration(profile.elapsed_ms)}`}
           {result.on_disk && (
             <Box component="span" title="Larger than the kernel's result memory: kept on disk and read page by page">

@@ -24,8 +24,8 @@ DataFrame.write_parquet(
 
 #### Example
 ```python
->>> import workhouse as wh
->>> df = wh.from_dict({"a": [1, 2, 3]})
+>>> import workhouse
+>>> df = workhouse.from_dict({"a": [1, 2, 3]})
 >>> df.write_parquet("data/output.parquet")
 ```
 

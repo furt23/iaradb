@@ -2,6 +2,11 @@
 
 Payload types: ``table`` (a stored result, plus run profile and plan for lazy
 queries), ``html``, ``image``, ``text`` and ``error``.
+
+A workhouse frame a cell ends with is not run nor shown, and ``.preview()``
+shows its first rows (``preview_output``). The frames a cell makes are
+described apart from its output (``frame_info``: name, rows, columns and
+types). Other tables (pandas, pyarrow, polars) are shown, their first rows only.
 """
 
 from __future__ import annotations
@@ -12,7 +17,7 @@ from typing import Any
 
 import pyarrow as pa
 
-from workhouse.kernel.runtime.results import ResultStore, image_payload
+from workhouse.kernel.runtime.results import PREVIEW_ROWS, ResultStore, image_payload
 
 MAX_TEXT = 20_000
 
@@ -37,8 +42,17 @@ def to_arrow(value: Any) -> pa.Table | None:
     return None
 
 
-def table_output(store: ResultStore, table: pa.Table, label: str, profile: dict | None = None, plan: dict | None = None, path: Path | None = None) -> dict[str, Any]:
-    out: dict[str, Any] = {"type": "table", "result": store.put(table, label, path)}
+def table_output(
+    store: ResultStore,
+    table: pa.Table,
+    label: str,
+    profile: dict | None = None,
+    plan: dict | None = None,
+    path: Path | None = None,
+    source: Any = None,
+    total: int | None = None,
+) -> dict[str, Any]:
+    out: dict[str, Any] = {"type": "table", "result": store.put(table, label, path, source, total)}
     if profile is not None:
         out["profile"] = profile
     if plan is not None:
@@ -47,13 +61,74 @@ def table_output(store: ResultStore, table: pa.Table, label: str, profile: dict 
 
 
 def run_query(store: ResultStore, lf: Any, label: str) -> tuple[dict[str, Any], Any]:
-    """Run a query, spooling a large result to disk: ``(table output, DataFrame)``."""
+    """Run a query, spooling a large result to disk: ``(table output, DataFrame)``.
+    The output shows the first rows; downloads take all of them."""
     import workhouse as wh
 
     plan = lf.explain_tree()
     spooled = store.spool.collect(lf.stream())
-    output = table_output(store, spooled.table, label, spooled.profile, plan, spooled.path)
-    return output, wh.from_arrow(spooled.table)
+    table = spooled.table
+    if table.num_rows > PREVIEW_ROWS:
+        output = table_output(store, table.slice(0, PREVIEW_ROWS), label, spooled.profile, plan, None, table, table.num_rows)
+    else:
+        output = table_output(store, table, label, spooled.profile, plan, spooled.path)
+    return output, wh.from_arrow(table)
+
+
+def preview_output(store: ResultStore, value: Any, label: str, n: int = PREVIEW_ROWS) -> dict[str, Any] | None:
+    """The first ``n`` rows of a frame (or any table) as a table output; a lazy
+    one runs with a limit, and keeps its profile and plan."""
+    import workhouse as wh
+
+    n = max(1, int(n))
+    if isinstance(value, wh.LazyFrame):
+        limited = value.limit(n + 1)
+        plan = limited.explain_tree()
+        spooled = store.spool.collect(limited.stream())
+        table = spooled.table
+        if table.num_rows > n:
+            return table_output(store, table.slice(0, n), label, spooled.profile, plan, None, value, None)
+        return table_output(store, table, label, spooled.profile, plan)
+    if isinstance(value, wh.DataFrame):
+        total = value.height
+        if total > n:
+            return table_output(store, value.slice(0, n).to_arrow(), label, source=value, total=total)
+        return table_output(store, value.to_arrow(), label)
+    table = to_arrow(value)
+    if table is None:
+        return display(value, store, label)
+    if table.num_rows > n:
+        return table_output(store, table.slice(0, n), label, source=table, total=table.num_rows)
+    return table_output(store, table, label)
+
+
+def frame_info(name: str | None, value: Any) -> dict[str, Any] | None:
+    """What a cell's frame is: its variable (None: the value the cell ends
+    with), kind, rows (a DataFrame's; a LazyFrame is not run) and columns
+    with their types. None for anything but a workhouse frame."""
+    import workhouse as wh
+
+    if isinstance(value, wh.LazyFrame):
+        kind, rows = "LazyFrame", None
+    elif isinstance(value, wh.DataFrame):
+        kind, rows = "DataFrame", value.height
+    else:
+        return None
+    try:
+        schema = value.schema
+    except Exception:  # noqa: BLE001 - a lazy query that does not plan: no description
+        return None
+    return {"name": name, "kind": kind, "rows": rows, "columns": [{"name": n, "type": str(t)} for n, t in schema.items()]}
+
+
+def frames_of(defs: dict[str, Any], value: Any = None) -> list[dict[str, Any]]:
+    """The frames a cell defines (in its order of names), and the one it ends with when unnamed."""
+    out = [info for n, v in defs.items() if not n.startswith("_") and (info := frame_info(n, v)) is not None]
+    if value is not None and not any(value is v for v in defs.values()):
+        info = frame_info(None, value)
+        if info is not None:
+            out.append(info)
+    return out
 
 
 def display(value: Any, store: ResultStore, label: str = "") -> dict[str, Any] | None:
@@ -62,11 +137,10 @@ def display(value: Any, store: ResultStore, label: str = "") -> dict[str, Any] |
 
     if value is None:
         return None
-    if isinstance(value, wh.LazyFrame):
-        return run_query(store, value, label)[0]
-    table = to_arrow(value)
-    if table is not None:
-        return table_output(store, table, label)
+    if isinstance(value, (wh.LazyFrame, wh.DataFrame)):
+        return None  # described with the cell's frames; .preview() shows rows
+    if to_arrow(value) is not None:
+        return preview_output(store, value, label)
     mime = getattr(value, "_mime_", None)
     if callable(mime):  # marimo outputs (mo.md, mo.ui ...)
         kind, data = mime()

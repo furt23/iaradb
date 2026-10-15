@@ -8,8 +8,8 @@ Window functions compute values across rows related to the current row without c
 In Workhouse, windowing is applied to expressions using the `.over()` method.
 
 ```python
-import workhouse as wh
-from workhouse import col
+import workhouse
+from workhouse import functions as F
 ```
 
 ---
@@ -40,13 +40,13 @@ Expr.over(
 
 ### Example: Group Mean & Demeaning
 ```python
->>> df = wh.from_dict({
+>>> df = workhouse.from_dict({
 ...     "group": ["A", "A", "B", "B"],
 ...     "val": [10.0, 20.0, 100.0, 200.0]
 ... })
 >>> df.lazy().with_columns(
-...     group_avg=col("val").mean().over("group"),
-...     demeaned=(col("val") - col("val").mean()).over("group")
+...     group_avg=F.col("val").mean().over("group"),
+...     demeaned=(F.col("val") - F.col("val").mean()).over("group")
 ... ).collect().show()
 ┌───────┬───────┬───────────┬──────────┐
 │ group │ val   │ group_avg │ demeaned │

@@ -4,17 +4,19 @@ Lazy DataFrame API and SQL on top of the
 same optimizer and morsel-driven parallel executor. Data is exchanged with
 pyarrow / pandas / polars zero-copy through the Arrow C stream interface.
 
-    >>> import workhouse as wh
-    >>> (wh.scan_parquet("lineitem/*.parquet")
-    ...    .filter(wh.col("l_shipdate") <= datetime.date(1998, 9, 2))
+    >>> import workhouse
+    >>> from workhouse import functions as F
+    >>> (workhouse.scan_parquet("lineitem/*.parquet")
+    ...    .filter(F.col("l_shipdate") <= datetime.date(1998, 9, 2))
     ...    .group_by("l_returnflag", "l_linestatus")
-    ...    .agg(wh.col("l_quantity").sum().alias("sum_qty"))
+    ...    .agg(F.col("l_quantity").sum().alias("sum_qty"))
     ...    .sort("l_returnflag")
     ...    .collect())
 """
 
 from __future__ import annotations
 
+import contextvars as _contextvars
 import datetime as _datetime
 import os
 from typing import Any, Iterable, Iterator, Mapping, Sequence
@@ -38,14 +40,19 @@ from workhouse._workhouse import (
 from workhouse import _window
 from workhouse import widgets
 from workhouse._lists import ListNamespace
-from workhouse._structs import List, Struct, StructNamespace, StructUnnest, struct, struct_literal
+from workhouse._structs import List, Struct, StructNamespace, StructUnnest
+from workhouse._structs import struct_literal as _struct_literal
 from workhouse._window import WindowMethods
 from workhouse.storage import StorageError, StorageOptions, list_files, set_storage_options, storage_requests
 from workhouse import file_io as _fio
 from workhouse.storage import normalize as _storage
 
+#: the public API: frames, readers, SQL and settings; expression functions
+#: (``col``, ``lit``, ``when``, aggregates...) are in ``workhouse.functions``
 __all__ = [
     "Expr",
+    "concat",
+    "Decimal",
     "LazyFrame",
     "ResultStream",
     "DataFrame",
@@ -59,29 +66,8 @@ __all__ = [
     "interrupt",
     "cancel_query",
     "running_queries",
-    "col",
-    "lit",
-    "when",
-    "count",
-    "count_if",
-    "now",
-    "pi",
-    "rand",
-    "len",
-    "sum",
-    "mean",
-    "min",
-    "max",
-    "coalesce",
-    "concat_list",
-    "concat_str",
-    "struct",
     "Struct",
     "List",
-    "greatest",
-    "least",
-    "all",
-    "row_number",
     "scan_parquet",
     "scan_delta",
     "scan_csv",
@@ -97,7 +83,9 @@ __all__ = [
     "from_polars",
     "from_dict",
     "sql",
+    "preview",
     "workspace",
+    "functions",
     "widgets",
     "set_num_threads",
     "num_threads",
@@ -105,6 +93,9 @@ __all__ = [
     "memory_usage",
     "__version__",
 ]
+
+#: rows ``preview`` shows by default
+PREVIEW_ROWS = 500
 
 # data type names accepted by Expr.cast
 Boolean = "bool"
@@ -140,8 +131,13 @@ def _expr(x: Any) -> Expr:
     if isinstance(x, Expr):
         return x
     if isinstance(x, dict):
-        return struct_literal(x)
+        return _struct_literal(x)
     return Expr(PyExpr.lit(x))
+
+
+def _column(name: str) -> Expr:
+    """A column by name ("*": all of them)."""
+    return Expr(PyExpr.wildcard()) if name == "*" else Expr(PyExpr.col(name))
 
 
 def _col_or_expr(x: Any) -> Expr:
@@ -149,7 +145,7 @@ def _col_or_expr(x: Any) -> Expr:
     if isinstance(x, Expr):
         return x
     if isinstance(x, str):
-        return col(x)
+        return _column(x)
     return _expr(x)
 
 
@@ -161,6 +157,11 @@ def _flatten(items: Iterable[Any]) -> list[Any]:
         else:
             out.append(i)
     return out
+
+
+def _implode(agg: PyExpr) -> Expr:
+    """A list aggregate that gives an empty list (not null) for an empty group."""
+    return Expr(PyExpr.func("coalesce", [agg, PyExpr.func("list_value", [])]))
 
 
 def _named(e: Expr) -> PyExpr:
@@ -693,10 +694,14 @@ class _StrNamespace:
 
     def pad_start(self, length: int, fill_char: str = " ") -> Expr:
         """Left-pad to `length` chars; longer strings are kept whole (Polars)."""
+        from workhouse.functions import when
+
         return when(self.len_chars() >= length).then(self._x).otherwise(self._x._f("lpad", length, fill_char))
 
     def pad_end(self, length: int, fill_char: str = " ") -> Expr:
         """Right-pad to `length` chars; longer strings are kept whole (Polars)."""
+        from workhouse.functions import when
+
         return when(self.len_chars() >= length).then(self._x).otherwise(self._x._f("rpad", length, fill_char))
 
     def zfill(self, length: int) -> Expr:
@@ -707,7 +712,7 @@ class _StrNamespace:
         return self._x._f("initcap")
 
     def json_decode(self, dtype: Any = None) -> Expr:
-        """Parse JSON text into `dtype` (``wh.Struct({...})``, ``wh.List(..)`` or a scalar type).
+        """Parse JSON text into `dtype` (``workhouse.Struct({...})``, ``workhouse.List(..)`` or a scalar type).
 
         Polars infers the type from the data; a lazy plan needs it up front, so
         `dtype` is required here. Members the type does not name are ignored and
@@ -716,7 +721,7 @@ class _StrNamespace:
         if dtype is None:
             raise TypeError(
                 "str.json_decode needs dtype=..: the engine types the whole plan before it runs, "
-                "e.g. dtype=wh.Struct({'a': 'int64', 'tags': wh.List('utf8')})"
+                "e.g. dtype=workhouse.Struct({'a': 'int64', 'tags': workhouse.List('utf8')})"
             )
         return self._x._f("from_json", str(dtype))
 
@@ -780,145 +785,6 @@ class _DtNamespace:
 
     def month_end(self) -> Expr:
         return self._x._f("month_end")
-
-
-def col(name: str, *more: str) -> Any:
-    """Reference a column (several names -> list of expressions; "*" -> all)."""
-    if more:
-        return [col(n) for n in (name, *more)]
-    if name == "*":
-        return Expr(PyExpr.wildcard())
-    return Expr(PyExpr.col(name))
-
-
-def all() -> Expr:  # noqa: A001
-    return Expr(PyExpr.wildcard())
-
-
-def lit(value: Any) -> Expr:
-    return Expr(PyExpr.lit(value))
-
-
-def count_if(condition: Any) -> Expr:
-    """Number of rows where `condition` is true (nulls and false are skipped):
-    0 for a group with none, as Polars counts (SQL `count_if` gives NULL, as DuckDB)."""
-    return coalesce(Expr(_expr(condition)._e.agg("count_if")), lit(0))
-
-
-def now() -> Expr:
-    """The current timestamp (UTC, no time zone): one value for the whole query."""
-    return Expr(PyExpr.func("now", []))
-
-
-def pi() -> Expr:
-    return Expr(PyExpr.func("pi", []))
-
-
-def rand(seed: int | None = None, key: Any = None) -> Expr:
-    """Uniform random floats in [0, 1), one per row.
-
-    No seed: different on every run. With `seed`: reproducible when batches
-    are processed in order. With `seed` and `key` (an integer column): a pure
-    function of (seed, key), reproducible whatever the execution order.
-    """
-    if seed is None:
-        if key is not None:
-            raise ValueError("`key` needs a `seed`")
-        return Expr(PyExpr.func("random", []))
-    args = [lit(seed)._e] + ([_expr(key)._e] if key is not None else [])
-    return Expr(PyExpr.func("random", args))
-
-
-def count() -> Expr:
-    """count(*) - number of rows."""
-    return Expr(PyExpr.count_star().alias("count"))
-
-
-def len() -> Expr:  # noqa: A001
-    return Expr(PyExpr.count_star().alias("len"))
-
-
-def sum(name: str | Expr) -> Expr:  # noqa: A001
-    return _col_or_expr(name).sum()
-
-
-def mean(name: str | Expr) -> Expr:
-    return _col_or_expr(name).mean()
-
-
-def min(name: str | Expr) -> Expr:  # noqa: A001
-    return _col_or_expr(name).min()
-
-
-def max(name: str | Expr) -> Expr:  # noqa: A001
-    return _col_or_expr(name).max()
-
-
-def row_number() -> Expr:
-    """1-based row position (per group with `.over(...)`)."""
-    return Expr(_window.row_number())
-
-
-def coalesce(*exprs: Any) -> Expr:
-    return Expr(PyExpr.func("coalesce", [_col_or_expr(e)._e for e in _flatten(exprs)]))
-
-
-def greatest(*exprs: Any) -> Expr:
-    return Expr(PyExpr.func("greatest", [_col_or_expr(e)._e for e in _flatten(exprs)]))
-
-
-def least(*exprs: Any) -> Expr:
-    return Expr(PyExpr.func("least", [_col_or_expr(e)._e for e in _flatten(exprs)]))
-
-
-def _implode(agg: PyExpr) -> Expr:
-    return Expr(PyExpr.func("coalesce", [agg, PyExpr.func("list_value", [])]))
-
-
-def concat_list(*exprs: Any) -> Expr:
-    """Join lists (and plain values, as one-element lists) into one list per row.
-
-    A null list makes the result null (Polars).
-    """
-    return Expr(PyExpr.func("concat_list", [_col_or_expr(e)._e for e in _flatten(exprs)]))
-
-
-def concat_str(*exprs: Any, separator: str = "") -> Expr:
-    items = [_col_or_expr(e) for e in _flatten(exprs)]
-    args: list[PyExpr] = []
-    for i, e in enumerate(items):
-        if i and separator:
-            args.append(PyExpr.lit(separator))
-        args.append(e._e)
-    return Expr(PyExpr.func("concat", args))
-
-
-class _When:
-    def __init__(self, whens: list[tuple[PyExpr, PyExpr]], cond: PyExpr) -> None:
-        self._whens = whens
-        self._cond = cond
-
-    def then(self, value: Any) -> _Then:
-        return _Then(self._whens + [(self._cond, _expr(value)._e)])
-
-
-class _Then(Expr):
-    __slots__ = ("_whens",)
-
-    def __init__(self, whens: list[tuple[PyExpr, PyExpr]]) -> None:
-        super().__init__(PyExpr.case(whens, None))
-        self._whens = whens
-
-    def when(self, condition: Any) -> _When:
-        return _When(self._whens, _expr(condition)._e)
-
-    def otherwise(self, value: Any) -> Expr:
-        return Expr(PyExpr.case(self._whens, _expr(value)._e))
-
-
-def when(condition: Any) -> _When:
-    """`when(cond).then(a).when(cond2).then(b).otherwise(c)`."""
-    return _When([], _expr(condition)._e)
 
 
 # ---------------------------------------------------------------------------
@@ -1074,6 +940,10 @@ class LazyFrame:
     def collect(self) -> DataFrame:
         return DataFrame(self._lf.collect())
 
+    def preview(self, n: int = PREVIEW_ROWS) -> None:
+        """Show the first ``n`` rows (runs the query with a limit); see :func:`preview`."""
+        preview(self, n)
+
     def analyze(self) -> dict[str, Any]:
         """Run the query measuring every operator (the result is streamed and
         only counted): ``{plan, profile, rows, requests}``. ``plan`` is
@@ -1217,7 +1087,7 @@ class GroupBy:
     def _all(self, method: str) -> LazyFrame:
         key_names = {k.output_name() for k in self._keys}
         cols = [c for c in self._lf.columns if c not in key_names]
-        return self.agg(*[getattr(col(c), method)() for c in cols])
+        return self.agg(*[getattr(_column(c), method)() for c in cols])
 
     def sum(self) -> LazyFrame:
         return self._all("sum")
@@ -1232,10 +1102,10 @@ class GroupBy:
         return self._all("max")
 
     def count(self) -> LazyFrame:
-        return self.agg(count())
+        return self.agg(Expr(PyExpr.count_star().alias("count")))
 
     def len(self) -> LazyFrame:
-        return self.agg(len())
+        return self.agg(Expr(PyExpr.count_star().alias("len")))
 
 
 class DataFrame:
@@ -1313,6 +1183,10 @@ class DataFrame:
 
     def show(self, n: int = 10) -> None:
         print(self._df.to_string(n))
+
+    def preview(self, n: int = PREVIEW_ROWS) -> None:
+        """Show the first ``n`` rows; see :func:`preview`."""
+        preview(self, n)
 
     def head(self, n: int = 5) -> DataFrame:
         return DataFrame(self._df.slice(0, n))
@@ -1747,14 +1621,40 @@ def sql(query: str, params: Any = None, **tables: Any) -> LazyFrame:
     ``$1``, ``$2`` / ``?``, a dict for ``:name`` / ``$name``. Values may be
     int, float, str, bool, None, bytes, date, datetime and Decimal.
 
-    >>> wh.sql("SELECT a, sum(b) FROM t WHERE a > $1 GROUP BY a", [10], t=my_frame).collect()
-    >>> wh.sql("SELECT * FROM t WHERE d >= :since", {"since": date(2024, 1, 1)}, t=my_frame).collect()
+    >>> workhouse.sql("SELECT a, sum(b) FROM t WHERE a > $1 GROUP BY a", [10], t=my_frame).collect()
+    >>> workhouse.sql("SELECT * FROM t WHERE d >= :since", {"since": date(2024, 1, 1)}, t=my_frame).collect()
     """
     ctx = PySessionContext()
     for name, obj in tables.items():
         _register(ctx, name, obj)
     return LazyFrame(ctx.sql(query, params))
 
+
+#: where ``preview`` sends a frame: set by the Studio's kernel while a cell runs
+_preview_sink: _contextvars.ContextVar[Any] = _contextvars.ContextVar("workhouse_preview", default=None)
+
+
+def preview(frame: Any, n: int = PREVIEW_ROWS) -> None:
+    """Show the first ``n`` rows of a frame (a LazyFrame runs with a limit).
+
+    In a Studio notebook they become the cell's table output, which pages,
+    sorts, charts and downloads (the download has all the rows). Elsewhere
+    they are printed. A frame a cell ends with is not shown on its own:
+    ``collect()`` only collects.
+    """
+    sink = _preview_sink.get()
+    if sink is not None:
+        sink(frame, n)
+        return
+    if isinstance(frame, LazyFrame):
+        frame = frame.limit(n).collect()
+    elif not isinstance(frame, DataFrame):
+        frame = from_arrow(frame)
+    frame.show(n)
+
+
+# expression functions (`from workhouse import functions as F`)
+from workhouse import functions  # noqa: E402
 
 # P1 frame ops (fill/drop nulls and NaN, unique, sample, row index, describe, union by name)
 from workhouse import frame_ops as _frame_ops  # noqa: E402
