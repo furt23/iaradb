@@ -121,7 +121,7 @@ header.header {
 
 .expressive-code .frame {
   border-radius: 12px;
-  border-color: var(--sl-color-hairline);
+  border: 1px solid var(--sl-color-hairline);
   overflow: hidden;
 }
 
