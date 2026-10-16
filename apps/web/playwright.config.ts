@@ -44,6 +44,8 @@ export default defineConfig({
     channel: process.env.PLAYWRIGHT_CHANNEL ?? "msedge",
     viewport: { width: 1440, height: 900 },
     trace: "retain-on-failure",
+    // the specs name English labels; the Studio defaults to Portuguese
+    storageState: { cookies: [], origins: [{ origin: `http://localhost:${PORT}`, localStorage: [{ name: "iara.locale.v1", value: "en" }] }] },
   },
   webServer: {
     command: `pnpm exec next dev --port ${PORT}`,

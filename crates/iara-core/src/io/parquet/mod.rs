@@ -26,6 +26,7 @@ pub mod file;
 mod footer;
 mod hive_write;
 pub mod late;
+mod late_filter;
 pub mod meta_cache;
 mod partitioned;
 mod prune;

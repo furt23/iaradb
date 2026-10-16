@@ -40,7 +40,7 @@
   --engine-duckdb: #b9ae97;
   --engine-polars: #8e9aa3;
 
-  --font-display: 'Fraunces Variable', Georgia, 'Times New Roman', serif;
+  --font-display: 'Roboto Slab Variable', 'Roboto Slab', Georgia, 'Times New Roman', serif;
   --font-sans: 'Inter Variable', Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, Consolas, monospace;
 

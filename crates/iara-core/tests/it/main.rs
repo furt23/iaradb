@@ -4,6 +4,7 @@
 
 mod support;
 
+mod agg_pushdown;
 mod aggregates_p1;
 mod analyze;
 mod csv_multiline;

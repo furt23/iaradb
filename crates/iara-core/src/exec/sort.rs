@@ -95,6 +95,40 @@ pub fn sort_indices(keys: &[ArrayRef], opts: &[SortOptions], limit: Option<usize
     Ok(idx)
 }
 
+/// The rows `idx` (positions in the concatenation of `batches`) as batches
+/// of `chunk` rows, gathered in parallel; strings are copied into each
+/// chunk's own buffers.
+pub fn gather(schema: &SchemaRef, batches: &[RecordBatch], idx: &[u32], chunk: usize) -> Result<Vec<RecordBatch>> {
+    let mut starts = Vec::with_capacity(batches.len() + 1);
+    let mut total = 0u32;
+    for b in batches {
+        starts.push(total);
+        total += b.num_rows() as u32;
+    }
+    starts.push(total);
+    let locate = |i: u32| {
+        let b = starts.partition_point(|&s| s <= i) - 1;
+        (b, (i - starts[b]) as usize)
+    };
+    idx.par_chunks(chunk.max(1))
+        .map(|part| {
+            let at: Vec<(usize, usize)> = part.iter().map(|&i| locate(i)).collect();
+            let cols = (0..schema.fields().len())
+                .map(|c| {
+                    let arrays: Vec<&dyn Array> = batches.iter().map(|b| b.column(c).as_ref()).collect();
+                    let out = arrow::compute::interleave(&arrays, &at)?;
+                    Ok(match out.data_type() {
+                        DataType::Utf8View => Arc::new(out.as_string_view().gc()) as ArrayRef,
+                        DataType::BinaryView => Arc::new(out.as_binary_view().gc()) as ArrayRef,
+                        _ => out,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(RecordBatch::try_new_with_options(schema.clone(), cols, &RecordBatchOptions::new().with_row_count(Some(part.len())))?)
+        })
+        .collect()
+}
+
 pub fn take_batch(batch: &RecordBatch, idx: &[u32]) -> Result<RecordBatch> {
     let indices = UInt32Array::from(idx.to_vec());
     let cols = batch
@@ -162,25 +196,34 @@ impl SortSink {
 
 
     /// Sort a worker's buffered batches into one run (in memory).
-    fn sorted_run(&self, batches: Vec<(usize, usize, RecordBatch)>) -> Result<Vec<RecordBatch>> {
-        if batches.is_empty() {
-            return Ok(vec![]);
-        }
+    /// A worker's buffered batches as one sorted run, gathered `RUN_BATCH`
+    /// rows at a time as it is read: only the keys are put together.
+    fn sorted_run(&self, batches: Vec<(usize, usize, RecordBatch)>) -> Result<Gather> {
         let schema = self.run_schema();
+        if batches.is_empty() {
+            return Ok(Gather { schema, batches: vec![], idx: vec![], _held: vec![] });
+        }
         let with_pos = batches.iter().map(|(m, s, b)| self.with_position(&schema, *m, *s, b)).collect::<Result<Vec<_>>>()?;
-        let all = concat_parallel(&schema, &with_pos)?;
+        drop(batches);
         let mut opts = self.opts();
         opts.extend([SortOptions::default(), SortOptions::default()]);
-        let idx = sort_indices(&run_keys(&self.keys, &all)?, &opts, None)?;
-        Ok(idx.chunks(RUN_BATCH).map(|c| take_batch(&all, c)).collect::<Result<Vec<_>>>()?)
+        let keys = with_pos.par_iter().map(|b| run_keys(&self.keys, b)).collect::<Result<Vec<_>>>()?;
+        let keys = (0..opts.len())
+            .map(|k| {
+                let parts: Vec<&dyn Array> = keys.iter().map(|b| b[k].as_ref()).collect();
+                Ok(arrow::compute::concat(&parts)?)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let idx = sort_indices(&keys, &opts, None)?;
+        Ok(Gather { schema, batches: with_pos, idx, _held: vec![] })
     }
 
     /// Spill the worker's buffered rows as a sorted run.
     fn spill_run(&self, l: &mut SortLocal) -> Result<()> {
         let run = self.sorted_run(std::mem::take(&mut l.batches))?;
         let mut w = SpillWriter::try_new(self.run_schema())?;
-        for b in &run {
-            w.write(b)?;
+        for b in run.chunks(RUN_BATCH) {
+            w.write(&b?)?;
         }
         l.runs.push(w.finish()?);
         l.rows = 0;
@@ -193,8 +236,9 @@ impl SortSink {
         let mut files = vec![];
         let mut runs: Vec<Run> = vec![];
         for mut l in locals {
-            let in_memory = self.sorted_run(std::mem::take(&mut l.batches))?;
-            runs.push(Box::new(in_memory.into_iter().map(Ok)));
+            let mut in_memory = self.sorted_run(std::mem::take(&mut l.batches))?;
+            in_memory._held.push(std::mem::replace(&mut l.reservation, memory::pool().reservation()));
+            runs.push(Box::new(in_memory.chunks(RUN_BATCH)));
             for f in &l.runs {
                 runs.push(Box::new(f.read()?));
             }
@@ -220,7 +264,41 @@ fn run_keys(keys: &[PhysSortExpr], b: &RecordBatch) -> Result<Vec<ArrayRef>> {
 /// A sort's result: batches, or sorted runs merged as they are read.
 pub enum Sorted {
     Batches(Vec<RecordBatch>),
+    /// input batches and the sorted order, gathered as they are read
+    Gather(Gather),
     Runs(RunMerge),
+}
+
+/// An in-memory sort's result: the rows `idx` of `batches`. Streamed, it is
+/// gathered a few chunks at a time, so the sorted copy does not exist in
+/// full next to the input.
+pub struct Gather {
+    schema: SchemaRef,
+    batches: Vec<RecordBatch>,
+    idx: Vec<u32>,
+    /// the sort's reservations: the input stays held until it is gathered
+    _held: Vec<Reservation>,
+}
+
+impl Gather {
+    /// The sorted rows, `chunk` at a time, gathered one batch per call.
+    fn chunks(self, chunk: usize) -> impl Iterator<Item = Result<RecordBatch>> + Send {
+        let n = self.idx.len();
+        (0..n.div_ceil(chunk.max(1))).map(move |i| {
+            let part = &self.idx[i * chunk..((i + 1) * chunk).min(n)];
+            Ok(gather(&self.schema, &self.batches, part, chunk)?.pop().expect("one chunk"))
+        })
+    }
+
+    fn emit(self, emit: &mut dyn FnMut(RecordBatch) -> Result<()>) -> Result<()> {
+        let window = MORSEL_ROWS * rayon::current_num_threads();
+        for part in self.idx.chunks(window) {
+            for b in gather(&self.schema, &self.batches, part, MORSEL_ROWS)? {
+                emit(b)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 pub struct RunMerge {
@@ -257,6 +335,7 @@ impl Sorted {
     pub fn into_batches(self) -> Result<Vec<RecordBatch>> {
         match self {
             Sorted::Batches(b) => Ok(b),
+            Sorted::Gather(g) => gather(&g.schema, &g.batches, &g.idx, MORSEL_ROWS),
             Sorted::Runs(m) => {
                 let mut out = vec![];
                 m.emit(&mut |b| {
@@ -271,6 +350,7 @@ impl Sorted {
     pub fn emit(self, emit: &mut dyn FnMut(RecordBatch) -> Result<()>) -> Result<()> {
         match self {
             Sorted::Batches(batches) => batches.into_iter().try_for_each(emit),
+            Sorted::Gather(g) => g.emit(emit),
             Sorted::Runs(m) => m.emit(emit),
         }
     }
@@ -294,8 +374,9 @@ impl Sink for SortSink {
         }
         let batch = if self.fetch.is_none() { crate::exec::batch_mem::compact(batch)? } else { batch };
         if self.fetch.is_none() {
-            // sorting holds the rows about twice (concatenated, then taken in order)
-            let bytes = crate::exec::batch_mem::batch_bytes(&batch) * 2;
+            // the rows, plus their keys and sorted positions; the sorted rows
+            // are gathered from them a few chunks at a time
+            let bytes = crate::exec::batch_mem::batch_bytes(&batch) + batch.num_rows() * 24;
             if !l.reservation.try_grow(bytes) {
                 if !l.batches.is_empty() {
                     self.spill_run(l)?;
@@ -327,16 +408,35 @@ impl Sink for SortSink {
             return Ok(Sorted::Runs(self.runs(locals)?));
         }
         let mut all = vec![];
+        let mut held = vec![];
         for l in locals {
             all.extend(l.batches);
+            held.push(l.reservation);
         }
         all.sort_unstable_by_key(|(m, s, _)| (*m, *s));
         let batches: Vec<RecordBatch> = all.into_iter().map(|(_, _, b)| b).collect();
         if batches.is_empty() {
             return Ok(Sorted::Batches(vec![]));
         }
-        let batch = concat_parallel(&self.schema, &batches)?;
-        let sorted = self.sort_batch(&batch, self.fetch)?;
-        Ok(Sorted::Batches(rechunk(vec![sorted], MORSEL_ROWS)))
+        if self.fetch.is_some() {
+            let batch = concat_parallel(&self.schema, &batches)?;
+            let sorted = self.sort_batch(&batch, self.fetch)?;
+            return Ok(Sorted::Batches(rechunk(vec![sorted], MORSEL_ROWS)));
+        }
+        // only the keys are concatenated; the rows are gathered from the
+        // input batches straight into the output chunks
+        let keys = batches
+            .par_iter()
+            .map(|b| self.keys.iter().map(|k| k.expr.evaluate_array(b)).collect::<Result<Vec<_>>>())
+            .collect::<Result<Vec<_>>>()?;
+        let keys = (0..self.keys.len())
+            .map(|k| {
+                let parts: Vec<&dyn Array> = keys.iter().map(|b| b[k].as_ref()).collect();
+                Ok(arrow::compute::concat(&parts)?)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let idx = sort_indices(&keys, &self.opts(), None)?;
+        drop(keys);
+        Ok(Sorted::Gather(Gather { schema: self.schema.clone(), batches, idx, _held: held }))
     }
 }

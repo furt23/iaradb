@@ -24,7 +24,7 @@ packages/ui             Studio UI components
 ## From SQL or DataFrame to result
 
 1. SQL is parsed with sqlparser. The DataFrame API builds the same logical plan.
-2. The optimizer rewrites the plan: constant folding, predicate and projection pushdown, limit and top-k pushdown into scans, and subquery decorrelation. Correlated `EXISTS` and `IN` become semi or anti joins, and correlated scalar subqueries become an aggregation joined back. Decorrelation handles equality correlations only.
+2. The optimizer rewrites the plan: constant folding, predicate and projection pushdown, limit and top-k pushdown into scans, eager aggregation, and subquery decorrelation. Eager aggregation applies to a `GROUP BY` over an inner join when every aggregate reads one side and can be combined (`count`, `sum`, `min`, `max`, `avg`, `count_if`, `bool_and`, `bool_or`). That side is pre-aggregated by its join keys before the join. It is used only when the estimates say the join keeps most of that side's rows and each join key has several rows. Correlated `EXISTS` and `IN` become semi or anti joins, and correlated scalar subqueries become an aggregation joined back. Decorrelation handles equality correlations only.
 3. Joins of up to 12 relations are ordered by dynamic programming over cardinality estimates, larger ones greedily. Equalities are grouped into classes, so `a = b AND b = c` also lets `a` join `c` directly. For Parquet the estimates come from row group counts, min/max statistics and distinct counts.
 4. The physical plan is cut into pipelines at hash join builds, hash aggregations and sorts.
 
@@ -40,7 +40,7 @@ packages/ui             Studio UI components
 
 - Joins: inner, left, right, full, semi and anti, with extra non-equality predicates. The hash table is built in parallel. Integer keys (several are packed into one) use a radix-partitioned table whose directory carries a small bloom filter per bucket, so most probes for missing keys cost one memory access. For outer, semi and anti joins the smaller side is the build side.
 - `ORDER BY ... LIMIT k` over a filtered Parquet scan (k up to 10,000) sorts on the filter and sort columns only, then reads the other columns of the k rows by position.
-- Aggregation starts with thread-local hash tables. It switches to radix partitioning when there are too many distinct keys for local aggregation to shrink the data.
+- Aggregation starts with thread-local hash tables. When there are too many distinct keys for local aggregation to shrink the data, workers hash-partition the rows. Partitions keep their rows while they fit a quarter of the memory limit and aggregate them one partition at a time at the end; a partition that fills its share folds its rows into a table shared by all threads, so memory follows the number of groups instead of the number of rows. Keys like `(id, name, city)`, where the other columns depend on an integer one, are hashed by that column and each group keeps the others once, checked per row; string columns gathered by a join are checked by their position in the shared buffers instead of byte by byte. `count`, `sum`, `min`, `max` and `avg` keep all of a group's states in one row, so an input row touches one cache line whatever the number of aggregates.
 
 ### Windows and recursion
 
@@ -51,7 +51,7 @@ packages/ui             Studio UI components
 
 Aggregation tables, join build sides, sort buffers and window buffers reserve memory from one process-wide pool. Set the limit with `iara.set_memory_limit()` or `IARA_MEMORY_LIMIT`. When a reservation would exceed it, the operator spills to disk as LZ4-compressed Arrow IPC files:
 
-- aggregation spills radix partitions and aggregates them one at a time;
+- aggregation stops growing its partition tables and spills the remaining rows by partition, then folds each partition's rows into its table one partition at a time;
 - joins fall back to a partitioned (grace) hash join;
 - sort writes sorted runs and merges them;
 - window functions spill by `PARTITION BY` partition.
@@ -77,7 +77,7 @@ Tables live in named schemas (`sales.orders`), and `main` is the default. `CREAT
 |---|---|---|
 | `IARA_BATCH_SIZE` | `8192` | Rows per batch. |
 | `IARA_STRING_VIEW` | `1` | `0` reads Parquet strings as `Utf8`. |
-| `IARA_AGG_PARTITIONS` | `4 x threads` | Partitions when aggregation switches to radix mode. |
+| `IARA_AGG_PARTITIONS` | `4 x threads` | Partitions of the shared tables a high-cardinality aggregation uses. |
 | `IARA_MEMORY_LIMIT` | 75% of RAM on Linux, none elsewhere | Bytes, a unit (`4GB`) or a percentage (`60%`). |
 | `IARA_SPILL_DIR` | system temp dir | Where spill files go. |
 | `IARA_PROFILE` | `0` | `1` prints pipeline timings to stderr. |

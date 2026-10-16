@@ -8,7 +8,7 @@
 :root {
   --sl-font: 'Inter Variable', Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --sl-font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, Consolas, monospace;
-  --iara-display: 'Fraunces Variable', Georgia, 'Times New Roman', serif;
+  --iara-display: 'Roboto Slab Variable', 'Roboto Slab', Georgia, 'Times New Roman', serif;
 
   --sl-color-accent-low: #10213a;
   --sl-color-accent: #7fb2f0;

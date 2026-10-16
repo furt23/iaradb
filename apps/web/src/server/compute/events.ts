@@ -20,6 +20,8 @@ export const CLUSTER_EVENT_KINDS = [
   "attached",
   "detached",
   "cloned",
+  "libraries",
+  "spot",
 ] as const;
 
 export type ClusterEventKind = (typeof CLUSTER_EVENT_KINDS)[number];

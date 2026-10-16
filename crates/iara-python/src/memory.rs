@@ -37,7 +37,18 @@ fn memory_usage(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
     Ok(d)
 }
 
+unsafe extern "C" {
+    /// mimalloc (the global allocator): give memory this thread freed back to the system
+    fn mi_collect(force: bool);
+}
+
+fn release_freed() {
+    // SAFETY: mimalloc is linked in as the global allocator
+    unsafe { mi_collect(true) }
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    memory::set_release(release_freed);
     m.add_function(wrap_pyfunction!(set_memory_limit, m)?)?;
     m.add_function(wrap_pyfunction!(memory_usage, m)?)?;
     Ok(())

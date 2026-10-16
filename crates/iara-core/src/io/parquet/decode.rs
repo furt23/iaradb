@@ -8,6 +8,7 @@ use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ParquetRecordBatchReaderBuilder, RowSelection, RowSelector};
 
 use super::batch_size;
+use super::late_filter::LateFilter;
 use crate::error::Result;
 use crate::exec::pipeline::Emit;
 use crate::io::blob::RangeChunks;
@@ -41,7 +42,7 @@ pub struct Part<'a> {
     pub schema: &'a SchemaRef,
 }
 
-pub fn decode(input: RangeChunks, mask: ProjectionMask, part: &Part<'_>, emit: Emit<'_>) -> Result<()> {
+pub fn decode(input: RangeChunks, mask: ProjectionMask, part: &Part<'_>, filter: Option<&LateFilter>, emit: Emit<'_>) -> Result<()> {
     let mut builder = reader(input, part.meta, mask, part.row_group).with_batch_size(batch_size());
     if let Some((start, len)) = part.rows {
         let mut sel = vec![];
@@ -53,6 +54,9 @@ pub fn decode(input: RangeChunks, mask: ProjectionMask, part: &Part<'_>, emit: E
     }
     if let Some(limit) = part.limit {
         builder = builder.with_limit(limit);
+    }
+    if let Some(f) = filter.filter(|f| f.active()) {
+        builder = builder.with_row_filter(f.row_filter(part.meta.parquet_schema()));
     }
     for b in builder.build()? {
         let b = b?;

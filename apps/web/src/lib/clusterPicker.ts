@@ -2,7 +2,7 @@
 
 import type { ClusterState, ClusterView } from "@/server/compute/types";
 
-import { costSoFar, formatMinutes, formatUsd, minutesSince, terminatesIn } from "./clusterTime";
+import { formatMinutes, minutesSince, terminatesIn } from "./clusterTime";
 
 /** Above this many clusters the picker shows a search field. */
 export const SEARCH_THRESHOLD = 6;
@@ -49,7 +49,7 @@ export function notebooksLabel(n: number): string {
   return `${n} notebook${n === 1 ? "" : "s"}`;
 }
 
-/** "up 1 h 5 min · idle 3 min · terminates in 12 min if idle · ≈$0.54 so far" (null unless an EC2 machine runs). */
+/** "up 1 h 5 min · idle 3 min · terminates in 12 min if idle" (null unless an EC2 machine runs). */
 export function runtimeSummary(c: ClusterView, now: number): string | null {
   if (c.kind !== "ec2" || c.state !== "running") return null;
   const parts: string[] = [];
@@ -59,7 +59,5 @@ export function runtimeSummary(c: ClusterView, now: number): string | null {
   if (idle !== null) parts.push(`idle ${formatMinutes(idle)}`);
   const left = terminatesIn(c, now);
   if (left !== null) parts.push(left === 0 ? "terminates soon if idle" : `terminates in ${formatMinutes(left)} if idle`);
-  const cost = costSoFar(c, now);
-  if (cost !== null) parts.push(`≈${formatUsd(cost)} so far`);
   return parts.join(" · ");
 }

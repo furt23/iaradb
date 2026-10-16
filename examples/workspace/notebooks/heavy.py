@@ -29,6 +29,12 @@ def _():
     return (nation,)
 
 
+@app.cell(id="xm3ig4xn")
+def _():
+    items = iara.scan_parquet("D:/tpch_sf100_gen/lineitem.parquet")
+    return (items,)
+
+
 @app.cell(id="rcabqlud")
 def _(customer, nation):
     balance = customer.join(nation, left_on="c_nationkey", right_on="n_nationkey")
@@ -49,6 +55,15 @@ def _(F, balance):
 def _(balance):
     balance = balance.select("c_custkey", "c_name", "n_name", "c_acctbal", "c_mktsegment", "c_comment")
     return (balance,)
+
+
+@app.cell(id="cbcnn82i")
+def _(balance, items):
+    items_per_customer = balance.join(
+        items,
+        left_on=""
+    )
+    return (items_per_customer,)
 
 
 @app.cell(id="i2pqqpxa")

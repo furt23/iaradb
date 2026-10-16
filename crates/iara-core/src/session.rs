@@ -820,8 +820,9 @@ fn execute_logical_inner(plan: &LogicalPlan) -> Result<(SchemaRef, Vec<RecordBat
     let phys = create_physical_plan(&opt)?;
     let batches = execute(&phys)?;
     let schema = final_schema(opt.schema(), &phys.schema());
-    let batches = batches.into_iter().map(|b| conform(b, &schema)).filter_map(Result::transpose).collect::<Result<Vec<_>>>()?;
-    Ok((schema, batches))
+    use rayon::prelude::*;
+    let batches = batches.into_par_iter().map(|b| conform(b, &schema)).collect::<Result<Vec<_>>>()?;
+    Ok((schema, batches.into_iter().flatten().collect()))
 }
 
 /// A result batch as the query's final schema says (None: drop it, empty).

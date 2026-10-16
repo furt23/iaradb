@@ -98,6 +98,30 @@ pub struct PhysSortExpr {
 }
 
 impl PhysExpr {
+    /// Add the indices of the input columns this expression reads to `out`.
+    pub fn collect_columns(&self, out: &mut Vec<usize>) {
+        match self {
+            PhysExpr::Column { index, .. } => out.push(*index),
+            PhysExpr::Literal(_) => {}
+            PhysExpr::Binary { left, right, .. } => {
+                left.collect_columns(out);
+                right.collect_columns(out);
+            }
+            PhysExpr::Not(e) | PhysExpr::Negative(e) | PhysExpr::IsNull(e) | PhysExpr::IsNotNull(e) => e.collect_columns(out),
+            PhysExpr::Cast { expr, .. } | PhysExpr::InList { expr, .. } | PhysExpr::Like { expr, .. } => expr.collect_columns(out),
+            PhysExpr::Case { when_then, otherwise, .. } => {
+                for (w, t) in when_then {
+                    w.collect_columns(out);
+                    t.collect_columns(out);
+                }
+                if let Some(o) = otherwise {
+                    o.collect_columns(out);
+                }
+            }
+            PhysExpr::Function { args, .. } => args.iter().for_each(|a| a.collect_columns(out)),
+        }
+    }
+
     pub fn data_type(&self) -> DataType {
         match self {
             PhysExpr::Column { dt, .. } => dt.clone(),

@@ -43,7 +43,7 @@ pub fn eval(func: ScalarFunc, args: &[ColumnarValue], m: usize) -> Result<ArrayR
         ListUnique => order::unique(&arr(0)?),
         ArrayToString => reduce::join(&arr(0)?, &arr(1)?, args.get(2).map(|_| arr(2)).transpose()?.as_ref()),
         ListAgg(agg) => reduce::aggregate(&arr(0)?, agg),
-        StringSplit => split::string_split(&arr(0)?, &arr(1)?),
+        StringSplit => split::string_split(&arr(0)?, &args[1], m),
         RegexpSplit => split::regexp_split(&arr(0)?, args),
         other => Err(WhError::Execution(format!("{} is not a list kernel", other.name()))),
     }

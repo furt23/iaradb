@@ -68,6 +68,7 @@ services:
     volumes:
       - ./docker/cloudflared:/etc/cloudflared:ro
     depends_on:
+      - site
       - docs
       - studio-default
 

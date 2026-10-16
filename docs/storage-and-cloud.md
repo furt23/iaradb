@@ -84,7 +84,22 @@ result["requests"]               # the requests this query made
 
 ## Clusters on AWS
 
-Studio can start EC2 machines and run notebook kernels on them. Create a cluster in the Compute section: instance type (default `m7i-flex.large`), disk size (default 40 GB) and idle timeout (default 15 minutes). A cluster stops itself after the idle timeout. Notebooks attach to a cluster from the toolbar; a Local entry runs kernels on the Studio host.
+Studio can start EC2 machines and run notebook kernels on them. Create a cluster in the Compute section: instance type (default `m7i-flex.large`), disk size (default 40 GB) and idle timeout (default 15 minutes). A cluster stops itself after the idle timeout. The dialog starts the cluster right after creating it unless you untick "Start the cluster now". Notebooks attach to a cluster from the toolbar or from the cluster's Notebooks tab; a Local entry runs kernels on the Studio host.
+
+Other cluster settings:
+
+| Setting | Default | Notes |
+|---|---|---|
+| Time limit | 1 h | The machine terminates after this many hours (1 to 12), idle or not. Can change while it runs. |
+| Spot machine | off | Launches a spot instance. If EC2 has no spot capacity, the cluster starts on-demand and the event log says so. AWS can reclaim a spot machine at any time. |
+| Libraries | none | pip requirements (`polars==1.9`, `pandas[parquet]>=2.2`) installed at boot. URLs and environment markers are not accepted. Libraries added while the cluster runs are installed right away; removed ones leave at the next start. |
+| Environment variables | none | Passed to the cluster's kernels. Names starting with `IARA_` or `AWS_` are reserved. Don't put secrets here. |
+| Init script | none | Bash run as root at boot, after the engine and libraries, with the environment variables set. Up to 8 KB. If it fails, the start fails. |
+| AWS tags | none | Added to the machine and its volume. Keys starting with `aws:` or `iara:` and `Name` are reserved. |
+
+Spot, init script, tags, machine and disk only change while the cluster is terminated.
+
+The cluster page has a Logs tab: the machine's boot log, the init script output and the kernels' stderr. When a start fails, the last boot lines are kept until the next start.
 
 ### Credentials
 

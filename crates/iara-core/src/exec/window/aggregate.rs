@@ -15,6 +15,8 @@ use crate::exec::window::layout::{Layout, NO_ROW};
 use crate::exec::window::sliding::{Count, Extreme, FloatSum, IntSum, Moments, slide};
 use crate::exec::window::{WindowFunctionExpr, valid_rows};
 use crate::expr::{AggFunc, WindowFunc};
+use crate::window::{FrameBound, FrameUnits};
+use arrow::buffer::NullBuffer;
 use crate::physical::expr::null_as_false;
 
 pub fn evaluate(f: &WindowFunctionExpr, batch: &RecordBatch, layout: &Layout) -> Result<ArrayRef> {
@@ -74,6 +76,14 @@ pub fn evaluate(f: &WindowFunctionExpr, batch: &RecordBatch, layout: &Layout) ->
 /// `sum` / `avg` over a moving frame (`a` in sorted order).
 fn sum_or_mean(func: AggFunc, a: &ArrayRef, valid: Option<&[bool]>, layout: &Layout, f: &WindowFunctionExpr) -> Result<ArrayRef> {
     let frame = &f.frame;
+    let running = frame.units == FrameUnits::Rows
+        && matches!(frame.start, FrameBound::UnboundedPreceding)
+        && matches!(frame.end, FrameBound::CurrentRow);
+    if func == AggFunc::Sum && running {
+        if let Some(out) = running_sum(a, valid, layout, &f.out_type)? {
+            return Ok(out);
+        }
+    }
     let mean = func == AggFunc::Mean;
     macro_rules! exact {
         ($values:expr, $scale:expr) => {{
@@ -125,6 +135,50 @@ fn sum_or_mean(func: AggFunc, a: &ArrayRef, valid: Option<&[bool]>, layout: &Lay
     })
 }
 
+/// `sum` from the start of the partition to the current row (`cum_sum`) of
+/// integers or decimals, as prefix sums (`a` in sorted order); NULL until
+/// the first value. None: another type, left to the sliding frame.
+fn running_sum(a: &ArrayRef, valid: Option<&[bool]>, layout: &Layout, out: &DataType) -> Result<Option<ArrayRef>> {
+    let overflow = || WhError::Execution("integer overflow in sum() over a window".into());
+    fn prefix<T: Copy + Default>(
+        values: &[T],
+        valid: Option<&[bool]>,
+        layout: &Layout,
+        add: impl Fn(T, T) -> Option<T>,
+        overflow: impl Fn() -> WhError,
+    ) -> Result<(Vec<T>, Option<NullBuffer>)> {
+        let n = layout.n;
+        let mut sums = vec![T::default(); n];
+        let mut seen = valid.map(|_| vec![false; n]);
+        for p in &layout.partitions {
+            let (mut acc, mut any) = (T::default(), false);
+            for i in p.clone() {
+                if valid.is_none_or(|v| v[i]) {
+                    acc = add(acc, values[i]).ok_or_else(&overflow)?;
+                    any = true;
+                }
+                sums[i] = acc;
+                if let Some(s) = seen.as_mut() {
+                    s[i] = any;
+                }
+            }
+        }
+        Ok((sums, seen.map(NullBuffer::from)))
+    }
+    Ok(Some(match (a.data_type(), out) {
+        (t, DataType::Int64) if t.is_signed_integer() || matches!(t, DataType::Boolean) => {
+            let x = cast(a, &DataType::Int64)?;
+            let (sums, nulls) = prefix(x.as_primitive::<Int64Type>().values(), valid, layout, i64::checked_add, overflow)?;
+            Arc::new(Int64Array::new(sums.into(), nulls))
+        }
+        (DataType::Decimal128(..), DataType::Decimal128(p, s)) => {
+            let (sums, nulls) = prefix(a.as_primitive::<Decimal128Type>().values(), valid, layout, i128::checked_add, overflow)?;
+            Arc::new(Decimal128Array::new(sums.into(), nulls).with_precision_and_scale(*p, *s)?)
+        }
+        _ => return Ok(None),
+    }))
+}
+
 /// Aggregate each partition once with the group accumulators and broadcast
 /// the result to its rows.
 fn whole_partition(f: &WindowFunctionExpr, func: AggFunc, batch: &RecordBatch, layout: &Layout) -> Result<ArrayRef> {
@@ -137,7 +191,7 @@ fn whole_partition(f: &WindowFunctionExpr, func: AggFunc, batch: &RecordBatch, l
     let groups = layout.partitions.len().max(1);
     let args = f.args.iter().map(|a| a.evaluate_array(batch)).collect::<Result<Vec<_>>>()?;
     let input_type = args.first().map(|a| a.data_type().clone());
-    let mut acc = create_accumulator(func, input_type.as_ref(), f.distinct, true)?;
+    let mut acc = create_accumulator(func, input_type.as_ref(), f.distinct)?;
     match &f.filter {
         Some(fl) => {
             let mask = null_as_false(fl.evaluate_array(batch)?.as_boolean());

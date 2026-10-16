@@ -55,7 +55,7 @@ export const logoScales = {
 
 export const fonts = {
   sans: '"Inter Variable", Inter, system-ui, -apple-system, "Segoe UI", sans-serif',
-  serif: 'Georgia, "Iowan Old Style", "Times New Roman", serif',
+  serif: '"Roboto Slab Variable", "Roboto Slab", Georgia, serif',
   mono: '"JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace',
 } as const;
 

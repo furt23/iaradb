@@ -73,7 +73,8 @@ export class KernelManager {
     const c = clusters.get(clusterId);
     const endpoint = clusters.endpoint(clusterId); // throws while the cluster is not running
     const type = c && instanceType(c.instanceType);
-    const env: Record<string, string> = { AWS_REGION: cloudRegion() ?? "us-east-1", IARA_SPILL_DIR: SPILL_DIR };
+    // the cluster's own variables first: the system ones win
+    const env: Record<string, string> = { ...c?.env, AWS_REGION: cloudRegion() ?? "us-east-1", IARA_SPILL_DIR: SPILL_DIR };
     if (type) env.IARA_MEMORY_LIMIT = String(memoryLimitBytes(type));
     const command = remoteCommand({ python: `${VENV}/bin/python`, workspace: "~/workspace", env });
     return { name: c?.name ?? clusterId, localRoot: null, start: () => ssh2Transport(endpoint, command) };
@@ -273,6 +274,11 @@ export class KernelManager {
   /** The live kernels on a cluster. */
   onCluster(clusterId: string): KernelStatus[] {
     return this.status().filter((k) => k.alive && k.cluster === clusterId);
+  }
+
+  /** The stderr tail of each live kernel on a cluster. */
+  stderrOn(clusterId: string): { key: KernelKey; lines: string[] }[] {
+    return [...this.kernels.entries()].filter(([, k]) => k.alive && this.clusterOf.get(k) === clusterId).map(([key, k]) => ({ key, lines: k.stderr }));
   }
 
   private reapIdle(): void {

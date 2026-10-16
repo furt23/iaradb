@@ -111,7 +111,7 @@ impl RangeKeys {
         if frame.units != FrameUnits::Range || (so.is_none() && eo.is_none()) {
             return Ok(None);
         }
-        let (key, opts) = layout.order_key.as_ref().ok_or_else(|| {
+        let (key, opts) = layout.order_key()?.ok_or_else(|| {
             WhError::Plan("RANGE with an offset requires exactly one ORDER BY expression".into())
         })?;
         let dt = key.data_type();
@@ -195,7 +195,7 @@ fn rows_offset(b: &FrameBound) -> usize {
 impl<'a> Frames<'a> {
     pub fn new(layout: &'a Layout, frame: &'a WindowFrame, keys: Option<&'a RangeKeys>, part: Range<usize>) -> Self {
         let groups = if frame.units == FrameUnits::Groups {
-            part.clone().filter(|&i| layout.peer_start[i] as usize == i).collect()
+            part.clone().filter(|&i| layout.peer_start()[i] as usize == i).collect()
         } else {
             vec![]
         };
@@ -245,7 +245,7 @@ impl<'a> Frames<'a> {
                 }
             }
             FrameUnits::Range => {
-                let peers = (self.layout.peer_start[i] as usize, self.layout.peer_end[i] as usize);
+                let peers = (self.layout.peer_start()[i] as usize, self.layout.peer_end()[i] as usize);
                 let (keys, seg) = match (&self.range, b) {
                     (Some((k, seg)), FrameBound::Preceding(_) | FrameBound::Following(_)) if !k.is_null(i) => (*k, seg),
                     // CURRENT ROW, or a NULL key: the row's peers

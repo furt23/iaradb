@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ClusterView } from "@/server/compute/types";
 
-import { costSoFar, formatMinutes, formatUsd, minutesSince, terminatesIn } from "./clusterTime";
+import { formatMinutes, minutesSince, terminatesIn } from "./clusterTime";
 
 const MIN = 60_000;
 const base: ClusterView = {
@@ -32,12 +32,5 @@ describe("clusterTime", () => {
     expect(terminatesIn(base, 60 * MIN)).toBe(0);
     expect(terminatesIn({ ...base, state: "terminated" }, 12 * MIN)).toBeNull();
     expect(terminatesIn({ ...base, kind: "local" }, 12 * MIN)).toBeNull();
-  });
-
-  it("prices the running machine", () => {
-    expect(costSoFar({ ...base, startedAt: 1 }, 1 + 90 * MIN)).toBeCloseTo(0.15);
-    expect(costSoFar({ ...base, startedAt: 1, state: "terminated" }, 90 * MIN)).toBeNull();
-    expect(formatUsd(0.153)).toBe("$0.15");
-    expect(formatUsd(12.34)).toBe("$12.3");
   });
 });

@@ -80,6 +80,11 @@ export class KernelClient {
     return this.transport.pid;
   }
 
+  /** a copy of the last lines the kernel wrote to stderr */
+  get stderr(): string[] {
+    return [...this.stderrTail];
+  }
+
   get busy(): boolean {
     return this.pending.size > 0;
   }

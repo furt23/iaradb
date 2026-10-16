@@ -1,5 +1,7 @@
 "use client";
 
+import AddIcon from "@mui/icons-material/Add";
+import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Paper from "@mui/material/Paper";
 import Table from "@mui/material/Table";
@@ -10,16 +12,31 @@ import TableRow from "@mui/material/TableRow";
 import Typography from "@mui/material/Typography";
 import Link from "next/link";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { useGuard } from "@/features/shell/notify";
 import { fileHref } from "@/features/workbench/WorkbenchProvider";
 import { unwrap } from "@/lib/action";
 import { detachNotebook } from "@/server/actions/clusters";
 
-/** The notebooks attached to a cluster, each one detachable. */
-export function NotebooksTab({ notebooks, onChanged }: { notebooks: string[]; onChanged(): Promise<unknown> }) {
+import { AttachNotebookDialog } from "./AttachNotebookDialog";
+
+/** The notebooks attached to a cluster, each one detachable (and, unless a job cluster, attachable). */
+export function NotebooksTab({
+  clusterId,
+  notebooks,
+  canAttach,
+  onChanged,
+}: {
+  clusterId: string;
+  notebooks: string[];
+  canAttach: boolean;
+  onChanged(): Promise<unknown>;
+}) {
+  const { t } = useTranslation();
   const guard = useGuard();
   const [pending, setPending] = useState<string | null>(null);
+  const [attaching, setAttaching] = useState(false);
 
   const detach = (path: string) =>
     void guard(async () => {
@@ -32,11 +49,35 @@ export function NotebooksTab({ notebooks, onChanged }: { notebooks: string[]; on
       }
     });
 
+  const attachButton = canAttach && (
+    <Button variant="outlined" startIcon={<AddIcon />} onClick={() => setAttaching(true)}>
+      {t("Attach notebook")}
+    </Button>
+  );
+  const dialog = (
+    <AttachNotebookDialog
+      open={attaching}
+      clusterId={clusterId}
+      attached={notebooks}
+      onClose={() => setAttaching(false)}
+      onAttached={onChanged}
+    />
+  );
+
   if (!notebooks.length) {
-    return <Typography sx={{ color: "text.secondary" }}>No notebook is attached to this cluster. Pick it from a notebook&apos;s toolbar.</Typography>;
+    return (
+      <>
+        <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2 }}>
+          <Typography sx={{ color: "text.secondary" }}>No notebook is attached to this cluster. Pick it from a notebook&apos;s toolbar.</Typography>
+          {attachButton}
+        </Box>
+        {dialog}
+      </>
+    );
   }
   return (
     <>
+      {attachButton && <Box sx={{ display: "flex", justifyContent: "flex-end", mb: 1.5 }}>{attachButton}</Box>}
       <Paper variant="outlined">
         <Table size="small" aria-label="attached notebooks">
           <TableHead>
@@ -64,6 +105,7 @@ export function NotebooksTab({ notebooks, onChanged }: { notebooks: string[]; on
       <Typography variant="caption" sx={{ display: "block", mt: 1, color: "text.disabled" }}>
         A detached notebook runs on the default cluster the next time it runs.
       </Typography>
+      {dialog}
     </>
   );
 }

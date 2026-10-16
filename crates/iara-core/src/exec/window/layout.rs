@@ -24,12 +24,16 @@ pub struct Layout {
     inverse: OnceLock<Vec<u32>>,
     /// partition ranges over sorted positions, covering `0..n` in order
     pub partitions: Vec<Range<usize>>,
-    /// first position of each row's peer group (rows with equal order keys)
-    pub peer_start: Vec<u32>,
-    /// one past the last position of each row's peer group
-    pub peer_end: Vec<u32>,
+    /// positions where the (partition, order) keys change
+    peer_breaks: Vec<bool>,
+    /// first and one past the last position of each row's peer group (rows
+    /// with equal order keys): built on first use (ranking, RANGE / GROUPS frames)
+    peers: OnceLock<(Vec<u32>, Vec<u32>)>,
+    /// the order keys (input order) and their options
+    okeys: Vec<ArrayRef>,
+    oopts: Vec<SortOptions>,
     /// the order key in sorted order when there is exactly one (RANGE offsets)
-    pub order_key: Option<(ArrayRef, SortOptions)>,
+    order_key: OnceLock<Option<(ArrayRef, SortOptions)>>,
 }
 
 /// The sort permutation (`None`: no keys) with the positions where the
@@ -87,28 +91,63 @@ impl Layout {
         if n > 0 {
             partitions.push(start..n);
         }
-        let mut peer_start = vec![0u32; n];
-        let mut s = 0;
-        for i in 0..n {
-            if peer_breaks[i] {
-                s = i;
+        Ok(Self {
+            n,
+            perm,
+            inverse: OnceLock::new(),
+            partitions,
+            peer_breaks,
+            peers: OnceLock::new(),
+            okeys,
+            oopts,
+            order_key: OnceLock::new(),
+        })
+    }
+
+    /// First position of each row's peer group.
+    pub fn peer_start(&self) -> &[u32] {
+        &self.peers().0
+    }
+
+    /// One past the last position of each row's peer group.
+    pub fn peer_end(&self) -> &[u32] {
+        &self.peers().1
+    }
+
+    fn peers(&self) -> &(Vec<u32>, Vec<u32>) {
+        self.peers.get_or_init(|| {
+            let n = self.n;
+            let mut peer_start = vec![0u32; n];
+            let mut s = 0;
+            for i in 0..n {
+                if self.peer_breaks[i] {
+                    s = i;
+                }
+                peer_start[i] = s as u32;
             }
-            peer_start[i] = s as u32;
-        }
-        let mut peer_end = vec![0u32; n];
-        let mut e = n;
-        for i in (0..n).rev() {
-            peer_end[i] = e as u32;
-            if peer_start[i] as usize == i {
-                e = i;
+            let mut peer_end = vec![0u32; n];
+            let mut e = n;
+            for i in (0..n).rev() {
+                peer_end[i] = e as u32;
+                if peer_start[i] as usize == i {
+                    e = i;
+                }
             }
+            (peer_start, peer_end)
+        })
+    }
+
+    /// The order key in sorted order when there is exactly one.
+    pub fn order_key(&self) -> Result<Option<&(ArrayRef, SortOptions)>> {
+        if let Some(k) = self.order_key.get() {
+            return Ok(k.as_ref());
         }
-        let order_key = match (okeys.len(), &perm) {
-            (1, Some(p)) => Some((take(&okeys[0], &UInt32Array::from(p.clone()), None)?, oopts[0])),
-            (1, None) => Some((okeys[0].clone(), oopts[0])),
+        let k = match (self.okeys.len(), &self.perm) {
+            (1, Some(p)) => Some((take(&self.okeys[0], &UInt32Array::from(p.clone()), None)?, self.oopts[0])),
+            (1, None) => Some((self.okeys[0].clone(), self.oopts[0])),
             _ => None,
         };
-        Ok(Self { n, perm, inverse: OnceLock::new(), partitions, peer_start, peer_end, order_key })
+        Ok(self.order_key.get_or_init(|| k).as_ref())
     }
 
     /// The input row at a sorted position.

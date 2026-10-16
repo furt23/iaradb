@@ -1,4 +1,5 @@
 import "@fontsource-variable/inter";
+import "@fontsource-variable/roboto-slab";
 import "@fontsource-variable/jetbrains-mono";
 
 import Box from "@mui/material/Box";

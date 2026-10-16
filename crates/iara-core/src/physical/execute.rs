@@ -217,9 +217,9 @@ impl Exec {
             PhysicalPlan::Project { input, exprs, schema } => self
                 .pipeline(input, ids[0])?
                 .with_op(self.op(id, Arc::new(ProjectOp { exprs: exprs.clone(), schema: schema.clone() }))),
-            PhysicalPlan::Unnest { input, exprs, keep_empty, schema } => self.pipeline(input, ids[0])?.with_op(self.op(
+            PhysicalPlan::Unnest { input, exprs, keep_empty, used, schema } => self.pipeline(input, ids[0])?.with_op(self.op(
                 id,
-                Arc::new(UnnestOp { exprs: exprs.clone(), keep_empty: *keep_empty, schema: schema.clone() }),
+                Arc::new(UnnestOp { exprs: exprs.clone(), keep_empty: *keep_empty, used: used.clone(), schema: schema.clone() }),
             )),
             PhysicalPlan::HashJoin { .. } => self.hash_join(plan, id, &ids)?,
             PhysicalPlan::NestedLoopJoin { probe, build, join_type, filter, joined_schema, schema, order } => {
@@ -250,7 +250,7 @@ impl Exec {
             }
             // spilled window partitions are evaluated one per morsel, in the next pipeline
             PhysicalPlan::Window { input, specs, schema } => match self.window(input, ids[0], id, specs, schema)? {
-                Windowed::Batches(b) => Pipeline::new(Arc::new(MemorySource::new(self.output(id, b), schema.clone(), "Materialized"))),
+                Windowed::Batches(b) => Pipeline::new(Arc::new(MemorySource::once(self.output(id, b), schema.clone(), "Materialized"))),
                 Windowed::Partitions(p) => Pipeline::new(self.source(id, Arc::new(p))),
             },
             PhysicalPlan::Aggregate { .. }
@@ -259,7 +259,7 @@ impl Exec {
             | PhysicalPlan::Values { .. }
             | PhysicalPlan::RecursiveQuery { .. } => {
                 let batches = self.execute(plan, id)?;
-                Pipeline::new(Arc::new(MemorySource::new(batches, plan.schema(), "Materialized")))
+                Pipeline::new(Arc::new(MemorySource::once(batches, plan.schema(), "Materialized")))
             }
         })
     }

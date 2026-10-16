@@ -9,6 +9,7 @@ import Typography from "@mui/material/Typography";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { ClusterDialog } from "@/features/compute/ClusterDialog";
 import { machineSummary, StateChip } from "@/features/compute/ClusterState";
@@ -21,19 +22,25 @@ import type { ClusterView } from "@/server/compute/types";
 import { DetailActions } from "./DetailActions";
 import { EventLogTab } from "./EventLogTab";
 import { KernelsTab } from "./KernelsTab";
+import { LibrariesTab } from "./LibrariesTab";
+import { LogsTab } from "./LogsTab";
 import { NotebooksTab } from "./NotebooksTab";
 import { OverviewTab } from "./OverviewTab";
 import { useClusterActions } from "./useClusterActions";
 
-type TabId = "overview" | "kernels" | "notebooks" | "events";
+type TabId = "overview" | "kernels" | "notebooks" | "libraries" | "logs" | "events";
 
-/** One cluster: its machine, the kernels on it, the notebooks attached and its event log. */
+/** One cluster: its machine, kernels, notebooks, libraries, logs and event log. */
 export function ClusterDetail({ id }: { id: string }) {
+  const { t } = useTranslation();
   const router = useRouter();
   const { overview, refresh: refreshCompute } = useCompute();
   const { data, error, reload } = usePolling(
     () => clusterDetail(id),
-    (d) => d.cluster.state === "starting" || d.cluster.state === "terminating",
+    (d) =>
+      d.cluster.state === "starting" ||
+      d.cluster.state === "terminating" ||
+      Object.values(d.cluster.libraryStatus ?? {}).some((s) => s.state === "installing"),
   );
   const [tab, setTab] = useState<TabId>("overview");
   const [editing, setEditing] = useState<ClusterView | null>(null);
@@ -77,14 +84,18 @@ export function ClusterDetail({ id }: { id: string }) {
       />
       <PageBody>
         <Tabs value={tab} onChange={(_, v: TabId) => setTab(v)} sx={{ mb: 2, borderBottom: 1, borderColor: "divider" }}>
-          <Tab value="overview" label="Overview" />
-          <Tab value="kernels" label={`Kernels (${kernels.length})`} />
-          <Tab value="notebooks" label={`Notebooks (${c.notebooks.length})`} />
-          <Tab value="events" label="Event log" />
+          <Tab value="overview" label={t("Overview")} />
+          <Tab value="kernels" label={t("Kernels ({{n}})", { n: kernels.length })} />
+          <Tab value="notebooks" label={t("Notebooks ({{n}})", { n: c.notebooks.length })} />
+          {c.kind === "ec2" && <Tab value="libraries" label={t("Libraries ({{n}})", { n: c.libraries?.length ?? 0 })} />}
+          <Tab value="logs" label={t("Logs")} />
+          <Tab value="events" label={t("Event log")} />
         </Tabs>
         {tab === "overview" && <OverviewTab cluster={c} createdAt={createdAt} now={now} kernels={kernels.length} />}
         {tab === "kernels" && <KernelsTab kernels={kernels} now={now} onChanged={refreshAll} />}
-        {tab === "notebooks" && <NotebooksTab notebooks={c.notebooks} onChanged={refreshAll} />}
+        {tab === "notebooks" && <NotebooksTab clusterId={c.id} notebooks={c.notebooks} canAttach={!c.job} onChanged={refreshAll} />}
+        {tab === "libraries" && c.kind === "ec2" && <LibrariesTab cluster={c} onChanged={refreshAll} />}
+        {tab === "logs" && <LogsTab cluster={c} />}
         {tab === "events" && <EventLogTab events={events} now={now} />}
       </PageBody>
       <ClusterDialog

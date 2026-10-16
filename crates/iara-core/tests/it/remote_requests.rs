@@ -126,8 +126,8 @@ fn sql_urls_share_listings_and_footers() {
 #[test]
 fn a_full_scan_of_a_big_file_uses_few_requests() {
     init();
-    // ~19.5 MB in 80 row groups of 12 500 rows, uncompressed
-    write("reqs-big", "big.parquet", 1_000_000, 0, 12_500, "none");
+    // ~20 MB in 100 row groups of 12 500 rows, uncompressed
+    write("reqs-big", "big.parquet", 1_250_000, 0, 12_500, "none");
     let url = "memory://reqs-big/t/big.parquet";
     let size = iara_core::io::list_files(url, "parquet", &Default::default()).unwrap()[0].size().unwrap();
     assert!(size > 4 * TARGET, "{size}");
@@ -136,9 +136,9 @@ fn a_full_scan_of_a_big_file_uses_few_requests() {
     // (the HEAD that gave the size above is remembered)
     let footer = since("reqs-big", before);
     assert_eq!((footer.list, footer.head, footer.get), (0, 0, 1), "{footer:?}");
-    assert_eq!(int(&ctx, "select count(*) from t"), 1_000_000);
+    assert_eq!(int(&ctx, "select count(*) from t"), 1_250_000);
     assert_eq!(since("reqs-big", before), footer, "count(*) reads no data");
-    let expected: i64 = (0..1_000_000i64).sum();
+    let expected: i64 = (0..1_250_000i64).sum();
     assert_eq!(int(&ctx, "select sum(id) from t"), expected);
     let scan = since("reqs-big", before);
     // row groups are fetched together: about one request per fetch target, not one per row group

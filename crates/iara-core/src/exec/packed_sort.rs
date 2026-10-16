@@ -176,6 +176,15 @@ fn ordered(a: &ArrayRef) -> Option<Vec<u64>> {
         Timestamp(TimeUnit::Millisecond, _) => int!(TimestampMillisecondType),
         Timestamp(TimeUnit::Microsecond, _) => int!(TimestampMicrosecondType),
         Timestamp(TimeUnit::Nanosecond, _) => int!(TimestampNanosecondType),
+        // decimals whose values fit in 64 bits (every precision up to 18)
+        Decimal128(..) => {
+            let d = a.as_primitive::<Decimal128Type>();
+            let fits = d.values().par_iter().with_min_len(MIN_LEN).all(|&v| i64::try_from(v).is_ok());
+            if !fits {
+                return None;
+            }
+            map(d, |v| (v as i64 as u64) ^ (1 << 63))
+        }
         Float32 => map(a.as_primitive::<Float32Type>(), |v| float_bits(v as f64)),
         Float64 => map(a.as_primitive::<Float64Type>(), float_bits),
         Boolean => {
@@ -227,6 +236,23 @@ mod tests {
                 check(vec![a.clone(), b.clone()], vec![o, SortOptions { descending: !desc, nulls_first: !nulls_first }]);
             }
         }
+    }
+
+    #[test]
+    fn decimals_that_fit_in_64_bits() {
+        let d: ArrayRef = Arc::new(
+            arrow::array::Decimal128Array::from(vec![Some(12_345), None, Some(-99), Some(999_999_999_999_999), Some(-999_999_999_999_999), Some(0), Some(12_345)])
+                .with_precision_and_scale(38, 2)
+                .unwrap(),
+        );
+        for desc in [false, true] {
+            for nulls_first in [false, true] {
+                check(vec![d.clone()], vec![SortOptions { descending: desc, nulls_first }]);
+            }
+        }
+        // a value beyond 64 bits: not packed
+        let wide: ArrayRef = Arc::new(arrow::array::Decimal128Array::from(vec![i64::MAX as i128 + 1, 0]).with_precision_and_scale(38, 0).unwrap());
+        assert!(sort(&[wide], &[SortOptions::default()]).is_none());
     }
 
     #[test]

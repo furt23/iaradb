@@ -22,7 +22,7 @@ pub fn aggregate(l: &ArrayRef, agg: AggFunc) -> Result<ArrayRef> {
         values = cast(&values, &DataType::Int64)?;
     }
     // `true`: a sum of nothing is NULL, as in a filtered aggregate
-    let mut acc = create_accumulator(agg, Some(values.data_type()), false, true)?;
+    let mut acc = create_accumulator(agg, Some(values.data_type()), false)?;
     acc.update(&[values], &rows, list.len())?;
     let out = acc.finish(list.len())?;
     let null_lists = BooleanArray::from_iter((0..list.len()).map(|r| Some(list.is_null(r))));

@@ -87,12 +87,11 @@ describe("runtimeSummary", () => {
   const machine = {
     startedAt: started,
     autoTerminateMinutes: 15,
-    instanceType: { name: "m7i.large", vcpus: 2, memoryGib: 8, usdPerHour: 0.5, family: "general" },
   };
 
   it("sums up a running machine: uptime, idle time, auto-termination and cost", () => {
     const c = cluster("small", { ...machine, lastActivity: started + 62 * MIN });
-    expect(runtimeSummary(c, started + 65 * MIN)).toBe("up 1 h 5 min · idle 3 min · terminates in 12 min if idle · ≈$0.54 so far");
+    expect(runtimeSummary(c, started + 65 * MIN)).toBe("up 1 h 5 min · idle 3 min · terminates in 12 min if idle");
   });
 
   it("says when an idle machine is about to be terminated", () => {

@@ -14,6 +14,7 @@ use super::batch_size;
 use super::conform::FileColumns;
 use super::decode::{Part, chunk_ranges, decode};
 use super::file::ParquetFile;
+use super::late_filter::LateFilter;
 use super::prune::keep_row_groups;
 use crate::error::Result;
 use crate::exec::pipeline::{Emit, Source};
@@ -43,6 +44,8 @@ pub struct ParquetSource {
     cancel: Option<Arc<QueryHandle>>,
     /// per file, how its columns make up the scan's (files that differ from the table)
     columns: Option<Vec<FileColumns>>,
+    /// filters applied while decoding (files laid out like the table only)
+    late_filter: Option<LateFilter>,
 }
 
 pub struct ScanRequest<'a> {
@@ -81,7 +84,11 @@ impl ParquetSource {
             prefetch: None,
             cancel: crate::exec::query::current(),
             columns: None,
+            late_filter: None,
         };
+        if !req.conform && req.fetch.is_none() {
+            src.late_filter = LateFilter::new(req.table_schema, &src.projection, req.filters);
+        }
         if req.conform {
             src.columns = Some(src.files.iter().map(|f| FileColumns::new(f, req.table_schema, &src.projection)).collect());
         }
@@ -225,11 +232,11 @@ impl Source for ParquetSource {
         };
         let Some(columns) = &self.columns else {
             let part = Part { meta: &f.meta, row_group: m.row_group, rows: m.range, limit: self.fetch, schema: &self.schema };
-            return decode(input, mask, &part, emit);
+            return decode(input, mask, &part, self.late_filter.as_ref(), emit);
         };
         let c = &columns[m.file];
         let part = Part { meta: &f.meta, row_group: m.row_group, rows: m.range, limit: self.fetch, schema: &c.decoded };
-        decode(input, mask, &part, &mut |b| emit(c.adapt(b, &self.schema)?))
+        decode(input, mask, &part, None, &mut |b| emit(c.adapt(b, &self.schema)?))
     }
 
     fn schema(&self) -> SchemaRef {

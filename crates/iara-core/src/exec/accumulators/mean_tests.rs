@@ -9,9 +9,9 @@ fn mean_of(a: &mut dyn Accumulator, groups: usize) -> Vec<Option<f64>> {
 
 /// Average `col` grouped and ungrouped with the accumulator the factory picks.
 fn via_factory(col: ArrayRef, gids: &[u32], groups: usize) -> (Vec<Option<f64>>, Vec<Option<f64>>) {
-    let mut g = create_accumulator(AggFunc::Mean, Some(col.data_type()), false, false).unwrap();
+    let mut g = create_accumulator(AggFunc::Mean, Some(col.data_type()), false).unwrap();
     g.update(&[col.clone()], gids, groups).unwrap();
-    let mut s = create_accumulator(AggFunc::Mean, Some(col.data_type()), false, false).unwrap();
+    let mut s = create_accumulator(AggFunc::Mean, Some(col.data_type()), false).unwrap();
     s.update_single(&[col], gids.len()).unwrap();
     (mean_of(g.as_mut(), groups), mean_of(s.as_mut(), 1))
 }
@@ -66,7 +66,7 @@ fn nulls_and_empty_groups() {
     assert_eq!(single, vec![None]);
     // a group that no row falls in
     let col: ArrayRef = Arc::new(Int64Array::from(vec![10, 20]));
-    let mut a = create_accumulator(AggFunc::Mean, Some(col.data_type()), false, false).unwrap();
+    let mut a = create_accumulator(AggFunc::Mean, Some(col.data_type()), false).unwrap();
     a.update(&[col], &[0, 2], 3).unwrap();
     assert_eq!(mean_of(a.as_mut(), 3), vec![Some(10.0), None, Some(20.0)]);
 }
@@ -81,7 +81,7 @@ fn averages_of_integers_are_exact_means() {
 #[test]
 fn merge_adds_partial_sums_and_counts() {
     let col: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 6]));
-    let mk = || create_accumulator(AggFunc::Mean, Some(&DataType::Int32), false, false).unwrap();
+    let mk = || create_accumulator(AggFunc::Mean, Some(&DataType::Int32), false).unwrap();
     let (mut a, mut b) = (mk(), mk());
     a.update(&[col.slice(0, 2)], &[0, 1], 2).unwrap();
     b.update(&[col.slice(2, 2)], &[0, 1], 2).unwrap();
@@ -94,11 +94,11 @@ fn types_without_a_direct_impl_are_cast() {
     // decimals are scaled back: 1.50 and 2.50 average to 2.0
     let ty = DataType::Decimal128(10, 2);
     let d: ArrayRef = Arc::new(Decimal128Array::from(vec![150, 250]).with_data_type(ty.clone()));
-    let mut a = create_accumulator(AggFunc::Mean, Some(&ty), false, false).unwrap();
+    let mut a = create_accumulator(AggFunc::Mean, Some(&ty), false).unwrap();
     a.update_single(&[d], 2).unwrap();
     assert_eq!(mean_of(a.as_mut(), 1), vec![Some(2.0)]);
     // a batch that is not the type the plan promised is cast
-    let mut a = create_accumulator(AggFunc::Mean, Some(&DataType::Int64), false, false).unwrap();
+    let mut a = create_accumulator(AggFunc::Mean, Some(&DataType::Int64), false).unwrap();
     a.update_single(&[Arc::new(Int32Array::from(vec![4, 6]))], 2).unwrap();
     assert_eq!(mean_of(a.as_mut(), 1), vec![Some(5.0)]);
 }

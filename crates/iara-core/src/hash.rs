@@ -41,7 +41,7 @@ pub fn combine(h: u64, v: u64) -> u64 {
 
 /// Native types usable as hash keys: mapped to a canonical bit pattern.
 pub trait NativeKey: Copy + Send + Sync + 'static {
-    type Key: Copy + Eq + Send + Sync + std::fmt::Debug + 'static;
+    type Key: Copy + Eq + Default + Send + Sync + std::fmt::Debug + 'static;
     fn to_key(self) -> Self::Key;
     fn hash_key(k: Self::Key) -> u64;
 }

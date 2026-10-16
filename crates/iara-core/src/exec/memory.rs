@@ -7,21 +7,32 @@
 //! through a pipeline) is small and transient, and not accounted.
 //!
 //! The limit is `IARA_MEMORY_LIMIT`: bytes (`2147483648`), with a unit
-//! (`2GB`, `512MB`) or a share of the machine's RAM (`60%`). Without it,
-//! machines use 75% of their RAM by default.
+//! (`2GB`, `512MB`) or a share of the machine's RAM (`60%`). Without it, a
+//! query may use 75% of the machine's RAM, or less when less is free when it
+//! starts (data frames held by the process, other programs).
 
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 pub struct MemoryPool {
     limit: AtomicUsize,
     used: AtomicUsize,
     peak: AtomicUsize,
+    /// the default limit, adjusted to the free memory as queries start
+    /// (cleared once a limit is set explicitly)
+    fitted: AtomicBool,
+    default_limit: AtomicUsize,
 }
 
 impl MemoryPool {
     pub const fn new(limit: usize) -> Self {
-        Self { limit: AtomicUsize::new(limit), used: AtomicUsize::new(0), peak: AtomicUsize::new(0) }
+        Self {
+            limit: AtomicUsize::new(limit),
+            used: AtomicUsize::new(0),
+            peak: AtomicUsize::new(0),
+            fitted: AtomicBool::new(false),
+            default_limit: AtomicUsize::new(limit),
+        }
     }
 
     pub fn limit(&self) -> usize {
@@ -30,6 +41,23 @@ impl MemoryPool {
 
     /// Change the limit (`usize::MAX`: none). Data already held stays.
     pub fn set_limit(&self, limit: usize) {
+        self.fitted.store(false, Ordering::Relaxed);
+        self.limit.store(limit, Ordering::Relaxed);
+    }
+
+    /// With the default limit: let the pool grow by at most 90% of the memory
+    /// free now (called as a query starts), never past the default nor below
+    /// half of it (the allocator keeps memory the process freed, which the
+    /// system does not count as free).
+    pub fn fit_to_free_memory(&self) {
+        if !self.fitted.load(Ordering::Relaxed) {
+            return;
+        }
+        let default = self.default_limit.load(Ordering::Relaxed);
+        let limit = match available_memory() {
+            Some(free) => default.min(self.used().saturating_add(free / 10 * 9).max(default / 2)),
+            None => default,
+        };
         self.limit.store(limit, Ordering::Relaxed);
     }
 
@@ -167,6 +195,52 @@ pub fn parse_limit(s: &str, total: Option<usize>) -> Option<usize> {
     Some((value * unit) as usize)
 }
 
+/// Memory the machine could give the process now (free plus reclaimable
+/// cache), when it can be read without extra dependencies.
+pub fn available_memory() -> Option<usize> {
+    #[cfg(target_os = "linux")]
+    {
+        let info = std::fs::read_to_string("/proc/meminfo").ok()?;
+        let line = info.lines().find(|l| l.starts_with("MemAvailable:"))?;
+        let kb: usize = line.split_whitespace().nth(1)?.parse().ok()?;
+        Some(kb * 1024)
+    }
+    #[cfg(windows)]
+    {
+        memory_status().map(|s| s.avail_phys as usize)
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        None
+    }
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct MemoryStatusEx {
+    length: u32,
+    memory_load: u32,
+    total_phys: u64,
+    avail_phys: u64,
+    total_page_file: u64,
+    avail_page_file: u64,
+    total_virtual: u64,
+    avail_virtual: u64,
+    avail_extended_virtual: u64,
+}
+
+#[cfg(windows)]
+fn memory_status() -> Option<MemoryStatusEx> {
+    unsafe extern "system" {
+        fn GlobalMemoryStatusEx(status: *mut MemoryStatusEx) -> i32;
+    }
+    unsafe {
+        let mut status = std::mem::zeroed::<MemoryStatusEx>();
+        status.length = std::mem::size_of::<MemoryStatusEx>() as u32;
+        (GlobalMemoryStatusEx(&mut status) != 0).then_some(status)
+    }
+}
+
 /// Physical memory of the machine, when it can be read without extra dependencies.
 pub fn total_memory() -> Option<usize> {
     #[cfg(target_os = "linux")]
@@ -178,30 +252,7 @@ pub fn total_memory() -> Option<usize> {
     }
     #[cfg(windows)]
     {
-        #[repr(C)]
-        struct MemoryStatusEx {
-            length: u32,
-            memory_load: u32,
-            total_phys: u64,
-            avail_phys: u64,
-            total_page_file: u64,
-            avail_page_file: u64,
-            total_virtual: u64,
-            avail_virtual: u64,
-            avail_extended_virtual: u64,
-        }
-        unsafe extern "system" {
-            fn GlobalMemoryStatusEx(status: *mut MemoryStatusEx) -> i32;
-        }
-        unsafe {
-            let mut status = std::mem::zeroed::<MemoryStatusEx>();
-            status.length = std::mem::size_of::<MemoryStatusEx>() as u32;
-            if GlobalMemoryStatusEx(&mut status) != 0 {
-                Some(status.total_phys as usize)
-            } else {
-                None
-            }
-        }
+        memory_status().map(|s| s.total_phys as usize)
     }
     #[cfg(target_os = "macos")]
     {
@@ -232,18 +283,41 @@ pub fn total_memory() -> Option<usize> {
     }
 }
 
-fn configured_limit() -> usize {
+/// The limit and whether it is the default (fitted to the free memory).
+fn configured_limit() -> (usize, bool) {
     let total = total_memory();
     match std::env::var("IARA_MEMORY_LIMIT") {
-        Ok(v) if !v.trim().is_empty() => parse_limit(&v, total).unwrap_or(usize::MAX),
-        _ => total.map_or(usize::MAX, |t| t / 4 * 3),
+        Ok(v) if !v.trim().is_empty() => (parse_limit(&v, total).unwrap_or(usize::MAX), false),
+        _ => (total.map_or(usize::MAX, |t| t / 4 * 3), total.is_some()),
+    }
+}
+
+static RELEASE: OnceLock<fn()> = OnceLock::new();
+
+/// Set how a thread gives the memory it freed back to the system (the
+/// allocator's own call; allocators keep freed memory for reuse, which
+/// other allocators in the process, like numpy's, cannot use).
+pub fn set_release(f: fn()) {
+    let _ = RELEASE.set(f);
+}
+
+/// Give freed memory back on every engine thread (once no query runs).
+pub fn release_freed() {
+    if let Some(f) = RELEASE.get() {
+        rayon::broadcast(|_| f());
+        f();
     }
 }
 
 /// The process-wide pool.
 pub fn pool() -> &'static MemoryPool {
     static POOL: OnceLock<MemoryPool> = OnceLock::new();
-    POOL.get_or_init(|| MemoryPool::new(configured_limit()))
+    POOL.get_or_init(|| {
+        let (limit, fitted) = configured_limit();
+        let pool = MemoryPool::new(limit);
+        pool.fitted.store(fitted, Ordering::Relaxed);
+        pool
+    })
 }
 
 #[cfg(test)]

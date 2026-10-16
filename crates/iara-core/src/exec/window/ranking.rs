@@ -12,8 +12,8 @@ use crate::exec::window::layout::Layout;
 use crate::expr::WindowFunc;
 
 pub fn evaluate(f: &WindowFunctionExpr, layout: &Layout) -> Result<ArrayRef> {
-    let ps = &layout.peer_start;
-    let pe = &layout.peer_end;
+    let ps = layout.peer_start();
+    let pe = layout.peer_end();
     let sorted: ArrayRef = match f.func {
         WindowFunc::RowNumber => ints(layout, true, |p, rows, out| {
             for (k, o) in out.iter_mut().enumerate() {

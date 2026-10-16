@@ -21,7 +21,7 @@ export default defineConfig({
       customCss: [
         '@fontsource-variable/inter',
         '@fontsource-variable/jetbrains-mono',
-        '@fontsource-variable/fraunces',
+        '@fontsource-variable/roboto-slab',
         './src/styles/custom.css',
       ],
       expressiveCode: {

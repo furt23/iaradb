@@ -1,10 +1,12 @@
 //! UNNEST / explode: one output row per list element, streaming per batch.
 //!
 //! For every input row the operator works out how many rows it produces (the
-//! longest of its lists, or one with `keep_empty`), then builds the output
-//! with `take`: the parent indices repeat the other columns, the element
-//! indices pick the list values (a missing element is NULL, which zips lists
-//! of different lengths). Large expansions are emitted in several batches.
+//! longest of its lists, or one with `keep_empty`), then builds the output:
+//! the parent indices repeat the other columns (those read above it; the
+//! others come out NULL), the element indices pick the list values (a missing
+//! element is NULL, which zips lists of different lengths). A list whose rows
+//! all produce exactly their elements is a slice of its values. Large
+//! expansions are emitted in several batches.
 
 use arrow::array::*;
 use arrow::compute::take;
@@ -22,6 +24,8 @@ const TARGET_ROWS: usize = 32 * 1024;
 pub struct UnnestOp {
     pub exprs: Vec<PhysExpr>,
     pub keep_empty: bool,
+    /// input columns read above (None: all)
+    pub used: Option<Vec<bool>>,
     pub schema: SchemaRef,
 }
 
@@ -58,13 +62,32 @@ impl UnnestOp {
         if rows == 0 {
             return Ok(());
         }
-        let mut parents = Vec::with_capacity(rows);
-        for r in start..end {
-            parents.extend(std::iter::repeat_n(r as u32, counts[r]));
-        }
-        let parents = UInt32Array::from(parents);
-        let mut cols: Vec<ArrayRef> = batch.columns().iter().map(|c| take(c.as_ref(), &parents, None)).collect::<Result<_, _>>()?;
+        let used = |c: usize| self.used.as_ref().is_none_or(|u| u[c]);
+        let parents = (0..batch.num_columns()).any(used).then(|| {
+            let mut p = Vec::with_capacity(rows);
+            for r in start..end {
+                p.extend(std::iter::repeat_n(r as u32, counts[r]));
+            }
+            UInt32Array::from(p)
+        });
+        let mut cols: Vec<ArrayRef> = batch
+            .columns()
+            .iter()
+            .enumerate()
+            .map(|(c, a)| match &parents {
+                Some(p) if used(c) => take(a.as_ref(), p, None),
+                _ => Ok(new_null_array(a.data_type(), rows)),
+            })
+            .collect::<Result<_, _>>()?;
         for l in lists {
+            // every row yields exactly its elements, and they are contiguous
+            // (a NULL list may still span values in the offsets)
+            let o = l.list().value_offsets();
+            let (s, e) = (o[start] as usize, o[end] as usize);
+            if e - s == rows && (start..end).all(|r| { let (a, b) = l.span(r); b - a == counts[r] }) {
+                cols.push(l.list().values().slice(s, rows));
+                continue;
+            }
             let mut picks = UInt32Builder::with_capacity(rows);
             for r in start..end {
                 let (s, e) = l.span(r);

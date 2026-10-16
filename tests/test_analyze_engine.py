@@ -80,9 +80,11 @@ def test_every_node_has_metrics_and_the_real_row_counts(ctx, duck):
         assert set(m) <= {"rows_out", "elapsed_ms", "batches", "memory_peak", "spilled_bytes"}
 
     kept = duck.execute("select count(*) from facts where v > 0.9").fetchone()[0]
-    assert named(plan, "HashAggregate")[0]["metrics"]["rows_out"] == GROUPS
+    # the facts are pre-aggregated by their key below the join: one row per key reaches it
+    final, partial = named(plan, "HashAggregate")
+    assert final["metrics"]["rows_out"] == partial["metrics"]["rows_out"] == GROUPS
     assert named(plan, "Filter")[0]["metrics"]["rows_out"] == kept
-    assert named(plan, "HashJoin")[0]["metrics"]["rows_out"] == kept
+    assert named(plan, "HashJoin")[0]["metrics"]["rows_out"] == GROUPS
     scans = sorted(n["metrics"]["rows_out"] for n in walk(plan) if not n["children"])
     assert scans == [GROUPS, N]
     # the aggregation and the join build hold memory

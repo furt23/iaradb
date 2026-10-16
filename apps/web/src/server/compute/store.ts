@@ -7,6 +7,7 @@ import path from "node:path";
 
 import { utils } from "ssh2";
 
+import { DEFAULT_MAX_HOURS } from "./instanceTypes";
 import type { ClusterRecord } from "./types";
 
 /**
@@ -41,6 +42,13 @@ function writeAtomic(file: string, text: string, mode = 0o600): void {
   fs.renameSync(tmp, file);
 }
 
+type NewSettings = Pick<ClusterRecord, "libraries" | "env" | "initScript" | "spot" | "maxHours" | "tags">;
+
+/** A cluster read from disk, with the settings added since it was saved. */
+function withDefaults(c: Omit<ClusterRecord, keyof NewSettings> & Partial<NewSettings>): ClusterRecord {
+  return { libraries: [], env: {}, initScript: "", spot: false, maxHours: DEFAULT_MAX_HOURS, tags: {}, ...c };
+}
+
 export class Store {
   private cache: StudioState | null = null;
 
@@ -54,7 +62,7 @@ export class Store {
     if (this.cache) return this.cache;
     try {
       const data = JSON.parse(fs.readFileSync(this.file, "utf8")) as Partial<StudioState>;
-      this.cache = { installationId: data.installationId ?? crypto.randomUUID(), clusters: data.clusters ?? [], attachments: data.attachments ?? {}, defaultCluster: data.defaultCluster };
+      this.cache = { installationId: data.installationId ?? crypto.randomUUID(), clusters: (data.clusters ?? []).map(withDefaults), attachments: data.attachments ?? {}, defaultCluster: data.defaultCluster };
     } catch {
       this.cache = { installationId: crypto.randomUUID(), clusters: [], attachments: {} };
     }

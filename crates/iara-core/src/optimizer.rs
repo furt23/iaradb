@@ -45,16 +45,25 @@ pub fn estimate_after_pushdown(plan: &LogicalPlan) -> f64 {
     }
 }
 
+mod agg_pushdown;
 mod sum_shift;
 
 fn rewrite_aggregates(plan: &LogicalPlan) -> Result<LogicalPlan> {
     let plan = map_inputs(plan, &mut |p| rewrite_aggregates(p))?;
-    if let LogicalPlan::Aggregate(a) = &plan {
+    rewrite_aggregate(&plan)
+}
+
+/// Rewrite an aggregation node (any other plan stays as it is).
+fn rewrite_aggregate(plan: &LogicalPlan) -> Result<LogicalPlan> {
+    if let LogicalPlan::Aggregate(a) = plan {
+        if let Some(p) = agg_pushdown::rewrite(a)? {
+            return Ok(p);
+        }
         if let Some(p) = sum_shift::rewrite(a)? {
             return Ok(p);
         }
     }
-    Ok(plan)
+    Ok(plan.clone())
 }
 
 fn map_inputs(plan: &LogicalPlan, f: &mut dyn FnMut(&LogicalPlan) -> Result<LogicalPlan>) -> Result<LogicalPlan> {
@@ -230,6 +239,26 @@ fn wrap_filter(plan: LogicalPlan, preds: Vec<Expr>) -> Result<LogicalPlan> {
     }
 }
 
+fn strip_filters(p: &LogicalPlan) -> &LogicalPlan {
+    match p {
+        LogicalPlan::Filter(f) => strip_filters(&f.input),
+        LogicalPlan::SubqueryAlias(a) => strip_filters(&a.input),
+        other => other,
+    }
+}
+
+/// Whether `e` calls a scalar function or matches a pattern (work worth not repeating).
+fn computes_function(e: &Expr) -> bool {
+    let mut found = false;
+    let _ = e.clone().transform_up(&mut |x| {
+        if matches!(x, Expr::Function { .. } | Expr::Like { .. }) {
+            found = true;
+        }
+        Ok(x)
+    });
+    found
+}
+
 fn is_volatile(_e: &Expr) -> bool {
     false
 }
@@ -245,11 +274,16 @@ fn push_down_filters(plan: &LogicalPlan, preds: Vec<Expr>) -> Result<LogicalPlan
             let schema = proj.schema.clone();
             let mut push = vec![];
             let mut keep = vec![];
+            // a function computed by the projection would run twice (in the
+            // filter, then for the rows that pass): the filter stays above it,
+            // unless a join below could use the predicate
+            let feeds_join = matches!(strip_filters(&proj.input), LogicalPlan::Join(_));
             for pred in preds {
                 let rewritten = rewrite_columns(&pred, &|c| {
                     let idx = schema.maybe_index_of(c).ok()??;
                     let e = proj.exprs[idx].clone().unalias();
-                    if e.contains_agg() || is_volatile(&e) { None } else { Some(e) }
+                    let dup = !feeds_join && computes_function(&e);
+                    if e.contains_agg() || is_volatile(&e) || dup { None } else { Some(e) }
                 });
                 match rewritten {
                     Some(r) => push.push(r),

@@ -47,7 +47,8 @@ if (!i18next.isInitialized) {
     .use(initReactI18next)
     .init({
       resources,
-      lng: typeof window !== "undefined" ? getSavedLocale() : DEFAULT_LOCALE,
+      // the server renders the default: the client matches it, then I18nProvider switches to the saved locale
+      lng: DEFAULT_LOCALE,
       fallbackLng: "en",
       // Disable any donation or support notices
       showSupportNotice: false,

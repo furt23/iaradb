@@ -223,7 +223,15 @@ struct Running(Arc<QueryHandle>);
 impl Drop for Running {
     fn drop(&mut self) {
         CURRENT.with(|c| *c.borrow_mut() = None);
-        registry().lock().retain(|h| !Arc::ptr_eq(h, &self.0));
+        let idle = {
+            let mut reg = registry().lock();
+            reg.retain(|h| !Arc::ptr_eq(h, &self.0));
+            reg.is_empty()
+        };
+        // memory the query freed goes back to the system (short queries free little)
+        if idle && self.0.started.elapsed() >= std::time::Duration::from_millis(200) {
+            memory::release_freed();
+        }
     }
 }
 
@@ -238,7 +246,10 @@ pub fn with_query<T>(f: impl FnOnce(&Arc<QueryHandle>) -> T) -> T {
         let mut reg = registry().lock();
         if reg.is_empty() {
             memory::pool().reset_peak(); // the peak of this query alone
+            // what earlier results freed since (dropped frames) counts as free
+            memory::release_freed();
         }
+        memory::pool().fit_to_free_memory();
         reg.push(h.clone());
     }
     CURRENT.with(|c| *c.borrow_mut() = Some(h.clone()));

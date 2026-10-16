@@ -53,7 +53,10 @@ export async function newNotebook(page: Page, rel: string): Promise<void> {
   await input.fill(rel);
   await page.getByRole("button", { name: "Create" }).click();
   await page.waitForURL(fileUrl("notebooks"));
-  await expect(cells(page)).toHaveCount(1);
+  // a new notebook has only its hidden setup cell: the specs start from one Python cell
+  await expect(page.getByRole("button", { name: "Python", exact: true })).toBeVisible();
+  await expect(cells(page)).toHaveCount(0);
+  await addCell(page, "Python");
 }
 
 export async function newQuery(page: Page, rel: string): Promise<void> {

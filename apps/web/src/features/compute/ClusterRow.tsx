@@ -14,6 +14,7 @@ import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useTranslation } from "react-i18next";
 
 import { useGuard } from "@/features/shell/notify";
 import { unwrap } from "@/lib/action";
@@ -33,6 +34,7 @@ export interface ClusterActions {
 
 /** One cluster: state, machine, limits, attached notebooks and its actions. */
 export function ClusterRow({ cluster: c, now, actions, cloud }: { cluster: ClusterView; now: number; actions: ClusterActions; cloud: boolean }) {
+  const { t } = useTranslation();
   const guard = useGuard();
   const router = useRouter();
   const makeDefault = () =>
@@ -42,11 +44,16 @@ export function ClusterRow({ cluster: c, now, actions, cloud }: { cluster: Clust
     });
   const stopped = c.state === "terminated" || c.state === "error";
   const details = [machineSummary(c)];
-  if (c.kind === "ec2") details.push(`terminates after ${c.autoTerminateMinutes} min idle`);
-  if (c.owner) details.push(`by ${c.owner}`);
+  if (c.kind === "ec2") details.push(t("terminates after {{n}} min idle", { n: c.autoTerminateMinutes }));
+  if (c.kind === "ec2" && c.maxHours) details.push(t("limit {{n}} h", { n: c.maxHours }));
+  if (c.owner) details.push(t("by {{owner}}", { owner: c.owner }));
   if (c.kind === "ec2" && c.state === "running") {
-    details.push(`up ${formatMinutes(minutesSince(c.startedAt, now) ?? 0)}`, `idle ${formatMinutes(minutesSince(c.lastActivity, now) ?? 0)}`);
+    details.push(
+      t("up {{time}}", { time: formatMinutes(minutesSince(c.startedAt, now) ?? 0) }),
+      t("idle {{time}}", { time: formatMinutes(minutesSince(c.lastActivity, now) ?? 0) }),
+    );
   }
+  const notebooks = c.notebooks.length;
   return (
     <Paper variant="outlined" sx={{ p: 2, display: "flex", alignItems: "center", gap: 2 }} aria-label={`cluster ${c.name}`}>
       <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -58,8 +65,12 @@ export function ClusterRow({ cluster: c, now, actions, cloud }: { cluster: Clust
           >
             {c.name}
           </Typography>
-          {c.isDefault && <Chip size="small" label="default" />}
-          {c.job && <Chip size="small" variant="outlined" label="job run" title="Made for a job run: terminated when the run ends" />}
+          {c.isDefault && <Chip size="small" label={t("default")} />}
+          {c.job && <Chip size="small" variant="outlined" label={t("job run")} title={t("Made for a job run: terminated when the run ends")} />}
+          {c.spot && <Chip size="small" variant="outlined" color="info" label={t("spot")} title={t("Spot machine: cheaper, AWS may reclaim it")} />}
+          {c.state === "running" && c.spot && c.runningSpot === false && (
+            <Chip size="small" variant="outlined" label={t("on-demand")} title={t("No spot capacity at start: running on-demand")} />
+          )}
           <StateChip cluster={c} />
         </Box>
         <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.5 }}>
@@ -70,17 +81,22 @@ export function ClusterRow({ cluster: c, now, actions, cloud }: { cluster: Clust
             {c.error}
           </Typography>
         )}
-        <Tooltip title={c.notebooks.join("\n") || "no notebook attached"}>
+        <Tooltip title={c.notebooks.join("\n") || t("no notebook attached")}>
           <Typography variant="caption" sx={{ color: "text.disabled" }}>
-            {c.notebooks.length} notebook{c.notebooks.length === 1 ? "" : "s"} attached
+            {notebooks === 1 ? t("{{n}} notebook attached", { n: notebooks }) : t("{{n}} notebooks attached", { n: notebooks })}
           </Typography>
         </Tooltip>
+        {c.libraries && c.libraries.length > 0 && (
+          <Typography variant="caption" sx={{ display: "block", color: "text.secondary", fontFamily: "monospace", overflowWrap: "anywhere" }}>
+            {t("Libraries")}: {c.libraries.join(", ")}
+          </Typography>
+        )}
       </Box>
       <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, flexShrink: 0 }}>
         {!c.isDefault && !c.job && (
-          <Tooltip title="The SQL editor, the catalog and new notebooks run on the default cluster">
+          <Tooltip title={t("The SQL editor, the catalog and new notebooks run on the default cluster")}>
             <Button size="small" onClick={makeDefault}>
-              Make default
+              {t("Make default")}
             </Button>
           </Tooltip>
         )}
@@ -88,26 +104,26 @@ export function ClusterRow({ cluster: c, now, actions, cloud }: { cluster: Clust
           <>
           {stopped ? (
             <Button variant="contained" size="small" startIcon={<PlayArrow />} onClick={() => actions.start(c)} disabled={!cloud}>
-              Start
+              {t("Start")}
             </Button>
           ) : (
             <Button variant="outlined" size="small" color="error" startIcon={<StopOutlined />} onClick={() => actions.terminate(c)} disabled={c.state === "terminating"}>
-              Terminate
+              {t("Terminate")}
             </Button>
           )}
-          <Tooltip title="Clone">
+          <Tooltip title={t("Clone")}>
             <IconButton onClick={() => actions.clone(c)} aria-label={`clone ${c.name}`}>
               <ContentCopyOutlined fontSize="small" />
             </IconButton>
           </Tooltip>
           {c.canManage && (
             <>
-              <Tooltip title="Edit">
+              <Tooltip title={t("Edit")}>
                 <IconButton onClick={() => actions.edit(c)} aria-label={`edit ${c.name}`}>
                   <EditOutlined fontSize="small" />
                 </IconButton>
               </Tooltip>
-              <Tooltip title={stopped ? "Delete" : "Terminate it first"}>
+              <Tooltip title={stopped ? t("Delete") : t("Terminate it first")}>
                 <span>
                   <IconButton onClick={() => actions.remove(c)} disabled={!stopped} aria-label={`delete ${c.name}`}>
                     <DeleteOutline fontSize="small" />

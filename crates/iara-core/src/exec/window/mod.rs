@@ -206,6 +206,82 @@ impl WindowEval {
     }
 }
 
+impl WindowEval {
+    /// Input columns the windows read (keys, arguments, filters).
+    fn read_columns(&self) -> Vec<usize> {
+        let mut cols = vec![];
+        for spec in &self.specs {
+            spec.partition_by.iter().for_each(|e| e.collect_columns(&mut cols));
+            spec.order_by.iter().for_each(|k| k.expr.collect_columns(&mut cols));
+            for (_, f) in &spec.funcs {
+                f.args.iter().for_each(|e| e.collect_columns(&mut cols));
+                if let Some(e) = &f.filter {
+                    e.collect_columns(&mut cols);
+                }
+            }
+        }
+        cols.sort_unstable();
+        cols.dedup();
+        cols
+    }
+
+    /// Evaluate over input batches (in input order): only the columns the
+    /// windows read are put together, and the output takes them from there
+    /// (the input batches keep only the other columns, so no column is held
+    /// twice); the window columns are cut back along the input batches.
+    fn evaluate_batches(&self, batches: Vec<RecordBatch>) -> Result<Vec<RecordBatch>> {
+        let schema = batches[0].schema();
+        let n: usize = batches.iter().map(|b| b.num_rows()).sum();
+        let read = self.read_columns();
+        let concat_cols = concat_parallel(
+            &Arc::new(schema.project(&read)?),
+            &batches.iter().map(|b| b.project(&read)).collect::<Result<Vec<_>, _>>()?,
+        )?;
+        // the input batches without the columns just put together
+        let rows: Vec<usize> = batches.iter().map(|b| b.num_rows()).collect();
+        let rest: Vec<Vec<Option<ArrayRef>>> = batches
+            .into_iter()
+            .map(|b| b.columns().iter().enumerate().map(|(i, c)| (!read.contains(&i)).then(|| c.clone())).collect())
+            .collect();
+        // unread columns stand in as (unallocated) NULL columns
+        let mut fields = Vec::with_capacity(schema.fields().len());
+        let mut cols = Vec::with_capacity(schema.fields().len());
+        for (i, f) in schema.fields().iter().enumerate() {
+            match read.iter().position(|&r| r == i) {
+                Some(k) => {
+                    fields.push(f.clone());
+                    cols.push(concat_cols.column(k).clone());
+                }
+                None => {
+                    fields.push(Arc::new(Field::new(f.name(), DataType::Null, true)));
+                    cols.push(Arc::new(arrow::array::NullArray::new(n)) as ArrayRef);
+                }
+            }
+        }
+        let narrow = RecordBatch::try_new_with_options(Arc::new(Schema::new(fields)), cols, &RecordBatchOptions::new().with_row_count(Some(n)))?;
+        let evaluated = self.evaluate(&narrow)?;
+        drop(narrow);
+        let n_in = schema.fields().len();
+        let window_cols = &evaluated.columns()[n_in..];
+        let mut out_fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
+        out_fields.extend(self.schema.fields()[n_in..].iter().cloned());
+        let out_schema = Arc::new(Schema::new(out_fields));
+        let mut out = Vec::with_capacity(rest.len());
+        let mut at = 0;
+        for (b, rows) in rest.into_iter().zip(rows) {
+            let mut cols: Vec<ArrayRef> = b
+                .into_iter()
+                .enumerate()
+                .map(|(i, c)| c.unwrap_or_else(|| concat_cols.column(read.iter().position(|&r| r == i).expect("read column")).slice(at, rows)))
+                .collect();
+            cols.extend(window_cols.iter().map(|c| c.slice(at, rows)));
+            out.push(RecordBatch::try_new_with_options(out_schema.clone(), cols, &RecordBatchOptions::new().with_row_count(Some(rows)))?);
+            at += rows;
+        }
+        Ok(rechunk(out, MORSEL_ROWS))
+    }
+}
+
 impl Sink for WindowSink {
     type Local = WindowLocal;
     type Output = Windowed;
@@ -259,7 +335,6 @@ impl Sink for WindowSink {
         if batches.is_empty() {
             return Ok(Windowed::Batches(vec![]));
         }
-        let input = concat_parallel(&batches[0].schema(), &batches)?;
-        Ok(Windowed::Batches(rechunk(vec![self.eval.evaluate(&input)?], MORSEL_ROWS)))
+        Ok(Windowed::Batches(self.eval.evaluate_batches(batches)?))
     }
 }

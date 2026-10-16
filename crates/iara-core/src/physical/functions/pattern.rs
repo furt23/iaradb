@@ -107,17 +107,33 @@ fn subject(args: &[ColumnarValue], m: usize) -> Result<ArrayRef> {
     args[0].clone().into_array(m)
 }
 
+/// The rows of a Utf8 or Utf8View subject.
+fn texts(a: &ArrayRef) -> Box<dyn Iterator<Item = Option<&str>> + '_> {
+    match a.as_string_view_opt() {
+        Some(v) => Box::new(v.iter()),
+        None => Box::new(a.as_string::<i32>().iter()),
+    }
+}
+
+/// Bytes of the subject's strings (an output capacity).
+fn text_bytes(a: &ArrayRef) -> usize {
+    match a.as_string_view_opt() {
+        Some(v) => v.total_buffer_bytes_used().max(v.len() * 8),
+        None => a.as_string::<i32>().value_data().len(),
+    }
+}
+
 pub fn like(args: &[ColumnarValue], m: usize) -> Result<ArrayRef> {
     let Some((re, _)) = setup(args, 2)? else { return Ok(new_null_array(&arrow::datatypes::DataType::Boolean, m)) };
     let a = subject(args, m)?;
-    let out: BooleanArray = a.as_string::<i32>().iter().map(|v| v.map(|s| re.is_match(s))).collect();
+    let out: BooleanArray = texts(&a).map(|v| v.map(|s| re.is_match(s))).collect();
     Ok(Arc::new(out))
 }
 
 pub fn count(args: &[ColumnarValue], m: usize) -> Result<ArrayRef> {
     let Some((re, _)) = setup(args, 2)? else { return Ok(new_null_array(&arrow::datatypes::DataType::Int64, m)) };
     let a = subject(args, m)?;
-    let out: Int64Array = a.as_string::<i32>().iter().map(|v| v.map(|s| re.find_iter(s).count() as i64)).collect();
+    let out: Int64Array = texts(&a).map(|v| v.map(|s| re.find_iter(s).count() as i64)).collect();
     Ok(Arc::new(out))
 }
 
@@ -129,11 +145,10 @@ pub fn extract(args: &[ColumnarValue], m: usize) -> Result<ArrayRef> {
         _ => 0,
     };
     let a = subject(args, m)?;
-    let s = a.as_string::<i32>();
-    let mut b = StringBuilder::with_capacity(s.len(), s.value_data().len());
+    let mut b = StringBuilder::with_capacity(a.len(), text_bytes(&a));
     // capture slots reused across rows (no allocation per row)
     let mut locs = re.capture_locations();
-    for v in s.iter() {
+    for v in texts(&a) {
         let Some(text) = v else {
             b.append_null();
             continue;
@@ -156,15 +171,14 @@ pub fn replace(args: &[ColumnarValue], m: usize) -> Result<ArrayRef> {
     let Some((re, o)) = setup(args, 3)? else { return Ok(new_null_array(&arrow::datatypes::DataType::Utf8, m)) };
     let Some(rep) = const_str(args.get(2))? else { return Ok(new_null_array(&arrow::datatypes::DataType::Utf8, m)) };
     let a = subject(args, m)?;
-    let s = a.as_string::<i32>();
-    let mut b = StringBuilder::with_capacity(s.len(), s.value_data().len());
+    let mut b = StringBuilder::with_capacity(a.len(), text_bytes(&a));
     if !o.global && !o.raw_repl {
         // the first match: its capture slots reused across rows, the
         // replacement written straight into the output
         let pieces = pieces(&rep, &o);
         let mut locs = re.capture_locations();
         let mut out = String::new();
-        for v in s.iter() {
+        for v in texts(&a) {
             let Some(text) = v else {
                 b.append_null();
                 continue;
@@ -191,7 +205,7 @@ pub fn replace(args: &[ColumnarValue], m: usize) -> Result<ArrayRef> {
         return Ok(Arc::new(b.finish()));
     }
     let rep = replacement(&rep, &o);
-    for v in s.iter() {
+    for v in texts(&a) {
         match v {
             None => b.append_null(),
             Some(text) => {

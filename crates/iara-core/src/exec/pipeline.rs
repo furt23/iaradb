@@ -375,14 +375,23 @@ pub fn rechunk(batches: Vec<RecordBatch>, target: usize) -> Vec<RecordBatch> {
 }
 
 pub struct MemorySource {
-    batches: Vec<RecordBatch>,
+    batches: Vec<parking_lot::Mutex<Option<RecordBatch>>>,
+    /// an intermediate result read once: each morsel's batch is released
+    /// when it has been run (a table's batches stay for the next query)
+    once: bool,
     schema: SchemaRef,
     label: String,
 }
 
 impl MemorySource {
     pub fn new(batches: Vec<RecordBatch>, schema: SchemaRef, label: impl Into<String>) -> Self {
-        Self { batches: rechunk(batches, MORSEL_ROWS), schema, label: label.into() }
+        let batches = rechunk(batches, MORSEL_ROWS).into_iter().map(|b| parking_lot::Mutex::new(Some(b))).collect();
+        Self { batches, once: false, schema, label: label.into() }
+    }
+
+    /// A source of batches that nothing else reads: they are freed as the pipeline goes.
+    pub fn once(batches: Vec<RecordBatch>, schema: SchemaRef, label: impl Into<String>) -> Self {
+        Self { once: true, ..Self::new(batches, schema, label) }
     }
 }
 
@@ -391,11 +400,17 @@ impl Source for MemorySource {
         self.batches.len()
     }
     fn run_morsel(&self, morsel: usize, emit: Emit<'_>) -> Result<()> {
+        let b = {
+            let mut slot = self.batches[morsel].lock();
+            if self.once { slot.take() } else { slot.clone() }
+        };
+        let Some(b) = b else {
+            return Err(crate::error::WhError::Execution(format!("{}: morsel {morsel} was already read", self.label)));
+        };
         // morsels are large for scheduling; operators see cache-sized slices
-        let b = &self.batches[morsel];
         let bs = crate::io::parquet::batch_size();
         if b.num_rows() <= bs {
-            return emit(b.clone());
+            return emit(b);
         }
         let mut off = 0;
         while off < b.num_rows() {

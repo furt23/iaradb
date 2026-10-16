@@ -71,6 +71,8 @@ function plugin(fetch: Fetch) {
       constructor(private readonly view: EditorView) {}
 
       update(u: ViewUpdate) {
+        // leaving the editor closes the tooltip (nothing else in this cell would)
+        if (u.focusChanged && !u.view.hasFocus) return this.cancel();
         if (!u.docChanged && !u.selectionSet) return;
         const typed = u.docChanged ? typedChar(u) : null;
         if (typed === "(" || typed === ",") this.schedule(0);
@@ -81,7 +83,16 @@ function plugin(fetch: Fetch) {
       /** Ask the kernel (`close`: just hide the tooltip). */
       schedule(delay: number, close = false) {
         window.clearTimeout(this.timer);
+        // a reply still in flight is stale now (e.g. one asked at `(` arriving after `)`)
+        this.abort?.abort();
         this.timer = window.setTimeout(() => void (close ? this.show(null) : this.request()), delay);
+      }
+
+      /** Drop any pending request and hide the tooltip. */
+      cancel() {
+        window.clearTimeout(this.timer);
+        this.abort?.abort();
+        this.show(null);
       }
 
       async request() {
@@ -90,7 +101,9 @@ function plugin(fetch: Fetch) {
         const state = this.view.state;
         const pos = state.selection.main.head;
         const help = await fetch(state.doc.toString(), pos, abort.signal).catch(() => null);
-        if (abort.signal.aborted || this.view.state.doc !== state.doc) return;
+        // a slow kernel answers late: ignore it if the code, the cursor or the focus moved meanwhile
+        const now = this.view.state;
+        if (abort.signal.aborted || now.doc !== state.doc || now.selection.main.head !== pos || !this.view.hasFocus) return;
         this.show(help ? { pos, help } : null);
       }
 

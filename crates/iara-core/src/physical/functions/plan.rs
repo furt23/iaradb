@@ -32,6 +32,14 @@ pub fn compile(func: ScalarFunc, args: &[Expr], schema: &PlanSchema) -> Result<P
     if super::json::names::is_json_func(func) {
         return super::json::plan::compile(func, args, schema);
     }
+    // a pattern without regex syntax is a substring search
+    if func == RegexpLike && n == 2 {
+        if let Expr::Literal(p) = &args[1] {
+            if p.as_str().is_some_and(|s| !s.is_empty() && !s.contains(|c: char| r"\.^$|?*+()[]{}".contains(c))) {
+                return create_physical_expr(&Expr::Function { func: Contains, args: args.to_vec() }, schema);
+            }
+        }
+    }
     match func {
         Mod => {
             nargs(2, 2)?;
@@ -230,7 +238,10 @@ fn flags(a: &[PhysExpr], at: usize) -> &str {
 /// Subject to utf8; pattern and optional flags must be constants. The pattern
 /// is compiled here, so errors surface at plan time and the cache is warm.
 fn prepare_regex(a: &mut [PhysExpr], func: ScalarFunc, pat: usize, flags_at: usize) -> Result<()> {
-    a[0] = to_utf8(a[0].clone())?;
+    // the kernels read Utf8View subjects as they are
+    if a[0].data_type() != DataType::Utf8View {
+        a[0] = to_utf8(a[0].clone())?;
+    }
     a[pat] = to_utf8(a[pat].clone())?;
     if flags_at < a.len() {
         a[flags_at] = to_utf8(a[flags_at].clone())?;

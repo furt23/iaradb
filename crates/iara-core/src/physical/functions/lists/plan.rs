@@ -99,8 +99,11 @@ pub fn compile(func: ScalarFunc, args: &[Expr], schema: &PlanSchema) -> Result<P
         }
         StringSplit => {
             nargs(2, 2)?;
-            for x in a.iter_mut() {
-                *x = to_utf8(x.clone())?;
+            // the subject is read as it is (no copy of view strings)
+            for (i, x) in a.iter_mut().enumerate() {
+                if i > 0 || x.data_type() != DataType::Utf8View {
+                    *x = to_utf8(x.clone())?;
+                }
             }
         }
         RegexpSplit => {

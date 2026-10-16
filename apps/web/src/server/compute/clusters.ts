@@ -1,9 +1,11 @@
 import type { CloudApi } from "./cloud/api";
+import { ClusterError } from "./clusterError";
+import { checkedEnv, checkedInitScript, checkedLibraries, checkedMaxHours, checkedTags } from "./clusterSettings";
 import type { ClusterEvent, ClusterEventKind, ClusterEventLog } from "./events";
-import { DEFAULT_AUTO_TERMINATE_MINUTES, DEFAULT_INSTANCE_TYPE, DEFAULT_VOLUME_GB, instanceType, MIN_AUTO_TERMINATE_MINUTES } from "./instanceTypes";
+import { DEFAULT_AUTO_TERMINATE_MINUTES, DEFAULT_INSTANCE_TYPE, DEFAULT_MAX_HOURS, DEFAULT_VOLUME_GB, instanceType, MIN_AUTO_TERMINATE_MINUTES } from "./instanceTypes";
 import type { Identity, StudioState } from "./store";
-import { LOCAL_CLUSTER, type ClusterRecord, type ClusterView } from "./types";
-import { READY_MARKER, userData } from "./userData";
+import { LOCAL_CLUSTER, MACHINE_FIELDS, type ClusterRecord, type ClusterRuntime, type ClusterView, type LibraryStatus } from "./types";
+import { BOOT_LOG, FAILED_MARKER, INIT_LOG, READY_MARKER, userData, VENV } from "./userData";
 
 /**
  * On-demand compute clusters: a configuration the user creates once, and a
@@ -61,6 +63,22 @@ export interface NewCluster {
   job?: string;
   /** email of the member creating it */
   owner?: string;
+  libraries?: string[];
+  env?: Record<string, string>;
+  initScript?: string;
+  spot?: boolean;
+  maxHours?: number;
+  tags?: Record<string, string>;
+}
+
+/** What `ClusterService.update` changes (the machine fields only while the cluster is terminated). */
+export type ClusterPatch = Omit<NewCluster, "job" | "owner">;
+
+/** The lines of a machine log (see `ClusterService.logs`). */
+export interface MachineLog {
+  /** oldest first */
+  lines: string[];
+  unavailable?: string;
 }
 
 /** The reason a user's Terminate gives (the phase the UI shows while it goes on). */
@@ -68,21 +86,14 @@ const USER_STOP = "stopped by the user";
 const SSH_USER = "ec2-user";
 /** a machine powers itself off this long after the Studio would have terminated it */
 const WATCHDOG_GRACE_MINUTES = 5;
-const MAX_MINUTES = 12 * 60;
+const INSTALL_TIMEOUT_MS = 15 * 60_000;
+const LOG_TIMEOUT_MS = 15_000;
 const NAME_MAX = 40;
-
-export class ClusterError extends Error {
-  constructor(
-    readonly type: string,
-    message: string,
-  ) {
-    super(message);
-    this.name = type;
-  }
-}
 
 export class ClusterService {
   private readonly jobs = new Map<string, Promise<void>>();
+  /** library installs on running machines (their failure never puts the cluster in error) */
+  private readonly installs = new Map<string, Promise<void>>();
   private terminateHook: (id: string) => void = () => {};
   private activitySource: (id: string) => Activity = () => ({ lastUsed: 0, busy: false });
 
@@ -204,7 +215,7 @@ export class ClusterService {
   create(input: NewCluster): ClusterRecord {
     const rec = this.add(input);
     const job = input.job ? `, job run ${input.job}` : "";
-    this.log(rec.id, "created", `${rec.instanceType}, ${rec.volumeGb} GB, ${rec.autoTerminateMinutes} min idle limit${job}`);
+    this.log(rec.id, "created", `${rec.instanceType}, ${rec.volumeGb} GB, ${rec.autoTerminateMinutes} min idle limit${rec.spot ? ", spot" : ""}, ${rec.maxHours} h limit${job}`);
     return rec;
   }
 
@@ -218,6 +229,12 @@ export class ClusterService {
       instanceType: src.instanceType,
       autoTerminateMinutes: src.autoTerminateMinutes,
       volumeGb: src.volumeGb,
+      libraries: src.libraries,
+      env: src.env,
+      initScript: src.initScript,
+      spot: src.spot,
+      maxHours: src.maxHours,
+      tags: src.tags,
       owner,
     });
     this.log(copy.id, "cloned", `copy of ${src.name}`);
@@ -236,6 +253,12 @@ export class ClusterService {
       instanceType: checkedType(input.instanceType ?? DEFAULT_INSTANCE_TYPE),
       autoTerminateMinutes: checkedMinutes(input.autoTerminateMinutes ?? DEFAULT_AUTO_TERMINATE_MINUTES),
       volumeGb: checkedVolume(input.volumeGb ?? DEFAULT_VOLUME_GB),
+      libraries: checkedLibraries(input.libraries ?? []),
+      env: checkedEnv(input.env ?? {}),
+      initScript: checkedInitScript(input.initScript ?? ""),
+      spot: input.spot ?? false,
+      maxHours: checkedMaxHours(input.maxHours ?? DEFAULT_MAX_HOURS),
+      tags: checkedTags(input.tags ?? {}),
       createdAt: this.now(),
       runtime: { state: "terminated" },
       ...(input.job ? { job: input.job } : {}),
@@ -245,22 +268,88 @@ export class ClusterService {
     return record;
   }
 
-  update(id: string, patch: { name?: string; instanceType?: string; autoTerminateMinutes?: number; volumeGb?: number }): ClusterRecord {
+  update(id: string, patch: Partial<ClusterPatch>): ClusterRecord {
     const before = this.d.store.cluster(id);
-    const snapshot = before ? { ...before } : undefined;
+    const snapshot = before ? structuredClone(before) : undefined;
     const rec = this.d.store.updateCluster(id, (c) => {
-      const machineChange = (patch.instanceType && patch.instanceType !== c.instanceType) || (patch.volumeGb && patch.volumeGb !== c.volumeGb);
+      const next = {
+        instanceType: patch.instanceType ? checkedType(patch.instanceType) : c.instanceType,
+        volumeGb: patch.volumeGb ? checkedVolume(patch.volumeGb) : c.volumeGb,
+        spot: patch.spot ?? c.spot,
+        initScript: patch.initScript !== undefined ? checkedInitScript(patch.initScript) : c.initScript,
+        tags: patch.tags !== undefined ? checkedTags(patch.tags) : c.tags,
+      };
+      const machineChange = MACHINE_FIELDS.some((f) => JSON.stringify(next[f]) !== JSON.stringify(c[f]));
       if (machineChange && c.runtime.state !== "terminated" && c.runtime.state !== "error") {
-        throw new ClusterError("ClusterRunning", "terminate the cluster before changing its machine");
+        throw new ClusterError("ClusterRunning", "terminate the cluster before changing its machine, spot, init script or tags");
       }
       if (patch.name !== undefined) c.name = patch.name.trim() || c.name;
-      if (patch.instanceType) c.instanceType = checkedType(patch.instanceType);
-      if (patch.volumeGb) c.volumeGb = checkedVolume(patch.volumeGb);
+      Object.assign(c, next);
+      if (patch.libraries !== undefined) c.libraries = checkedLibraries(patch.libraries);
+      if (patch.env !== undefined) c.env = checkedEnv(patch.env);
+      if (patch.maxHours !== undefined) c.maxHours = checkedMaxHours(patch.maxHours);
       if (patch.autoTerminateMinutes !== undefined) c.autoTerminateMinutes = checkedMinutes(patch.autoTerminateMinutes);
+      if (c.runtime.libraries) {
+        for (const spec of Object.keys(c.runtime.libraries)) if (!c.libraries.includes(spec)) delete c.runtime.libraries[spec];
+      }
     });
+    if (snapshot) this.afterEdit(snapshot, rec);
     const changed = snapshot ? changes(snapshot, rec) : [];
     if (changed.length) this.log(id, "edited", changed.join(", "));
     return rec;
+  }
+
+  /** Edits that reach a running machine: new libraries are installed, a new time limit is set. */
+  private afterEdit(before: ClusterRecord, after: ClusterRecord): void {
+    if (after.runtime.state !== "running") return;
+    const added = after.libraries.filter((l) => !before.libraries.includes(l));
+    if (added.length) this.installLibraries(after.id, added);
+    if (after.maxHours !== before.maxHours) this.setShutdown(after);
+  }
+
+  /** Best effort: the machine's own hard limit follows the new time limit. */
+  private setShutdown(c: ClusterRecord): void {
+    const left = (c.runtime.startedAt ?? this.now()) + c.maxHours * 3_600_000 - this.now();
+    const minutes = Math.max(1, Math.ceil(left / 60_000));
+    void Promise.resolve()
+      .then(() => this.d.exec(this.endpoint(c.id), `sudo shutdown -c; sudo shutdown -h +${minutes} "iara: time limit"`, LOG_TIMEOUT_MS))
+      .catch((e: Error) => console.error(`[clusters] time limit of ${c.id}: ${e.message}`));
+  }
+
+  /** Install libraries on the running machine in the background (one install at a time per cluster). */
+  private installLibraries(id: string, specs: string[]): void {
+    this.setLibraries(id, specs, { state: "installing" });
+    this.log(id, "libraries", `installing ${specs.join(", ")}`);
+    const run = async (): Promise<void> => {
+      const command = `~/.local/bin/uv pip install -q --python ${VENV}/bin/python ${specs.map((s) => `'${s}'`).join(" ")} 2>&1`;
+      let error: string | null = null;
+      try {
+        const r = await this.d.exec(this.endpoint(id), command, INSTALL_TIMEOUT_MS);
+        if (r.code !== 0) error = tail(r.stdout, 10) || `the install exited with code ${r.code}`;
+      } catch (e) {
+        error = (e as Error).message;
+      }
+      this.setLibraries(id, specs, error === null ? { state: "installed" } : { state: "failed", error });
+      this.log(id, "libraries", error === null ? `installed ${specs.join(", ")}` : `install failed: ${error}`);
+    };
+    const queued = (this.installs.get(id) ?? Promise.resolve()).then(run).catch((e: Error) => console.error(`[clusters] install on ${id}: ${e.message}`));
+    const tracked: Promise<void> = queued.finally(() => {
+      if (this.installs.get(id) === tracked) this.installs.delete(id);
+    });
+    this.installs.set(id, tracked);
+  }
+
+  /** Set the install state of `specs` that are still configured (the cluster may be gone). */
+  private setLibraries(id: string, specs: string[], status: LibraryStatus): void {
+    try {
+      this.d.store.updateCluster(id, (c) => {
+        const libraries = { ...c.runtime.libraries };
+        for (const spec of specs) if (c.libraries.includes(spec)) libraries[spec] = status;
+        c.runtime.libraries = libraries;
+      });
+    } catch {
+      // the cluster was deleted meanwhile
+    }
   }
 
   remove(id: string): void {
@@ -330,6 +419,7 @@ export class ClusterService {
   /** Wait for the cluster's current start or stop (tests, shutdown). */
   async settled(id: string): Promise<void> {
     await this.jobs.get(id);
+    await this.installs.get(id);
   }
 
   private async launch(id: string): Promise<void> {
@@ -347,10 +437,13 @@ export class ClusterService {
       authorizedKey: this.d.store.identity().publicKey,
       wheelUrl: wheel,
       idleMinutes: c.autoTerminateMinutes + WATCHDOG_GRACE_MINUTES,
-      maxMinutes: MAX_MINUTES,
+      maxMinutes: c.maxHours * 60,
       region: cloud.region,
+      libraries: c.libraries,
+      initScript: c.initScript,
+      env: c.env,
     });
-    const instanceId = await cloud.launch({
+    const { instanceId, spot } = await cloud.launch({
       clusterId: id,
       clusterName: c.name,
       instanceType: c.instanceType,
@@ -358,8 +451,11 @@ export class ClusterService {
       userData: script,
       securityGroupId: group,
       instanceProfile: profile,
+      spot: c.spot,
+      tags: c.tags,
     });
-    this.d.store.updateCluster(id, (x) => void (x.runtime = { ...x.runtime, instanceId, startedAt: this.now(), phase: "booting" }));
+    this.d.store.updateCluster(id, (x) => void (x.runtime = { ...x.runtime, instanceId, spot, startedAt: this.now(), phase: "booting" }));
+    if (c.spot && !spot) this.log(id, "spot", "no spot capacity: started an on-demand machine");
     await this.waitReady(id, instanceId);
   }
 
@@ -377,17 +473,68 @@ export class ClusterService {
       }
       await this.sleep(5000);
     }
-    this.d.store.updateCluster(id, (x) => void (x.runtime = { ...x.runtime, state: "running", phase: undefined, lastActivity: this.now() }));
+    this.d.store.updateCluster(id, (x) => {
+      // the boot script installed the configured libraries
+      const libraries = Object.fromEntries(x.libraries.map((l) => [l, { state: "installed" } as LibraryStatus]));
+      x.runtime = { ...x.runtime, state: "running", phase: undefined, lastActivity: this.now(), libraries };
+    });
     this.log(id, "running", `machine ${instanceId} running at ${this.d.store.cluster(id)?.runtime.publicIp ?? "no address"}`);
   }
 
+  /** Whether the boot script finished; throws `BootFailed` when it wrote a failure (with the log lines saved). */
   private async engineReady(id: string): Promise<boolean> {
+    let out: string;
     try {
-      const r = await this.d.exec(this.endpoint(id, true), `test -f ${READY_MARKER} && echo ready`, 15_000);
-      return r.code === 0 && r.stdout.includes("ready");
+      const r = await this.d.exec(
+        this.endpoint(id, true),
+        `if test -f ${FAILED_MARKER}; then echo "failed:$(cat ${FAILED_MARKER})"; elif test -f ${READY_MARKER}; then echo ready; fi`,
+        15_000,
+      );
+      if (r.code !== 0) return false;
+      out = r.stdout;
     } catch {
       return false; // sshd not up yet
     }
+    const failed = /^failed:(.*)$/m.exec(out);
+    if (failed) {
+      const message = failed[1].trim() || "the boot script failed";
+      await this.saveBootLog(id, message);
+      throw new ClusterError("BootFailed", message);
+    }
+    return out.includes("ready");
+  }
+
+  /** Keep the last lines of the log that explains a failed boot (the machine goes away). */
+  private async saveBootLog(id: string, message: string): Promise<void> {
+    const file = message.includes("init script") ? INIT_LOG : BOOT_LOG;
+    try {
+      const r = await this.d.exec(this.endpoint(id, true), `sudo tail -n 80 ${file}`, LOG_TIMEOUT_MS);
+      const lines = splitLines(r.stdout);
+      this.d.store.updateCluster(id, (x) => void (x.runtime.lastBootLog = lines));
+    } catch {
+      // no log is better than none of the error
+    }
+  }
+
+  /** The last lines of a machine log: `boot` (engine and libraries) or `init` (the init script), over SSH. */
+  async logs(id: string, source: "boot" | "init"): Promise<MachineLog> {
+    if (id === LOCAL_CLUSTER) return { lines: [], unavailable: "the local cluster has no machine logs" };
+    const c = this.d.store.cluster(id);
+    if (!c) throw new ClusterError("UnknownCluster", `unknown cluster ${id}`);
+    if (source === "init" && c.initScript === "") return { lines: [], unavailable: "this cluster has no init script" };
+    const reachable = (c.runtime.state === "running" || c.runtime.state === "starting") && c.runtime.publicIp;
+    const gone = (reason: string): MachineLog =>
+      c.runtime.lastBootLog ? { lines: c.runtime.lastBootLog, unavailable: "the machine is gone: lines from its last failed start" } : { lines: [], unavailable: reason };
+    if (!reachable) return gone(c.runtime.state === "starting" ? "the machine is not reachable yet" : "the cluster is terminated");
+    const command = source === "boot" ? `sudo tail -n 500 ${BOOT_LOG}` : `sudo tail -n 500 ${INIT_LOG} 2>/dev/null`;
+    try {
+      const r = await this.d.exec(this.endpoint(id, true), command, LOG_TIMEOUT_MS);
+      if (r.code === 0) return { lines: splitLines(r.stdout) };
+      if (source === "init") return { lines: [], unavailable: "the init script has not run yet" };
+    } catch {
+      // handled below
+    }
+    return gone("the machine is not reachable yet");
   }
 
   /** How to reach a cluster's machine (the host key is learned on first contact). */
@@ -421,7 +568,7 @@ export class ClusterService {
     this.log(id, kind, kind === "auto-terminate" ? reason : reason === USER_STOP ? "terminate requested" : `terminate requested: ${reason}`);
     this.d.store.updateCluster(id, (x) => void (x.runtime = { ...x.runtime, state: "terminating", phase: reason }));
     if (!instance) {
-      this.d.store.updateCluster(id, (x) => void (x.runtime = { state: "terminated", phase: reason }));
+      this.d.store.updateCluster(id, (x) => void (x.runtime = { state: "terminated", phase: reason, ...keptLog(x.runtime) }));
       this.log(id, "terminated", "no machine was running");
       this.dropJobClusters();
       return;
@@ -446,10 +593,11 @@ export class ClusterService {
     for (const c of live) {
       const s = status[c.runtime.instanceId!]?.state;
       if (s !== "terminated" && s !== "shutting-down" && s !== "stopped") continue;
-      const why = c.runtime.state === "terminating" ? c.runtime.phase : "the machine shut itself down";
+      const reclaimed = c.runtime.spot && status[c.runtime.instanceId!]?.reason === "Server.SpotInstanceTermination";
+      const why = c.runtime.state === "terminating" ? c.runtime.phase : reclaimed ? "AWS reclaimed the spot machine" : "the machine shut itself down";
       if (c.runtime.state === "running") this.terminateHook(c.id);
       if (s === "terminated" || c.runtime.state === "running") {
-        this.d.store.updateCluster(c.id, (x) => void (x.runtime = { state: s === "terminated" ? "terminated" : "terminating", phase: why }));
+        this.d.store.updateCluster(c.id, (x) => void (x.runtime = { state: s === "terminated" ? "terminated" : "terminating", phase: why, ...keptLog(x.runtime) }));
       }
       if (s === "terminated") this.log(c.id, "terminated", `machine stopped: ${why}`);
     }
@@ -474,6 +622,11 @@ export class ClusterService {
     const done: string[] = [];
     for (const c of this.d.store.read().clusters) {
       if (c.runtime.state !== "running") continue;
+      if (c.runtime.startedAt !== undefined && this.now() - c.runtime.startedAt >= c.maxHours * 3_600_000) {
+        await this.terminate(c.id, `time limit of ${c.maxHours} h`, "auto-terminate");
+        done.push(c.id);
+        continue;
+      }
       const act = this.activitySource(c.id);
       const last = act.busy ? this.now() : Math.max(c.runtime.lastActivity ?? 0, act.lastUsed);
       if (last !== c.runtime.lastActivity) this.d.store.updateCluster(c.id, (x) => void (x.runtime.lastActivity = last));
@@ -510,6 +663,14 @@ export class ClusterService {
         startedAt: c.runtime.startedAt,
         lastActivity: c.runtime.lastActivity,
         publicIp: c.runtime.publicIp,
+        libraries: c.libraries,
+        libraryStatus: c.runtime.libraries ?? {},
+        env: c.env,
+        initScript: c.initScript,
+        spot: c.spot,
+        ...(c.runtime.state === "running" || c.runtime.state === "starting" ? { runningSpot: c.runtime.spot ?? false } : {}),
+        maxHours: c.maxHours,
+        tags: c.tags,
         notebooks: byCluster.get(c.id) ?? [],
         isDefault: def === c.id,
         canManage: false,
@@ -528,7 +689,37 @@ function changes(before: ClusterRecord, after: ClusterRecord): string[] {
   if (before.instanceType !== after.instanceType) out.push(`machine ${before.instanceType} → ${after.instanceType}`);
   if (before.volumeGb !== after.volumeGb) out.push(`disk ${before.volumeGb} → ${after.volumeGb} GB`);
   if (before.autoTerminateMinutes !== after.autoTerminateMinutes) out.push(`idle timeout ${before.autoTerminateMinutes} → ${after.autoTerminateMinutes} min`);
+  const libs = diffList(before.libraries, after.libraries);
+  if (libs) out.push(`libraries ${libs}`);
+  if (JSON.stringify(before.env) !== JSON.stringify(after.env)) out.push("environment changed");
+  if (before.initScript !== after.initScript) out.push("init script changed");
+  if (before.spot !== after.spot) out.push(`spot ${after.spot ? "on" : "off"}`);
+  if (before.maxHours !== after.maxHours) out.push(`time limit ${before.maxHours} → ${after.maxHours} h`);
+  if (JSON.stringify(before.tags) !== JSON.stringify(after.tags)) out.push("tags changed");
   return out;
+}
+
+/** "+a +b −c" for the items that differ (empty when none). */
+function diffList(before: string[], after: string[]): string {
+  const added = after.filter((x) => !before.includes(x)).map((x) => `+${x}`);
+  const removed = before.filter((x) => !after.includes(x)).map((x) => `−${x}`);
+  return [...added, ...removed].join(" ");
+}
+
+/** The failed-start log survives the machine (until the next start). */
+function keptLog(runtime: ClusterRuntime): Pick<ClusterRuntime, "lastBootLog"> {
+  return runtime.lastBootLog ? { lastBootLog: runtime.lastBootLog } : {};
+}
+
+function splitLines(text: string): string[] {
+  const lines = text.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  return lines;
+}
+
+/** The last `n` lines of `text`, joined. */
+function tail(text: string, n: number): string {
+  return splitLines(text.trim()).slice(-n).join("\n");
 }
 
 /** "<name> copy", then "<name> copy 2", ...: the first free name, shortened to fit. */

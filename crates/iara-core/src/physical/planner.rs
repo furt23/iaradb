@@ -65,7 +65,8 @@ pub enum PhysicalPlan {
     Union { inputs: Vec<PhysicalPlan>, schema: SchemaRef },
     Values { batches: Vec<RecordBatch>, schema: SchemaRef },
     Window { input: Box<PhysicalPlan>, specs: Vec<WindowSpec>, schema: SchemaRef },
-    Unnest { input: Box<PhysicalPlan>, exprs: Vec<PhysExpr>, keep_empty: bool, schema: SchemaRef },
+    /// `used`: the input columns read above (the others come out NULL)
+    Unnest { input: Box<PhysicalPlan>, exprs: Vec<PhysExpr>, keep_empty: bool, used: Option<Vec<bool>>, schema: SchemaRef },
     RecursiveQuery {
         static_term: Box<PhysicalPlan>,
         recursive_term: Box<PhysicalPlan>,
@@ -624,6 +625,20 @@ pub fn create_physical_plan(plan: &LogicalPlan) -> Result<PhysicalPlan> {
                 .map(|(e, f)| e.as_column_index().filter(|&i| in_schema.field(i).name() == f.name()))
                 .collect();
             match (input, all_cols) {
+                // an unnest repeats only the input columns read here
+                (PhysicalPlan::Unnest { input: uin, exprs: uexprs, keep_empty, used: None, schema: uschema }, _) => {
+                    let n_in = uin.schema().fields().len();
+                    let mut used = vec![false; n_in];
+                    for c in p.exprs.iter().flat_map(|e| e.column_refs()) {
+                        match p.input.schema().maybe_index_of(&c) {
+                            Ok(Some(i)) if i < n_in => used[i] = true,
+                            Ok(Some(_)) => {}
+                            _ => used.iter_mut().for_each(|u| *u = true),
+                        }
+                    }
+                    let unnest = PhysicalPlan::Unnest { input: uin, exprs: uexprs, keep_empty, used: Some(used), schema: uschema };
+                    PhysicalPlan::Project { input: Box::new(unnest), exprs, schema }
+                }
                 (PhysicalPlan::Filter { input: fin, predicate, projection: None, .. }, Some(cols)) => {
                     let fschema = Arc::new(in_schema.project(&cols)?);
                     PhysicalPlan::Filter { input: fin, predicate, projection: Some(cols), schema: fschema }
@@ -730,7 +745,7 @@ pub fn create_physical_plan(plan: &LogicalPlan) -> Result<PhysicalPlan> {
             let input = create_physical_plan(&u.input)?;
             let exprs = u.exprs.iter().map(|e| compile(e, u.input.schema())).collect::<Result<Vec<_>>>()?;
             let schema = output_schema(&u.schema, &[]);
-            PhysicalPlan::Unnest { input: Box::new(input), exprs, keep_empty: u.keep_empty, schema }
+            PhysicalPlan::Unnest { input: Box::new(input), exprs, keep_empty: u.keep_empty, used: None, schema }
         }
         LogicalPlan::RecursiveQuery(r) => PhysicalPlan::RecursiveQuery {
             static_term: Box::new(create_physical_plan(&r.static_term)?),

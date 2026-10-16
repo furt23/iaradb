@@ -63,17 +63,18 @@ fn a_join_and_aggregate_report_their_real_row_counts() {
     }
     let named = |name: &str| all.iter().copied().filter(|n| n.name == name).collect::<Vec<_>>();
 
-    // 100 groups come out
+    // 100 groups come out; the facts are pre-aggregated by key below the join
     let agg = named("HashAggregate");
-    assert_eq!(agg.len(), 1);
+    assert_eq!(agg.len(), 2);
     assert_eq!(rows_of(agg[0]), DIMS as u64);
+    assert_eq!(rows_of(agg[1]), DIMS as u64);
     assert_eq!(a.rows, DIMS as u64);
-    // half of the facts pass `v < 500`, and every one finds its dimension
+    // half of the facts pass `v < 500`; one row per key reaches the join
     let expected = (0..FACTS).filter(|i| i % 1000 < 500).count() as u64;
     let filters = named("Filter");
     assert_eq!(filters.len(), 1, "{:?}", all.iter().map(|n| &n.detail).collect::<Vec<_>>());
     assert_eq!(rows_of(filters[0]), expected);
-    assert_eq!(rows_of(named("HashJoin")[0]), expected);
+    assert_eq!(rows_of(named("HashJoin")[0]), DIMS as u64);
     // the scans: all the facts (the filter is a node of its own) and all the dimensions
     let mut scans: Vec<u64> = all.iter().filter(|n| n.children.is_empty()).map(|n| rows_of(n)).collect();
     scans.sort_unstable();

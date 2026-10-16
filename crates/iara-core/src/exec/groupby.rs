@@ -9,9 +9,17 @@
 //! Wide keys like `(c_custkey, c_name, c_address, ...)` are usually
 //! functionally dependent on one integer column. Such keys start in a
 //! *dependent* mode: only the integer lead column is interned, the other
-//! columns keep one representative value per group and every row is checked
-//! against it. When a check fails the groups seen so far are re-keyed (with
-//! the same ids) under the next candidate lead, or under full interning.
+//! columns keep one representative record per group ([`dep`]) and every row
+//! is checked against it. When a check fails the groups seen so far are
+//! re-keyed (with the same ids) under the next candidate lead, or under full
+//! interning.
+//!
+//! Every hash lookup goes through [`table::IdTable`], probed a batch at a
+//! time with the slots of later rows prefetched: tables with millions of
+//! groups are bound by cache misses, and these overlap.
+
+mod dep;
+mod table;
 
 use std::sync::Arc;
 
@@ -20,10 +28,11 @@ use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::compute::{cast, take};
 use arrow::datatypes::*;
 use arrow::row::{RowConverter, SortField};
-use hashbrown::HashTable;
 
 use crate::error::Result;
-use crate::hash::{NativeKey, combine, hash_bytes, hash_u64};
+use crate::hash::{NativeKey, combine, hash_bytes, hash_u64, hash_u128};
+use dep::DepRecords;
+use table::{IdTable, PREFETCH_AHEAD};
 
 pub trait ColumnInterner: Send + Sync {
     /// Map every row of `array` to a dense id (appending unseen values).
@@ -43,8 +52,9 @@ struct PrimitiveInterner<T: ArrowPrimitiveType>
 where
     T::Native: NativeKey,
 {
-    map: HashTable<(<T::Native as NativeKey>::Key, u32)>,
+    map: IdTable<<T::Native as NativeKey>::Key>,
     values: Vec<T::Native>,
+    hashes: Vec<u64>,
     null_id: Option<u32>,
     dt: DataType,
 }
@@ -54,20 +64,28 @@ where
     T::Native: NativeKey,
 {
     fn new(dt: DataType) -> Self {
-        Self { map: HashTable::with_capacity(1024), values: vec![], null_id: None, dt }
+        Self { map: IdTable::new(), values: vec![], hashes: vec![], null_id: None, dt }
     }
 
     #[inline(always)]
-    fn lookup(&mut self, v: T::Native) -> u32 {
+    fn lookup(&mut self, h: u64, v: T::Native) -> u32 {
         let k = v.to_key();
-        let h = <T::Native as NativeKey>::hash_key(k);
-        if let Some(e) = self.map.find(h, |e| e.0 == k) {
-            return e.1;
+        match self.map.find(h, |e, _| *e == k) {
+            Ok(id) => id,
+            Err(slot) => {
+                let id = self.values.len() as u32;
+                self.values.push(v);
+                self.map.insert(slot, h, k, id, |e| <T::Native as NativeKey>::hash_key(*e));
+                id
+            }
         }
-        let id = self.values.len() as u32;
-        self.values.push(v);
-        self.map.insert_unique(h, (k, id), |e| <T::Native as NativeKey>::hash_key(e.0));
-        id
+    }
+
+    fn null(&mut self) -> u32 {
+        *self.null_id.get_or_insert_with(|| {
+            self.values.push(T::Native::default());
+            (self.values.len() - 1) as u32
+        })
     }
 }
 
@@ -77,34 +95,45 @@ where
 {
     fn intern(&mut self, array: &ArrayRef, out: &mut Vec<u32>) -> Result<()> {
         let arr = array.as_primitive::<T>();
+        let vals = arr.values();
         out.clear();
         out.reserve(arr.len());
-        match arr.nulls().filter(|n| n.null_count() > 0) {
+        let nulls = arr.nulls().filter(|n| n.null_count() > 0);
+        if !self.map.large() {
+            for (i, &v) in vals.iter().enumerate() {
+                let id = if nulls.is_none_or(|n| n.is_valid(i)) {
+                    self.lookup(<T::Native as NativeKey>::hash_key(v.to_key()), v)
+                } else {
+                    self.null()
+                };
+                out.push(id);
+            }
+            return Ok(());
+        }
+        let mut hashes = std::mem::take(&mut self.hashes);
+        hashes.clear();
+        hashes.extend(vals.iter().map(|v| <T::Native as NativeKey>::hash_key(v.to_key())));
+        match nulls {
             None => {
-                for &v in arr.values().iter() {
-                    let id = self.lookup(v);
+                for (i, (&v, &h)) in vals.iter().zip(&hashes).enumerate() {
+                    if let Some(&a) = hashes.get(i + PREFETCH_AHEAD) {
+                        self.map.prefetch(a);
+                    }
+                    let id = self.lookup(h, v);
                     out.push(id);
                 }
             }
             Some(nulls) => {
-                for (i, &v) in arr.values().iter().enumerate() {
-                    let id = if nulls.is_valid(i) {
-                        self.lookup(v)
-                    } else {
-                        match self.null_id {
-                            Some(id) => id,
-                            None => {
-                                let id = self.values.len() as u32;
-                                self.values.push(T::Native::default());
-                                self.null_id = Some(id);
-                                id
-                            }
-                        }
-                    };
+                for (i, (&v, &h)) in vals.iter().zip(&hashes).enumerate() {
+                    if let Some(&a) = hashes.get(i + PREFETCH_AHEAD) {
+                        self.map.prefetch(a);
+                    }
+                    let id = if nulls.is_valid(i) { self.lookup(h, v) } else { self.null() };
                     out.push(id);
                 }
             }
         }
+        self.hashes = hashes;
         Ok(())
     }
 
@@ -113,7 +142,7 @@ where
     }
 
     fn reserve(&mut self, n: usize) {
-        self.map.reserve(n, |e| <T::Native as NativeKey>::hash_key(e.0));
+        self.map.reserve(n, |e| <T::Native as NativeKey>::hash_key(*e));
         self.values.reserve(n);
     }
 
@@ -134,38 +163,63 @@ where
 // ---------------------------------------------------------------------------
 
 struct BytesInterner {
-    map: HashTable<(u64, u32)>,
+    /// keyed by the value's hash; equal hashes compare the bytes
+    map: IdTable<u64>,
     /// Utf8View strings of <= 12 bytes are fully described by their 128-bit
     /// view (length + inline bytes), which is used directly as the key
-    short: HashTable<(u128, u32)>,
+    short: IdTable<u128>,
     offsets: Vec<usize>,
     data: Vec<u8>,
+    hashes: Vec<u64>,
     null_id: Option<u32>,
     dt: DataType,
 }
 
 impl BytesInterner {
     fn new(dt: DataType) -> Self {
-        Self { map: HashTable::with_capacity(1024), short: HashTable::new(), offsets: vec![0], data: vec![], null_id: None, dt }
+        Self {
+            map: IdTable::new(),
+            short: IdTable::new(),
+            offsets: vec![0],
+            data: vec![],
+            hashes: vec![],
+            null_id: None,
+            dt,
+        }
     }
 
     #[inline(always)]
-    fn lookup(&mut self, b: &[u8]) -> u32 {
-        let h = hash_bytes(b);
+    fn lookup(&mut self, h: u64, b: &[u8]) -> u32 {
         let (data, offsets) = (&self.data, &self.offsets);
-        if let Some(e) = self.map.find(h, |e| {
-            e.0 == h && {
-                let i = e.1 as usize;
-                &data[offsets[i]..offsets[i + 1]] == b
+        match self.map.find(h, |&e, i| e == h && &data[offsets[i as usize]..offsets[i as usize + 1]] == b) {
+            Ok(id) => id,
+            Err(slot) => {
+                let id = (self.offsets.len() - 1) as u32;
+                self.data.extend_from_slice(b);
+                self.offsets.push(self.data.len());
+                self.map.insert(slot, h, h, id, |&e| e);
+                id
             }
-        }) {
-            return e.1;
         }
-        let id = (self.offsets.len() - 1) as u32;
-        self.data.extend_from_slice(b);
-        self.offsets.push(self.data.len());
-        self.map.insert_unique(h, (h, id), |e| e.0);
-        id
+    }
+
+    /// The id of a string of up to 12 bytes, keyed by its view.
+    #[inline(always)]
+    fn short_id(&mut self, view: u128, a: &StringViewArray, i: usize) -> u32 {
+        self.short_id_hashed(hash_u128(view), view, a, i)
+    }
+
+    #[inline(always)]
+    fn short_id_hashed(&mut self, h: u64, view: u128, a: &StringViewArray, i: usize) -> u32 {
+        match self.short.find(h, |&e, _| e == view) {
+            Ok(id) => id,
+            Err(slot) => {
+                let b = a.value(i).as_bytes();
+                let id = self.lookup(hash_bytes(b), b);
+                self.short.insert(slot, h, view, id, |&e| hash_u128(e));
+                id
+            }
+        }
     }
 
     fn null(&mut self) -> u32 {
@@ -180,14 +234,74 @@ impl BytesInterner {
         }
     }
 
-    fn run<'a>(&mut self, it: impl Iterator<Item = Option<&'a [u8]>>, out: &mut Vec<u32>) {
-        for v in it {
-            let id = match v {
-                Some(b) => self.lookup(b),
+    /// Look every value up; in a large table hash them all first, then
+    /// probe with later rows' slots prefetched.
+    fn run<'a>(&mut self, values: impl Fn(usize) -> Option<&'a [u8]>, n: usize, out: &mut Vec<u32>) {
+        if !self.map.large() {
+            for i in 0..n {
+                let id = match values(i) {
+                    Some(b) => self.lookup(hash_bytes(b), b),
+                    None => self.null(),
+                };
+                out.push(id);
+            }
+            return;
+        }
+        let mut hashes = std::mem::take(&mut self.hashes);
+        hashes.clear();
+        hashes.extend((0..n).map(|i| values(i).map_or(0, hash_bytes)));
+        for (i, &h) in hashes.iter().enumerate() {
+            if let Some(&a) = hashes.get(i + PREFETCH_AHEAD) {
+                self.map.prefetch(a);
+            }
+            let id = match values(i) {
+                Some(b) => self.lookup(h, b),
                 None => self.null(),
             };
             out.push(id);
         }
+        self.hashes = hashes;
+    }
+
+    fn run_view(&mut self, a: &StringViewArray, out: &mut Vec<u32>) {
+        let views = a.views();
+        let nulls = a.nulls().filter(|n| n.null_count() > 0);
+        if !self.short.large() && !self.map.large() {
+            for (i, &view) in views.iter().enumerate() {
+                let id = if nulls.is_some_and(|n| n.is_null(i)) {
+                    self.null()
+                } else if view as u32 <= 12 {
+                    self.short_id(view, a, i)
+                } else {
+                    let b = a.value(i).as_bytes();
+                    self.lookup(hash_bytes(b), b)
+                };
+                out.push(id);
+            }
+            return;
+        }
+        let mut hashes = std::mem::take(&mut self.hashes);
+        hashes.clear();
+        hashes.extend(views.iter().enumerate().map(|(i, &view)| {
+            if view as u32 <= 12 { hash_u128(view) } else { hash_bytes(a.value(i).as_bytes()) }
+        }));
+        for (i, (&view, &h)) in views.iter().zip(&hashes).enumerate() {
+            if let Some(&a) = hashes.get(i + PREFETCH_AHEAD) {
+                if views[i + PREFETCH_AHEAD] as u32 <= 12 { self.short.prefetch(a) } else { self.map.prefetch(a) }
+            }
+            if nulls.is_some_and(|n| n.is_null(i)) {
+                let id = self.null();
+                out.push(id);
+                continue;
+            }
+            let id = if view as u32 <= 12 {
+                self.short_id_hashed(h, view, a, i)
+            } else {
+                self.lookup(h, a.value(i).as_bytes())
+            };
+            out.push(id);
+        }
+        self.hashes = hashes;
     }
 }
 
@@ -195,50 +309,23 @@ impl ColumnInterner for BytesInterner {
     fn intern(&mut self, array: &ArrayRef, out: &mut Vec<u32>) -> Result<()> {
         out.clear();
         out.reserve(array.len());
+        let n = array.len();
+        macro_rules! run {
+            ($a:expr, $f:expr) => {{
+                let a = $a;
+                match a.nulls().filter(|x| x.null_count() > 0).cloned() {
+                    None => self.run(|i| Some($f(a.value(i))), n, out),
+                    Some(nulls) => self.run(|i| nulls.is_valid(i).then(|| $f(a.value(i))), n, out),
+                }
+            }};
+        }
         match array.data_type() {
-            DataType::Utf8 => {
-                let a = array.as_string::<i32>();
-                if a.null_count() == 0 {
-                    for i in 0..a.len() {
-                        let id = self.lookup(a.value(i).as_bytes());
-                        out.push(id);
-                    }
-                } else {
-                    self.run(a.iter().map(|v| v.map(|s| s.as_bytes())), out)
-                }
-            }
-            DataType::LargeUtf8 => self.run(array.as_string::<i64>().iter().map(|v| v.map(|s| s.as_bytes())), out),
-            DataType::Utf8View => {
-                let a = array.as_string_view();
-                let views = a.views();
-                let nulls = a.nulls().filter(|n| n.null_count() > 0).cloned();
-                for (i, &view) in views.iter().enumerate() {
-                    if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
-                        let id = self.null();
-                        out.push(id);
-                        continue;
-                    }
-                    let len = view as u32;
-                    let id = if len <= 12 {
-                        let h = crate::hash::hash_u128(view);
-                        match self.short.find(h, |e| e.0 == view) {
-                            Some(e) => e.1,
-                            None => {
-                                let b = a.value(i).as_bytes();
-                                let id = self.lookup(b);
-                                self.short.insert_unique(h, (view, id), |e| crate::hash::hash_u128(e.0));
-                                id
-                            }
-                        }
-                    } else {
-                        self.lookup(a.value(i).as_bytes())
-                    };
-                    out.push(id);
-                }
-            }
-            DataType::Binary => self.run(array.as_binary::<i32>().iter(), out),
-            DataType::LargeBinary => self.run(array.as_binary::<i64>().iter(), out),
-            DataType::BinaryView => self.run(array.as_binary_view().iter(), out),
+            DataType::Utf8 => run!(array.as_string::<i32>(), str::as_bytes),
+            DataType::LargeUtf8 => run!(array.as_string::<i64>(), str::as_bytes),
+            DataType::Utf8View => self.run_view(array.as_string_view(), out),
+            DataType::Binary => run!(array.as_binary::<i32>(), std::convert::identity),
+            DataType::LargeBinary => run!(array.as_binary::<i64>(), std::convert::identity),
+            DataType::BinaryView => run!(array.as_binary_view(), std::convert::identity),
             dt => unreachable!("bytes interner for {dt}"),
         }
         Ok(())
@@ -249,7 +336,7 @@ impl ColumnInterner for BytesInterner {
     }
 
     fn reserve(&mut self, n: usize) {
-        self.map.reserve(n, |e| e.0);
+        self.map.reserve(n, |&e| e);
         self.offsets.reserve(n);
     }
 
@@ -376,7 +463,8 @@ impl ColumnInterner for RowInterner {
         out.reserve(array.len());
         let before = self.bytes.len();
         for i in 0..rows.num_rows() {
-            let id = self.bytes.lookup(rows.row(i).as_ref());
+            let b = rows.row(i);
+            let id = self.bytes.lookup(hash_bytes(b.as_ref()), b.as_ref());
             out.push(id);
         }
         if self.bytes.len() > before || self.rows.is_none() {
@@ -436,158 +524,12 @@ pub fn make_interner(dt: &DataType) -> Result<Box<dyn ColumnInterner>> {
     })
 }
 
-// ---------------------------------------------------------------------------
-// dependent key columns
-// ---------------------------------------------------------------------------
-
-/// One representative value per group of a key column that is (so far)
-/// functionally dependent on the lead key column.
-enum DepStore {
-    Fixed { w: usize, bytes: Vec<u8>, valid: Vec<bool>, dt: DataType },
-    Bool { vals: Vec<Option<bool>> },
-    Bytes { data: Vec<u8>, offsets: Vec<usize>, valid: Vec<bool>, dt: DataType },
-}
-
-impl DepStore {
-    fn supports(dt: &DataType) -> bool {
-        Self::new(dt).is_some()
-    }
-
-    fn new(dt: &DataType) -> Option<Self> {
-        Some(match dt {
-            DataType::Boolean => DepStore::Bool { vals: vec![] },
-            DataType::Utf8
-            | DataType::LargeUtf8
-            | DataType::Utf8View
-            | DataType::Binary
-            | DataType::LargeBinary
-            | DataType::BinaryView => DepStore::Bytes { data: vec![], offsets: vec![0], valid: vec![], dt: dt.clone() },
-            dt if dt.is_primitive() => {
-                DepStore::Fixed { w: dt.primitive_width()?, bytes: vec![], valid: vec![], dt: dt.clone() }
-            }
-            _ => return None,
-        })
-    }
-
-    /// Check every row against its group's representative (`gids` are dense
-    /// ids in first-occurrence order, so a row of a new group carries the
-    /// next id). Returns false on the first disagreement, and on an id past
-    /// the next one (the caller then falls back to keying on these columns).
-    fn check(&mut self, array: &ArrayRef, gids: &[u32]) -> bool {
-        let nulls = array.nulls().filter(|n| n.null_count() > 0);
-        let is_valid = |i: usize| nulls.is_none_or(|n| n.is_valid(i));
-        match self {
-            DepStore::Fixed { w, bytes, valid, .. } => {
-                let w = *w;
-                let data = array.to_data();
-                let src = &data.buffers()[0].as_slice()[data.offset() * w..];
-                for (i, &g) in gids.iter().enumerate() {
-                    let g = g as usize;
-                    let ok = is_valid(i);
-                    let v = &src[i * w..(i + 1) * w];
-                    if g > valid.len() {
-                        return false;
-                    }
-                    if g == valid.len() {
-                        valid.push(ok);
-                        bytes.extend_from_slice(v);
-                    } else if valid[g] != ok || (ok && bytes[g * w..(g + 1) * w] != *v) {
-                        return false;
-                    }
-                }
-                true
-            }
-            DepStore::Bool { vals } => {
-                let a = array.as_boolean();
-                for (i, &g) in gids.iter().enumerate() {
-                    let v = is_valid(i).then(|| a.value(i));
-                    let g = g as usize;
-                    if g > vals.len() {
-                        return false;
-                    }
-                    if g == vals.len() {
-                        vals.push(v);
-                    } else if vals[g] != v {
-                        return false;
-                    }
-                }
-                true
-            }
-            DepStore::Bytes { data, offsets, valid, .. } => {
-                let mut step = |g: u32, v: Option<&[u8]>| -> bool {
-                    let g = g as usize;
-                    if g > valid.len() {
-                        return false;
-                    }
-                    if g == valid.len() {
-                        valid.push(v.is_some());
-                        data.extend_from_slice(v.unwrap_or_default());
-                        offsets.push(data.len());
-                        true
-                    } else {
-                        match v {
-                            None => !valid[g],
-                            Some(b) => valid[g] && data[offsets[g]..offsets[g + 1]] == *b,
-                        }
-                    }
-                };
-                macro_rules! run {
-                    ($a:expr, $f:expr) => {{
-                        let a = $a;
-                        gids.iter().enumerate().all(|(i, &g)| step(g, is_valid(i).then(|| $f(a.value(i)))))
-                    }};
-                }
-                match array.data_type() {
-                    DataType::Utf8 => run!(array.as_string::<i32>(), str::as_bytes),
-                    DataType::LargeUtf8 => run!(array.as_string::<i64>(), str::as_bytes),
-                    DataType::Utf8View => run!(array.as_string_view(), str::as_bytes),
-                    DataType::Binary => run!(array.as_binary::<i32>(), std::convert::identity),
-                    DataType::LargeBinary => run!(array.as_binary::<i64>(), std::convert::identity),
-                    DataType::BinaryView => run!(array.as_binary_view(), std::convert::identity),
-                    _ => false,
-                }
-            }
-        }
-    }
-
-    fn reserve(&mut self, n: usize) {
-        match self {
-            DepStore::Fixed { w, bytes, valid, .. } => {
-                bytes.reserve(n * *w);
-                valid.reserve(n);
-            }
-            DepStore::Bool { vals } => vals.reserve(n),
-            DepStore::Bytes { offsets, valid, .. } => {
-                offsets.reserve(n);
-                valid.reserve(n);
-            }
-        }
-    }
-
-    /// The representatives of groups `0..n`.
-    fn values(&self, n: usize) -> Result<ArrayRef> {
-        let nulls = |valid: &[bool]| {
-            let v = &valid[..n];
-            (!v.iter().all(|&b| b)).then(|| NullBuffer::from(v.to_vec()))
-        };
-        match self {
-            DepStore::Fixed { w, bytes, valid, dt } => {
-                let data = ArrayData::builder(dt.clone())
-                    .len(n)
-                    .add_buffer(Buffer::from_slice_ref(&bytes[..n * w]))
-                    .nulls(nulls(valid))
-                    .build()?;
-                Ok(make_array(data))
-            }
-            DepStore::Bool { vals } => Ok(Arc::new(BooleanArray::from(vals[..n].to_vec()))),
-            DepStore::Bytes { data, offsets, valid, dt } => bytes_array(dt, data, &offsets[..=n], nulls(valid)),
-        }
-    }
-}
-
+/// Dependent mode: groups are keyed by `lead` alone, the other columns
+/// (`cols`, in the order of the record's fields) are checked against it.
 struct Dependent {
     lead: usize,
-    stores: Vec<(usize, DepStore)>,
+    cols: Vec<usize>,
+    recs: DepRecords,
 }
 
 // ---------------------------------------------------------------------------
@@ -595,8 +537,10 @@ struct Dependent {
 // ---------------------------------------------------------------------------
 
 enum Composite {
-    Two { map: HashTable<(u64, u32)>, keys: Vec<u64> },
-    Many { k: usize, map: HashTable<(u64, u32)>, ids: Vec<u32> },
+    /// two column ids packed into one u64
+    Two { map: IdTable<u64>, keys: Vec<u64> },
+    /// keyed by the hash of the tuple of column ids; equal hashes compare the tuples
+    Many { k: usize, map: IdTable<u64>, ids: Vec<u32>, hashes: Vec<u64> },
 }
 
 pub struct GroupKeys {
@@ -612,7 +556,7 @@ pub struct GroupKeys {
 
 impl GroupKeys {
     pub fn try_new(types: &[DataType]) -> Result<Self> {
-        let candidates = if types.len() >= 2 && types.iter().all(DepStore::supports) {
+        let candidates = if types.len() >= 2 && types.iter().all(DepRecords::supports) {
             types.iter().enumerate().filter(|(_, t)| t.is_integer()).map(|(i, _)| i).collect()
         } else {
             vec![]
@@ -635,18 +579,16 @@ impl GroupKeys {
         self.interners = self.types.iter().map(make_interner).collect::<Result<Vec<_>>>()?;
         if !self.candidates.is_empty() {
             let lead = self.candidates.remove(0);
-            let stores = (0..self.types.len())
-                .filter(|&j| j != lead)
-                .map(|j| (j, DepStore::new(&self.types[j]).expect("supported")))
-                .collect();
-            self.dep = Some(Dependent { lead, stores });
+            let cols: Vec<usize> = (0..self.types.len()).filter(|&j| j != lead).collect();
+            let types: Vec<DataType> = cols.iter().map(|&j| self.types[j].clone()).collect();
+            self.dep = Some(Dependent { lead, cols, recs: DepRecords::new(&types) });
             self.composite = None;
         } else {
             self.dep = None;
             self.composite = match self.types.len() {
                 0 | 1 => None,
-                2 => Some(Composite::Two { map: HashTable::with_capacity(1024), keys: vec![] }),
-                k => Some(Composite::Many { k, map: HashTable::with_capacity(1024), ids: vec![] }),
+                2 => Some(Composite::Two { map: IdTable::new(), keys: vec![] }),
+                k => Some(Composite::Many { k, map: IdTable::new(), ids: vec![], hashes: vec![] }),
             };
         }
         Ok(())
@@ -655,9 +597,7 @@ impl GroupKeys {
     pub fn reserve(&mut self, n: usize) {
         if let Some(d) = &mut self.dep {
             self.interners[d.lead].reserve(n);
-            for (_, s) in &mut d.stores {
-                s.reserve(n);
-            }
+            d.recs.reserve(n);
             return;
         }
         for i in &mut self.interners {
@@ -665,10 +605,10 @@ impl GroupKeys {
         }
         match &mut self.composite {
             Some(Composite::Two { map, keys }) => {
-                map.reserve(n, |e| hash_u64(e.0));
+                map.reserve(n, |&e| hash_u64(e));
                 keys.reserve(n);
             }
-            Some(Composite::Many { map, .. }) => map.reserve(n, |e| e.0),
+            Some(Composite::Many { map, .. }) => map.reserve(n, |&e| e),
             None => {}
         }
     }
@@ -688,12 +628,18 @@ impl GroupKeys {
         self.len() == 0
     }
 
+    /// Dependent mode: the column the others depend on (so far).
+    pub fn lead(&self) -> Option<usize> {
+        self.dep.as_ref().map(|d| d.lead)
+    }
+
     pub fn intern(&mut self, cols: &[ArrayRef], out: &mut Vec<u32>) -> Result<()> {
         if let Some(d) = &mut self.dep {
             let lead = &mut self.interners[d.lead];
             let before = lead.len();
             lead.intern(&cols[d.lead], out)?;
-            if d.stores.iter_mut().all(|(j, s)| s.check(&cols[*j], out)) {
+            d.recs.grow_to(lead.len());
+            if d.cols.iter().enumerate().all(|(f, &j)| d.recs.check(f, &cols[j], out, before)) {
                 return Ok(());
             }
             // dependency broken: re-key the groups seen so far, keeping their ids
@@ -718,37 +664,47 @@ impl GroupKeys {
         match comp {
             Composite::Two { map, keys } => {
                 let (a, b) = (&self.scratch[0], &self.scratch[1]);
+                let key = |i: usize| ((a[i] as u64) << 32) | b[i] as u64;
+                let large = map.large();
                 for i in 0..n {
-                    let key = ((a[i] as u64) << 32) | b[i] as u64;
-                    let h = hash_u64(key);
-                    let id = match map.find(h, |e| e.0 == key) {
-                        Some(e) => e.1,
-                        None => {
+                    if large && i + PREFETCH_AHEAD < n {
+                        map.prefetch(hash_u64(key(i + PREFETCH_AHEAD)));
+                    }
+                    let k = key(i);
+                    let h = hash_u64(k);
+                    let id = match map.find(h, |&e, _| e == k) {
+                        Ok(id) => id,
+                        Err(slot) => {
                             let id = keys.len() as u32;
-                            keys.push(key);
-                            map.insert_unique(h, (key, id), |e| hash_u64(e.0));
+                            keys.push(k);
+                            map.insert(slot, h, k, id, |&e| hash_u64(e));
                             id
                         }
                     };
                     out.push(id);
                 }
             }
-            Composite::Many { k, map, ids } => {
+            Composite::Many { k, map, ids, hashes } => {
                 let k = *k;
+                let scratch = &self.scratch;
+                hashes.clear();
+                hashes.extend((0..n).map(|i| (0..k).fold(0u64, |h, j| combine(h, hash_u64(scratch[j][i] as u64)))));
                 let mut tuple = vec![0u32; k];
-                for i in 0..n {
-                    let mut h = 0u64;
-                    for j in 0..k {
-                        tuple[j] = self.scratch[j][i];
-                        h = combine(h, hash_u64(tuple[j] as u64));
+                let large = map.large();
+                for (i, &h) in hashes.iter().enumerate() {
+                    if let Some(&a) = hashes.get(i + PREFETCH_AHEAD).filter(|_| large) {
+                        map.prefetch(a);
                     }
-                    let found = map.find(h, |e| e.0 == h && ids[e.1 as usize * k..(e.1 as usize + 1) * k] == tuple[..]);
+                    for (j, t) in tuple.iter_mut().enumerate() {
+                        *t = scratch[j][i];
+                    }
+                    let found = map.find(h, |&e, g| e == h && ids[g as usize * k..(g as usize + 1) * k] == tuple[..]);
                     let id = match found {
-                        Some(e) => e.1,
-                        None => {
+                        Ok(id) => id,
+                        Err(slot) => {
                             let id = (ids.len() / k) as u32;
                             ids.extend_from_slice(&tuple);
-                            map.insert_unique(h, (h, id), |e| e.0);
+                            map.insert(slot, h, h, id, |&e| e);
                             id
                         }
                     };
@@ -791,7 +747,7 @@ impl GroupKeys {
                 if j == d.lead {
                     Ok(self.interners[j].values()?.slice(0, n))
                 } else {
-                    d.stores.iter().find(|(c, _)| *c == j).expect("store").1.values(n)
+                    d.recs.values(d.cols.iter().position(|&c| c == j).expect("dependent column"), n)
                 }
             })
             .collect()
