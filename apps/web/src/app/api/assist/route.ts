@@ -1,4 +1,4 @@
-import type { AssistRequest } from "@workhouse/protocol";
+import type { AssistRequest } from "@iara/protocol";
 
 import { assist } from "@/server/assist";
 import { authErrorResponse, requireUser } from "@/server/auth/session";

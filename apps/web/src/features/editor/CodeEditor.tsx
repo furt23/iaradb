@@ -4,7 +4,7 @@ import { markdown } from "@codemirror/lang-markdown";
 import { python } from "@codemirror/lang-python";
 import { sql, StandardSQL, type SQLNamespace } from "@codemirror/lang-sql";
 import { Prec, type Extension } from "@codemirror/state";
-import { keymap } from "@codemirror/view";
+import { keymap, tooltips } from "@codemirror/view";
 import { useColorScheme } from "@mui/material/styles";
 import CodeMirror from "@uiw/react-codemirror";
 import { useCallback, useMemo, useRef } from "react";
@@ -14,6 +14,15 @@ import { kernelCompletion } from "./completion";
 import { editorTheme } from "./editorTheme";
 import { kernelLinter } from "./lint";
 import { signatureHelp } from "./signatureHelp";
+
+/**
+ * Completions, signatures and lint messages float over the page: inside the
+ * editor they are clipped by the cell (a one-line cell hides them entirely).
+ * CodeMirror gives the floating container the editor's theme classes.
+ */
+function floatingTooltips(): Extension {
+  return typeof document === "undefined" ? [] : tooltips({ position: "fixed", parent: document.body });
+}
 
 export type EditorLanguage = "python" | "sql" | "markdown";
 
@@ -97,7 +106,7 @@ export function CodeEditor(props: CodeEditorProps) {
   }, []);
   const assist = useMemo(() => assistExtensions(props.language, props.assist), [props.language, props.assist]);
   const extensions = useMemo(
-    () => [languageExtension(props.language, props.schema), editorTheme(scheme), keys, ...assist],
+    () => [languageExtension(props.language, props.schema), editorTheme(scheme), keys, floatingTooltips(), ...assist],
     [props.language, props.schema, scheme, keys, assist],
   );
   const onChange = useCallback((value: string) => handlers.current.onChange?.(value), []);

@@ -8,11 +8,11 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
-import workhouse as wh
-from workhouse.kernel import catalog
-from workhouse.sqlwrite import WriteResult, is_schema_statement, is_write
-from workhouse.storage import delta_info
-from workhouse.workspaces import parse_config
+import iara as ia
+from iara.kernel import catalog
+from iara.sqlwrite import WriteResult, is_schema_statement, is_write
+from iara.storage import delta_info
+from iara.workspaces import parse_config
 
 CONFIG = '[workspace]\nname = "w"\nwarehouse = "lake"\n'
 
@@ -79,7 +79,7 @@ def test_created_tables_are_delta_in_the_catalog(tmp_path: Path) -> None:
 
 def test_forked_sessions_publish_delta_writes(tmp_path: Path) -> None:
     ws, changes = _ws(tmp_path)
-    extra = wh.from_dict({"id": [1000], "year": [2030]})
+    extra = ia.from_dict({"id": [1000], "year": [2030]})
     ws.sql("create table t as select * from src").collect()
     ws.sql("insert into t select * from extra", extra=extra).collect()
     assert _n(ws, "select count(*) from t where year = 2030") == 1
@@ -139,14 +139,14 @@ def test_show_describe_and_views(tmp_path: Path) -> None:
     assert WriteResult.of(ws.sql("create or replace view v as select id from t").collect()).format == "view"
     assert _n(ws, "select count(*) from v") == 0
     ws.sql("drop view v").collect()
-    with pytest.raises(wh.WorkhouseError):
+    with pytest.raises(ia.IaraError):
         ws.sql("select * from v").collect()
 
 
 def test_not_null_is_enforced(tmp_path: Path) -> None:
     ws, _ = _ws(tmp_path)
     ws.sql("create table t (id bigint not null, note text)").collect()
-    with pytest.raises(wh.WorkhouseError, match="NOT NULL"):
+    with pytest.raises(ia.IaraError, match="NOT NULL"):
         ws.sql("insert into t select null, 'x'").collect()
     ws.sql("insert into t (id) select 1").collect()
     assert _n(ws, "select count(*) from t") == 1

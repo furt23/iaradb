@@ -6,7 +6,7 @@ import ButtonBase from "@mui/material/ButtonBase";
 import IconButton from "@mui/material/IconButton";
 import Typography from "@mui/material/Typography";
 import { useTheme } from "@mui/material/styles";
-import type { Cell } from "@workhouse/protocol";
+import type { Cell } from "@iara/protocol";
 import { useMemo, useState } from "react";
 
 import { outlineOf, type OutlineNode } from "@/lib/outline";

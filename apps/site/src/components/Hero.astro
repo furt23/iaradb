@@ -1,0 +1,190 @@
+---
+import LogoMark from './LogoMark.astro';
+import { DOCS_URL } from '../config';
+
+const quickstartUrl = `${DOCS_URL}/quickstart/`;
+const stats = [
+  { value: '5.88 s', label: 'TPC-H SF10, all 22 queries' },
+  { value: '60.6 s', label: 'TPC-H SF100, all 22 queries' },
+  { value: '17.6 s', label: 'ClickBench, 32 queries' },
+];
+---
+
+<section class="section hero">
+  <div class="container hero__inner">
+    <div class="hero__text">
+      <p class="eyebrow">Query engine · Rust · Apache Arrow</p>
+      <h1>Analytics on one machine, on every core.</h1>
+      <p class="lede">Iara is a parallel query engine written in Rust on Apache Arrow. Query Parquet, CSV, JSON and Delta Lake tables from Python, with a lazy DataFrame API or SQL.</p>
+
+      <div class="hero__actions">
+        <a class="button button--primary" href={quickstartUrl}>Get started</a>
+        <a class="button button--ghost" href="/benchmarks/">See the benchmarks</a>
+      </div>
+
+      <div class="stats">
+        {stats.map((s) => (
+          <div class="stat">
+            <span class="stat__value">{s.value}</span>
+            <span class="small muted">{s.label}</span>
+          </div>
+        ))}
+      </div>
+      <p class="small muted stats__note">16 vCPUs, 64 GB RAM. DuckDB: 7.69 s, 82.1 s, 18.0 s. Polars: 8.11 s, 90.0 s, 20.3 s.</p>
+    </div>
+
+    <div class="hero__visual">
+      <div class="hero__mark" aria-hidden="true">
+        <LogoMark size={420} />
+      </div>
+
+      <div class="window">
+        <div class="window__bar">
+          <span class="window__dot"></span>
+          <span class="window__dot"></span>
+          <span class="window__dot"></span>
+          <span class="window__name">revenue.py</span>
+        </div>
+        <pre class="code"><span class="kw">import</span> iara
+<span class="kw">from</span> iara <span class="kw">import</span> functions <span class="kw">as</span> F
+
+revenue = (
+    iara.<span class="fn">scan_parquet</span>(<span class="str">"data/lineitem"</span>)
+    .<span class="fn">join</span>(iara.<span class="fn">scan_parquet</span>(<span class="str">"data/orders"</span>),
+          <span class="fn">left_on</span>=<span class="str">"l_orderkey"</span>, <span class="fn">right_on</span>=<span class="str">"o_orderkey"</span>)
+    .<span class="fn">group_by</span>(<span class="str">"o_orderpriority"</span>)
+    .<span class="fn">agg</span>(revenue=(F.<span class="fn">col</span>(<span class="str">"l_extendedprice"</span>)
+                  * (<span class="num">1</span> - F.<span class="fn">col</span>(<span class="str">"l_discount"</span>))).<span class="fn">sum</span>())
+    .<span class="fn">sort</span>(<span class="str">"revenue"</span>, descending=<span class="kw">True</span>)
+    .<span class="fn">collect</span>()
+)</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .hero {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .hero__inner {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 56px;
+    align-items: center;
+  }
+
+  .hero__text,
+  .hero__visual {
+    min-width: 0;
+  }
+
+  .hero__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 32px;
+  }
+
+  .stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 24px 40px;
+    margin-top: 44px;
+    padding-top: 28px;
+    border-top: 1px solid var(--rule);
+  }
+
+  .stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .stat__value {
+    font-family: var(--font-display);
+    font-size: 1.9rem;
+    font-weight: 560;
+    line-height: 1.1;
+    color: var(--cobalt);
+    letter-spacing: -0.01em;
+  }
+
+  .stats__note {
+    margin-top: 16px;
+    margin-bottom: 0;
+  }
+
+  /* decorative mark behind the code window; clipped by .hero so it never scrolls the page */
+  .hero__mark {
+    position: absolute;
+    z-index: -1;
+    top: 50%;
+    right: -120px;
+    transform: translateY(-50%);
+    opacity: 0.07;
+    pointer-events: none;
+  }
+
+  .hero__visual {
+    position: relative;
+  }
+
+  .window {
+    position: relative;
+    background: var(--night);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    box-shadow: 0 18px 48px rgba(14, 26, 43, 0.22);
+  }
+
+  .window__bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 36px;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--night-rule);
+  }
+
+  .window__dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--night-rule);
+  }
+
+  .window__name {
+    margin-left: 10px;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--night-dim);
+  }
+
+  .window pre.code {
+    border-radius: 0;
+    font-size: 0.8rem;
+  }
+
+  @media (max-width: 899px) {
+    .hero__inner {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 48px;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .window pre.code {
+      padding: 18px 16px;
+      font-size: 0.74rem;
+    }
+
+    .hero__mark {
+      right: -180px;
+    }
+  }
+</style>

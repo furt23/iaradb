@@ -6,7 +6,7 @@ import Button from "@mui/material/Button";
 import CircularProgress from "@mui/material/CircularProgress";
 import Paper from "@mui/material/Paper";
 import Typography from "@mui/material/Typography";
-import type { ChartSpec } from "@workhouse/protocol";
+import type { ChartSpec } from "@iara/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CodeEditor } from "@/features/editor/CodeEditor";

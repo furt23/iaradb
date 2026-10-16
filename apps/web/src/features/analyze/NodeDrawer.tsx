@@ -5,7 +5,7 @@ import Box from "@mui/material/Box";
 import Drawer from "@mui/material/Drawer";
 import IconButton from "@mui/material/IconButton";
 import Typography from "@mui/material/Typography";
-import type { AnalyzedNode } from "@workhouse/protocol";
+import type { AnalyzedNode } from "@iara/protocol";
 
 import { operatorColor } from "@/features/results/operators";
 

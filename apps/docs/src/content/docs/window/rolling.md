@@ -23,11 +23,11 @@ Rolling window functions slide a window of size `window_size` across sorted rows
 
 ### Example: 3-Period Moving Average
 ```python
->>> import workhouse as wh
->>> from workhouse import col
->>> df = wh.from_dict({"stock": ["X", "X", "X", "X"], "close": [10.0, 12.0, 14.0, 16.0]})
+>>> import iara
+>>> from iara import functions as F
+>>> df = iara.from_dict({"stock": ["X", "X", "X", "X"], "close": [10.0, 12.0, 14.0, 16.0]})
 >>> df.lazy().with_columns(
-...     ma3=col("close").rolling_mean(3, min_periods=3).over("stock")
+...     ma3=F.col("close").rolling_mean(3, min_periods=3).over("stock")
 ... ).collect().show()
 ┌───────┬───────┬──────┐
 │ stock │ close │ ma3  │

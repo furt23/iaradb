@@ -1,4 +1,4 @@
-/** Tabular results, served page by page (see workhouse.kernel.runtime.results). */
+/** Tabular results, served page by page (see iara.kernel.runtime.results). */
 
 export interface ColumnInfo {
   name: string;
@@ -24,6 +24,10 @@ export interface ResultMeta {
   num_rows: number;
   /** a large result the kernel keeps on disk (memory-mapped) instead of in memory */
   on_disk?: boolean;
+  /** a preview: `num_rows` are the first rows; downloads, charts and the wrangler read all of them */
+  truncated?: boolean;
+  /** how many rows there are in all, when known (a lazy query's preview does not count them) */
+  total_rows?: number | null;
   /** the first page */
   page: ResultPage;
 }

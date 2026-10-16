@@ -9,7 +9,7 @@ import Box from "@mui/material/Box";
 import Dialog from "@mui/material/Dialog";
 import InputBase from "@mui/material/InputBase";
 import Typography from "@mui/material/Typography";
-import type { TableRef } from "@workhouse/protocol";
+import type { TableRef } from "@iara/protocol";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
@@ -18,6 +18,7 @@ import { useWorkbench } from "@/features/workbench/WorkbenchProvider";
 import { fuzzyFilter } from "@/lib/fuzzy";
 import { baseName, parentOf } from "@/lib/paths";
 
+import { useTranslation } from "@/i18n";
 import { SECTIONS } from "./sections";
 import { useShell } from "./ShellProvider";
 
@@ -37,6 +38,7 @@ const ICON = { fontSize: 16 } as const;
 export function QuickOpen({ files, tables }: { files: string[]; tables: TableRef[] }) {
   const { quickOpen, setQuickOpen } = useShell();
   const { recent, act } = useWorkbench();
+  const { t } = useTranslation();
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
@@ -58,27 +60,27 @@ export function QuickOpen({ files, tables }: { files: string[]; tables: TableRef
       };
     });
     const tableItems = tables.map(
-      (t): Item => ({
-        key: `table:${t.name}`,
-        text: t.name,
-        label: t.name,
-        detail: `table · ${t.path}`,
+      (tItem): Item => ({
+        key: `table:${tItem.name}`,
+        text: tItem.name,
+        label: tItem.name,
+        detail: `${t("table")} · ${tItem.path}`,
         icon: <TableChartOutlined sx={{ ...ICON, color: "primary.main" }} />,
-        open: () => router.push(tableHref(t.name)),
+        open: () => router.push(tableHref(tItem.name)),
       }),
     );
     const pages = SECTIONS.map(
       (s): Item => ({
         key: `page:${s.id}`,
-        text: s.label,
-        label: s.label,
-        detail: "page",
+        text: `${s.label} ${t(s.label)}`,
+        label: t(s.label),
+        detail: t("page"),
         icon: <EastRounded sx={{ ...ICON, color: "text.secondary" }} />,
         open: () => router.push(s.href),
       }),
     );
     return [...fileItems, ...tableItems, ...pages];
-  }, [files, tables, recent, act, router]);
+  }, [files, tables, recent, act, router, t]);
 
   const shown = useMemo(() => fuzzyFilter(items, query, (i) => i.text, 60), [items, query]);
 
@@ -114,22 +116,22 @@ export function QuickOpen({ files, tables }: { files: string[]; tables: TableRef
       fullWidth
       maxWidth="sm"
       slotProps={{ paper: { sx: { alignSelf: "flex-start", mt: "12vh" } } }}
-      aria-label="quick open"
+      aria-label={t("quick open")}
     >
       <Box sx={{ display: "flex", alignItems: "center", gap: 1, px: 2, py: 1.25, borderBottom: 1, borderColor: "divider" }}>
         <Search sx={{ color: "text.disabled" }} />
         <InputBase
           autoFocus
           fullWidth
-          placeholder="Open a notebook, query, table or page…"
+          placeholder={t("Open a notebook, query, table or page…")}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={onKey}
-          inputProps={{ "aria-label": "name to open", role: "combobox", "aria-expanded": true, "aria-controls": "quick-open-list" }}
+          inputProps={{ "aria-label": t("name to open"), role: "combobox", "aria-expanded": true, "aria-controls": "quick-open-list" }}
           sx={{ fontSize: 15 }}
         />
       </Box>
-      <Box ref={list} id="quick-open-list" role="listbox" aria-label="matches" sx={{ maxHeight: "50vh", overflow: "auto", py: 0.5 }}>
+      <Box ref={list} id="quick-open-list" role="listbox" aria-label={t("matches")} sx={{ maxHeight: "50vh", overflow: "auto", py: 0.5 }}>
         {shown.map((item, i) => (
           <Box
             key={item.key}
@@ -159,7 +161,7 @@ export function QuickOpen({ files, tables }: { files: string[]; tables: TableRef
         ))}
         {!shown.length && (
           <Typography variant="body2" sx={{ color: "text.secondary", px: 2, py: 1.5 }}>
-            Nothing matches “{query}”.
+            {t("Nothing matches “{{query}}”.", { query })}
           </Typography>
         )}
       </Box>

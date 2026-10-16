@@ -9,14 +9,16 @@ import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { useGuard, useNotify } from "@/features/shell/notify";
 import { unwrap } from "@/lib/action";
 import { isIdentifier, validLocation } from "@/lib/catalogToml";
 import { createSchema } from "@/server/actions/catalog";
 
-/** A new schema: a namespace for tables, declared in workhouse.toml. */
+/** A new schema: a namespace for tables, declared in iara.toml. */
 export function NewSchemaDialog({ open, onClose }: { open: boolean; onClose(): void }) {
+  const { t } = useTranslation();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [location, setLocation] = useState("");
@@ -51,37 +53,38 @@ export function NewSchemaDialog({ open, onClose }: { open: boolean; onClose(): v
 
   return (
     <Dialog open={open} onClose={busy ? undefined : onClose} fullWidth maxWidth="xs">
-      <DialogTitle>New schema</DialogTitle>
+      <DialogTitle>{t("New schema")}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
           <TextField
             autoFocus
-            label="Name"
+            label={t("Name")}
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && void create()}
             error={badName}
-            helperText={badName ? "Letters, digits and underscores" : "Its tables are named schema.table, e.g. tpch.lineitem"}
+            helperText={badName ? t("Letters, digits and underscores") : t("Its tables are named schema.table, e.g. tpch.lineitem")}
           />
-          <TextField label="Description (optional)" value={description} onChange={(e) => setDescription(e.target.value)} />
+          <TextField label={t("Description (optional)")} value={description} onChange={(e) => setDescription(e.target.value)} />
           <TextField
-            label="Location (optional)"
+            label={t("Location (optional)")}
             value={location}
             onChange={(e) => setLocation(e.target.value)}
             error={badLocation}
             placeholder="s3://bucket/prefix/"
-            helperText={badLocation ? "An s3:// URL or a folder, without .." : "Each subfolder becomes a table of the schema"}
+            helperText={badLocation ? "An s3:// URL or a folder, without .." : t("Each subfolder becomes a table of the schema")}
           />
         </Stack>
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose} disabled={busy}>
-          Cancel
+          {t("Cancel")}
         </Button>
         <Button variant="contained" onClick={() => void create()} disabled={busy || !trimmed || badName || badLocation}>
-          Create
+          {t("Create")}
         </Button>
       </DialogActions>
     </Dialog>
   );
 }
+

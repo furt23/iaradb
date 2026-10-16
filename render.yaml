@@ -1,27 +1,27 @@
-# Render Blueprint for the Workhouse monorepo (pnpm workspace).
+# Render Blueprint for the Iara monorepo (pnpm workspace).
 # Both services install from the repo root so workspace packages resolve.
 services:
   # Public Python API docs (Starlight / Astro, static output).
   - type: web
-    name: workhouse-docs
+    name: iara-docs
     runtime: static
     branch: master
-    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @workhouse/docs build
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @iara/docs build
     staticPublishPath: apps/docs/dist
     buildFilter:
       paths:
         - apps/docs/**
 
-  # Workhouse Studio (Next.js 16 App Router, Node server).
+  # Iara Studio (Next.js 16 App Router, Node server).
   - type: web
-    name: workhouse-studio
+    name: iara-studio
     runtime: node
     branch: master
     plan: starter # persistent disk below needs a paid plan
     region: oregon
-    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @workhouse/web build
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @iara/web build
     # Render injects $PORT; next start is run via the workspace package so the port is not hardcoded.
-    startCommand: pnpm --filter @workhouse/web exec next start --hostname 0.0.0.0 --port $PORT
+    startCommand: pnpm --filter @iara/web exec next start --hostname 0.0.0.0 --port $PORT
     healthCheckPath: /
     buildFilter:
       paths:
@@ -30,7 +30,7 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "22"
-      - key: WORKHOUSE_WORKSPACE
+      - key: IARA_WORKSPACE
         sync: false
       - key: AWS_ACCESS_KEY_ID
         sync: false
@@ -38,12 +38,12 @@ services:
         sync: false
       - key: AWS_REGION
         sync: false
-      - key: WORKHOUSE_STUDIO_DATA
+      - key: IARA_STUDIO_DATA
         sync: false
     # Studio data dir. Requires a paid instance type (set above).
     disk:
       name: studio-data
-      mountPath: /var/data/workhouse
+      mountPath: /var/data/iara
       sizeGB: 1
-    # TODO: the Studio runs Python kernels that need the workhouse wheel.
+    # TODO: the Studio runs Python kernels that need the iara wheel.
     # The native Node runtime may not provide that; a Docker-based service may be needed later.

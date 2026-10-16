@@ -5,7 +5,7 @@ import Paper from "@mui/material/Paper";
 import Tab from "@mui/material/Tab";
 import Tabs from "@mui/material/Tabs";
 import Typography from "@mui/material/Typography";
-import type { AnalyzedNode } from "@workhouse/protocol";
+import type { AnalyzedNode } from "@iara/protocol";
 import { useState } from "react";
 
 import { ProfileView } from "@/features/results/ProfileView";

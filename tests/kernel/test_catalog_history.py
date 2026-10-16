@@ -8,8 +8,8 @@ from typing import Any
 
 import pytest
 
-import workhouse as wh
-from workhouse.kernel.session import KernelSession
+import iara as ia
+from iara.kernel.session import KernelSession
 
 
 def call(session: KernelSession, method: str, params: dict[str, Any]) -> Any:
@@ -20,9 +20,9 @@ def call(session: KernelSession, method: str, params: dict[str, Any]) -> Any:
 def session(workspace: Path):
     cwd = os.getcwd()
     (workspace / "data" / "events").parent.mkdir(exist_ok=True)
-    wh.read_parquet(str(workspace / "data" / "sales.parquet")).head(10).write_delta(str(workspace / "data" / "events"), mode="overwrite")
-    wh.read_parquet(str(workspace / "data" / "sales.parquet")).head(5).write_delta(str(workspace / "data" / "events"), mode="append")
-    with (workspace / "workhouse.toml").open("a") as f:
+    ia.read_parquet(str(workspace / "data" / "sales.parquet")).head(10).write_delta(str(workspace / "data" / "events"), mode="overwrite")
+    ia.read_parquet(str(workspace / "data" / "sales.parquet")).head(5).write_delta(str(workspace / "data" / "events"), mode="append")
+    with (workspace / "iara.toml").open("a") as f:
         f.write('\n[tables.events]\npath = "data/events"\nformat = "delta"\n')
     s = KernelSession(workspace)
     yield s

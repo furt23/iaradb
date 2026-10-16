@@ -7,8 +7,8 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
-from workhouse.sqlwrite import is_write
-from workhouse.workspaces import parse_config
+from iara.sqlwrite import is_write
+from iara.workspaces import parse_config
 
 CONFIG = '[workspace]\nname = "w"\nwarehouse = "lake"\n'
 

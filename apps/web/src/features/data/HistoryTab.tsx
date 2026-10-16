@@ -5,7 +5,7 @@ import TableBody from "@mui/material/TableBody";
 import TableCell from "@mui/material/TableCell";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
-import type { DeltaCommit, RunStreamEvent } from "@workhouse/protocol";
+import type { DeltaCommit, RunStreamEvent } from "@iara/protocol";
 import { useCallback, useEffect, useState } from "react";
 
 import { useNotify } from "@/features/shell/notify";

@@ -88,24 +88,24 @@ export function storedToken(dir: string = dataDir()): string | undefined {
 export function gitAuth(dir: string = dataDir()): GitAuth | null {
   const token = storedToken(dir);
   if (!token) return null;
-  return { env: { GIT_ASKPASS: writeAskpass(dir), WORKHOUSE_GIT_TOKEN: token }, secrets: [token] };
+  return { env: { GIT_ASKPASS: writeAskpass(dir), IARA_GIT_TOKEN: token }, secrets: [token] };
 }
 
 const ASKPASS_SH = `#!/bin/sh
 # Printed by git for each credential prompt; the token comes from the environment.
 case "$1" in
   *sername*) printf '%s\n' x-access-token ;;
-  *) printf '%s\n' "$WORKHOUSE_GIT_TOKEN" ;;
+  *) printf '%s\n' "$IARA_GIT_TOKEN" ;;
 esac
 `;
 
-// cmd.exe expands %WORKHOUSE_GIT_TOKEN% inside quotes, so &, |, < and > in the value stay literal.
+// cmd.exe expands %IARA_GIT_TOKEN% inside quotes, so &, |, < and > in the value stay literal.
 // `set /p` prints without a newline: git keeps a trailing CR, which would corrupt the token.
 const ASKPASS_CMD = [
   "@echo off",
   'echo %~1| findstr /i /c:"sername" >nul',
   "if errorlevel 1 (",
-  '  <nul set /p "=%WORKHOUSE_GIT_TOKEN%"',
+  '  <nul set /p "=%IARA_GIT_TOKEN%"',
   ") else (",
   '  <nul set /p "=x-access-token"',
   ")",

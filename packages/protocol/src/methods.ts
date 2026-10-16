@@ -1,6 +1,6 @@
 /**
- * The kernel's method table and events (see workhouse.kernel.session and
- * workhouse.kernel.protocol). Each method maps to `[params, result]`.
+ * The kernel's method table and events (see iara.kernel.session and
+ * iara.kernel.protocol). Each method maps to `[params, result]`.
  */
 
 import type { Completions, Diagnostic, SignatureHelp } from "./assist";
@@ -8,6 +8,7 @@ import type { Cell, CellKind, CellOutput, CellState, NotebookView, RunResult, Va
 import type { ExplainResult, QueryAnalysis, QueryParams, QueryProfile } from "./query";
 import type { ChartData, ChartSpec, ResultPage, SortKey } from "./results";
 import type { DeltaCommit, HistoryEntry, KernelInfo, TableInfo, TableRef } from "./workspace";
+import type { WranglePreview, WrangleProfile, WrangleSource, WrangleStep } from "./wrangle";
 
 type Empty = Record<string, never>;
 
@@ -21,7 +22,7 @@ export interface KernelMethods {
   ping: [Empty, KernelInfo];
   "workspace.info": [Empty, KernelInfo];
   "workspace.reload": [Empty, KernelInfo];
-  /** the catalog from the Studio's workhouse.toml text (null: none) */
+  /** the catalog from the Studio's iara.toml text (null: none) */
   "workspace.configure": [{ toml: string | null }, KernelInfo];
   /**
    * `source`: the notebook's file content (else the kernel reads its own file).
@@ -35,7 +36,8 @@ export interface KernelMethods {
   "notebook.rename": [{ path: string }, NotebookView];
   "notebook.save": [{ cells: Cell[]; persist?: boolean }, NotebookSource];
   /** `cells: null` runs the notebook as opened (a job) */
-  "notebook.run": [{ cells: Cell[] | null; cell_ids: string[] | null }, RunResult];
+  /** `autorun`: dependents of the run cells run too (else they turn stale) */
+  "notebook.run": [{ cells: Cell[] | null; cell_ids: string[] | null; autorun?: boolean }, RunResult];
   /**
    * A widget got a value: the kernel coerces it to the widget's type, then runs the cells that read it
    * (and their descendants). `cells`: the editor's cells, adopted first
@@ -60,13 +62,16 @@ export interface KernelMethods {
   "catalog.history": [{ table: string; limit?: number }, DeltaCommit[]];
   "catalog.schema": [Empty, Record<string, { name: string; type: string }[]>];
   "catalog.preview": [{ name: string; limit?: number }, CellOutput];
-  /** `entry`: the table's workhouse.toml section (the Studio appends it when `persist: false`) */
+  /** `entry`: the table's iara.toml section (the Studio appends it when `persist: false`) */
   "catalog.add": [{ name: string; path: string; format?: "parquet" | "csv" | "json"; persist?: boolean }, TableRef & { entry: string }];
   "sql.run": [{ query: string; source?: string } & QueryParams, CellOutput];
   "sql.explain": [{ query: string } & QueryParams, ExplainResult];
   /** runs the query with profiling; the rows are counted, not returned */
   "sql.analyze": [{ query: string } & QueryParams, QueryAnalysis];
   "history.list": [{ limit?: number }, HistoryEntry[]];
+  /** a Data Wrangler recipe over a table or result: first rows, counts over all rows, its code */
+  "wrangle.preview": [{ source: WrangleSource; steps: WrangleStep[] }, WranglePreview];
+  "wrangle.profile": [{ source: WrangleSource; steps: WrangleStep[]; column: string }, WrangleProfile];
   shutdown: [Empty, { ok: boolean }];
 }
 
@@ -91,7 +96,7 @@ export interface ProgressEvent {
 
 /**
  * A statement (`CREATE TABLE ... AS`, `DROP TABLE`) changed the catalog: the
- * table's new `workhouse.toml` section (null: it was dropped). The Studio,
+ * table's new `iara.toml` section (null: it was dropped). The Studio,
  * which owns the file, applies it.
  */
 export interface CatalogChange {
@@ -100,7 +105,7 @@ export interface CatalogChange {
   entry: string | null;
   /**
    * what `name` is: a table (the default) or a schema (`[schemas.<name>]`);
-   * `refresh`: the schema's location has new data, workhouse.toml is unchanged
+   * `refresh`: the schema's location has new data, iara.toml is unchanged
    */
   kind?: "table" | "schema" | "refresh";
 }

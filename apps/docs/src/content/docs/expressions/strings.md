@@ -3,7 +3,7 @@ title: String Namespace (Expr.str)
 description: String manipulation, matching, formatting, and slicing.
 ---
 
-String methods are accessed via the `.str` namespace property on string expressions (`col("name").str.<method>()`).
+String methods are accessed via the `.str` namespace property on string expressions (`F.col("name").str.<method>()`).
 
 ### Pattern Matching
 
@@ -33,21 +33,21 @@ Expr.str.ends_with(suffix: str) -> Expr
 #### `Expr.str.to_uppercase` / `Expr.str.to_lowercase`
 Converts characters to upper or lower case.
 ```python
-col("country").str.to_uppercase()
-col("email").str.to_lowercase()
+F.col("country").str.to_uppercase()
+F.col("email").str.to_lowercase()
 ```
 
 #### `Expr.str.strip_chars`
 Trims leading and trailing whitespace.
 ```python
-col("raw_input").str.strip_chars()
+F.col("raw_input").str.strip_chars()
 ```
 
 #### `Expr.str.strip_chars_start` / `Expr.str.strip_chars_end`
 Trims leading (`start`) or trailing (`end`) whitespace.
 ```python
-col("text").str.strip_chars_start()
-col("text").str.strip_chars_end()
+F.col("text").str.strip_chars_start()
+F.col("text").str.strip_chars_end()
 ```
 
 ---
@@ -57,7 +57,7 @@ col("text").str.strip_chars_end()
 #### `Expr.str.len_chars`
 Returns the character length of each string.
 ```python
-col("username").str.len_chars()
+F.col("username").str.len_chars()
 ```
 
 #### `Expr.str.slice`
@@ -69,8 +69,8 @@ Expr.str.slice(offset: int, length: int | None = None) -> Expr
 #### `Expr.str.head` / `Expr.str.tail`
 Returns the first or last `n` characters.
 ```python
-col("sku").str.head(3)
-col("sku").str.tail(4)
+F.col("sku").str.head(3)
+F.col("sku").str.tail(4)
 ```
 
 #### `Expr.str.replace_all`
@@ -82,20 +82,20 @@ Expr.str.replace_all(old: str, new: str) -> Expr
 #### `Expr.str.reverse`
 Reverses the sequence of characters.
 ```python
-col("code").str.reverse()
+F.col("code").str.reverse()
 ```
 
 ---
 
 ### Example
 ```python
->>> import workhouse as wh
->>> from workhouse import col
->>> df = wh.from_dict({"city": ["  new york ", "san francisco", "tokyo"]})
+>>> import iara
+>>> from iara import functions as F
+>>> df = iara.from_dict({"city": ["  new york ", "san francisco", "tokyo"]})
 >>> df.lazy().select(
-...     cleaned=col("city").str.strip_chars().str.to_uppercase(),
-...     is_san=col("city").str.contains("san"),
-...     initial=col("city").str.strip_chars().str.head(1)
+...     cleaned=F.col("city").str.strip_chars().str.to_uppercase(),
+...     is_san=F.col("city").str.contains("san"),
+...     initial=F.col("city").str.strip_chars().str.head(1)
 ... ).collect().show()
 ┌───────────────┬────────┬─────────┐
 │ cleaned       │ is_san │ initial │

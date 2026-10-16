@@ -1,0 +1,207 @@
+<section class="section section--night" id="memory">
+  <div class="container">
+    <div class="grid grid--2 spill">
+      <div>
+        <span class="eyebrow">Memory</span>
+        <h2>Bigger than memory? It spills.</h2>
+        <p class="lede">Hash tables, join build sides, sort buffers and window buffers reserve memory from one pool. When a query outgrows the limit, the operator writes LZ4-compressed Arrow files to disk and carries on.</p>
+
+        <ul class="points">
+          <li>Aggregation spills radix partitions and finishes them one at a time</li>
+          <li>Joins fall back to a partitioned (grace) hash join</li>
+          <li>Sorts write sorted runs and merge them</li>
+          <li>Window functions spill by partition</li>
+        </ul>
+
+        <p class="code-line">iara.set_memory_limit("8GB")</p>
+      </div>
+
+      <div class="figure">
+        <svg class="wide" viewBox="0 0 520 400" width="100%" height="auto" role="img" aria-label="A memory pool filled with hash table, join build and sort buffer blocks up to a limit line. A curved arrow spills data to a disk holding spill files in LZ4 Arrow IPC format.">
+          <!-- pool -->
+          <rect class="pool" x="40" y="40" width="220" height="330" rx="10" />
+          <text class="t-pool" x="150" y="68" text-anchor="middle">memory pool</text>
+          <path class="limit" d="M30 120 H270" />
+          <text class="t-limit" x="52" y="112">limit</text>
+
+          <!-- blocks, stacked up to the limit -->
+          <rect class="block-hash" x="56" y="128" width="188" height="72" rx="8" />
+          <text class="t-on-cobalt" x="150" y="169" text-anchor="middle">hash table</text>
+          <rect class="block-join" x="56" y="208" width="188" height="72" rx="8" />
+          <text class="t-on-light" x="150" y="249" text-anchor="middle">join build</text>
+          <rect class="block-sort" x="56" y="288" width="188" height="72" rx="8" />
+          <text class="t-on-light" x="150" y="329" text-anchor="middle">sort buffer</text>
+
+          <!-- spill arrow -->
+          <path class="flow" d="M266 236 C300 236 300 210 338 210" />
+          <path class="flow" d="M330 205 L338 210 L330 215" />
+
+          <!-- disk -->
+          <path class="disk" d="M345 150 V300 A60 14 0 0 0 465 300 V150" />
+          <ellipse class="disk" cx="405" cy="150" rx="60" ry="14" />
+          <text class="t-pool" x="405" y="128" text-anchor="middle">disk</text>
+          <rect class="file" x="357" y="172" width="96" height="22" rx="4" />
+          <rect class="file" x="357" y="200" width="96" height="22" rx="4" />
+          <rect class="file" x="357" y="228" width="96" height="22" rx="4" />
+          <text class="t-pool" x="405" y="336" text-anchor="middle">spill files · LZ4 Arrow IPC</text>
+        </svg>
+
+        <svg class="narrow" viewBox="0 0 340 470" width="100%" height="auto" role="img" aria-label="A memory pool filled with hash table, join build and sort buffer blocks up to a limit line. An arrow below spills data to a disk holding spill files in LZ4 Arrow IPC format.">
+          <!-- pool -->
+          <rect class="pool" x="20" y="40" width="300" height="190" rx="10" />
+          <text class="t-pool" x="20" y="30">memory pool</text>
+          <path class="limit" d="M12 84 H328" />
+          <text class="t-limit" x="32" y="78">limit</text>
+
+          <!-- blocks, stacked up to the limit -->
+          <rect class="block-hash" x="32" y="96" width="276" height="36" rx="8" />
+          <text class="t-on-cobalt" x="170" y="119" text-anchor="middle">hash table</text>
+          <rect class="block-join" x="32" y="138" width="276" height="36" rx="8" />
+          <text class="t-on-light" x="170" y="161" text-anchor="middle">join build</text>
+          <rect class="block-sort" x="32" y="180" width="276" height="36" rx="8" />
+          <text class="t-on-light" x="170" y="203" text-anchor="middle">sort buffer</text>
+
+          <!-- spill arrow -->
+          <path class="flow" d="M170 236 V290" />
+          <path class="flow" d="M164 274 L170 290 L176 274" />
+
+          <!-- disk -->
+          <path class="disk" d="M60 306 V416 A110 14 0 0 0 280 416 V306" />
+          <ellipse class="disk" cx="170" cy="306" rx="110" ry="14" />
+          <text class="t-pool" x="170" y="334" text-anchor="middle">disk</text>
+          <rect class="file" x="110" y="342" width="120" height="18" rx="4" />
+          <rect class="file" x="110" y="366" width="120" height="18" rx="4" />
+          <rect class="file" x="110" y="390" width="120" height="18" rx="4" />
+          <text class="t-pool" x="170" y="458" text-anchor="middle">spill files · LZ4 Arrow IPC</text>
+        </svg>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .spill {
+    align-items: center;
+  }
+
+  .figure {
+    min-width: 0;
+  }
+
+  .points {
+    list-style: none;
+    padding: 0;
+    margin: 28px 0;
+  }
+
+  .points li {
+    position: relative;
+    padding-left: 22px;
+    margin-bottom: 10px;
+    color: var(--night-dim);
+  }
+
+  .points li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0.62em;
+    width: 8px;
+    height: 8px;
+    background: var(--sky);
+  }
+
+  .code-line {
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    color: var(--night-ink);
+    margin: 0;
+  }
+
+  .pool {
+    fill: var(--night-2);
+    stroke: var(--night-rule);
+    stroke-width: 1.5;
+  }
+
+  .disk {
+    fill: var(--night-2);
+    stroke: var(--night-rule);
+    stroke-width: 1.5;
+  }
+
+  .file {
+    fill: var(--mist);
+  }
+
+  .limit {
+    fill: none;
+    stroke: var(--ochre);
+    stroke-width: 1.5;
+    stroke-dasharray: 6 5;
+  }
+
+  .flow {
+    fill: none;
+    stroke: var(--sky);
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .block-hash {
+    fill: var(--cobalt);
+  }
+
+  .block-join {
+    fill: var(--azure);
+  }
+
+  .block-sort {
+    fill: var(--sky);
+  }
+
+  .t-pool {
+    font-family: var(--font-sans);
+    font-size: 13px;
+    fill: var(--night-dim);
+  }
+
+  .t-limit {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    fill: var(--ochre);
+  }
+
+  .t-on-cobalt {
+    font-family: var(--font-sans);
+    font-size: 13px;
+    fill: var(--vellum);
+  }
+
+  .t-on-light {
+    font-family: var(--font-sans);
+    font-size: 13px;
+    fill: var(--night);
+  }
+
+  .narrow {
+    display: none;
+  }
+
+  @media (max-width: 900px) {
+    .spill {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  @media (max-width: 760px) {
+    .wide {
+      display: none;
+    }
+
+    .narrow {
+      display: block;
+    }
+  }
+</style>

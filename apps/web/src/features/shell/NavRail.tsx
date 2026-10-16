@@ -1,11 +1,11 @@
 "use client";
 
 import AccountTreeOutlined from "@mui/icons-material/AccountTreeOutlined";
+import AutoFixHighOutlined from "@mui/icons-material/AutoFixHighOutlined";
 import EventRepeatOutlined from "@mui/icons-material/EventRepeatOutlined";
 import FolderOutlined from "@mui/icons-material/FolderOutlined";
 import HistoryOutlined from "@mui/icons-material/HistoryOutlined";
 import Memory from "@mui/icons-material/Memory";
-import Search from "@mui/icons-material/Search";
 import StorageOutlined from "@mui/icons-material/StorageOutlined";
 import TerminalOutlined from "@mui/icons-material/TerminalOutlined";
 import Box from "@mui/material/Box";
@@ -13,23 +13,16 @@ import useMediaQuery from "@mui/material/useMediaQuery";
 import { usePathname } from "next/navigation";
 import { Fragment, useState, type ReactNode } from "react";
 
+import { useTranslation } from "@/i18n";
 import { NavItem } from "./NavItem";
-import { RailBrand } from "./RailBrand";
 import { RailToggle } from "./RailToggle";
 import { SECTIONS, sectionOf, type SectionId } from "./sections";
 import { useShell } from "./ShellProvider";
-import { SignOutButton } from "./SignOutButton";
-import { ThemeToggle } from "./ThemeToggle";
-
-/** The signed-in user, or null when sign-in is off. */
-export interface RailAccount {
-  email: string;
-  admin: boolean;
-}
 
 const ICONS: Record<SectionId, ReactNode> = {
   workspace: <FolderOutlined />,
   data: <StorageOutlined />,
+  wrangle: <AutoFixHighOutlined />,
   sql: <TerminalOutlined />,
   history: <HistoryOutlined />,
   jobs: <EventRepeatOutlined />,
@@ -44,14 +37,15 @@ const NARROW = "(max-width:899.95px)";
 const GROUP_ENDS: SectionId[] = ["sql", "compute"];
 
 /**
- * The navigation rail: quick open, the sections and the theme. Expanded it
- * shows their names; collapsed, icons with tooltips. Clicking the current
- * section shows or hides its side panel (Ctrl/Cmd+B). With sign-in on, the
- * account's sign-out button sits at the bottom.
+ * The navigation rail: the sections. Expanded it shows their names;
+ * collapsed, icons with tooltips. Clicking the current section shows or
+ * hides its side panel (Ctrl/Cmd+B). Search, the theme and the account are
+ * in the app bar.
  */
-export function NavRail({ account }: { account: RailAccount | null }) {
+export function NavRail() {
   const current = sectionOf(usePathname());
-  const { panelOpen, togglePanel, setQuickOpen, railExpanded, toggleRail } = useShell();
+  const { panelOpen, togglePanel, railExpanded, toggleRail } = useShell();
+  const { t } = useTranslation();
   const narrow = useMediaQuery(NARROW);
   const expanded = railExpanded && !narrow;
   // the width animates after the user's own toggle, not when the stored choice loads
@@ -75,28 +69,19 @@ export function NavRail({ account }: { account: RailAccount | null }) {
         transition: animated ? "width 150ms ease" : "none",
       }}
     >
-      <RailBrand expanded={expanded} />
-      <NavItem
-        icon={<Search />}
-        label="Search"
-        name="open by name"
-        tooltip="Open anything by name (Ctrl+K)"
-        hint="Ctrl K"
-        expanded={expanded}
-        onClick={() => setQuickOpen(true)}
-      />
       {SECTIONS.map((s) => {
         const active = s.id === current;
         const toggles = active && s.panel !== null;
+        const label = t(s.label);
         return (
           <Fragment key={s.id}>
             <NavItem
               icon={ICONS[s.id]}
-              label={s.label}
+              label={label}
               href={s.href}
               active={active}
               expanded={expanded}
-              tooltip={toggles ? `${s.label} · ${panelOpen ? "hide" : "show"} the side panel (Ctrl+B)` : s.label}
+              tooltip={toggles ? `${label} · ${panelOpen ? t("hide") : t("show")} ${t("the side panel (Ctrl+B)")}` : label}
               onClick={(e) => {
                 if (!toggles) {
                   togglePanel(true);
@@ -111,9 +96,7 @@ export function NavRail({ account }: { account: RailAccount | null }) {
         );
       })}
       <Box sx={{ flex: 1 }} />
-      <Box sx={{ display: "flex", flexDirection: expanded ? "row" : "column", alignItems: "center", justifyContent: "space-between", gap: 0.5 }}>
-        <ThemeToggle />
-        {account && <SignOutButton email={account.email} />}
+      <Box sx={{ display: "flex", justifyContent: expanded ? "flex-end" : "center" }}>
         {!narrow && (
           <RailToggle
             expanded={expanded}

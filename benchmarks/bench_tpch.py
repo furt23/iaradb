@@ -1,6 +1,6 @@
-"""TPC-H benchmark: Workhouse vs DuckDB vs Polars (all reading the same Parquet files).
+"""TPC-H benchmark: Iara vs DuckDB vs Polars (all reading the same Parquet files).
 
-usage: python benchmarks/bench_tpch.py <data_dir> [--runs N] [--engines workhouse,duckdb,polars] [--queries 1,2,3]
+usage: python benchmarks/bench_tpch.py <data_dir> [--runs N] [--engines iara,duckdb,polars] [--queries 1,2,3]
                                        [--json out.json]
 """
 
@@ -21,10 +21,10 @@ from tpch_queries import QUERIES, TABLES  # noqa: E402
 # each setup returns run(query_number) -> pyarrow.Table
 
 
-def setup_workhouse(data: str):
-    import workhouse as wh
+def setup_iara(data: str):
+    import iara as ia
 
-    ctx = wh.SessionContext()
+    ctx = ia.SessionContext()
     for t in TABLES:
         ctx.register_parquet(t, os.path.join(data, t))
     return lambda q: ctx.sql(QUERIES[q]).collect().to_arrow()
@@ -53,6 +53,14 @@ def setup_polars(data: str):
     return lambda q: PQ[q](t).collect().to_arrow()
 
 
+def setup_polars_streaming(data: str):
+    from tpch_polars import QUERIES as PQ
+    from tpch_polars import tables
+
+    t = tables(data)
+    return lambda q: PQ[q](t).collect(engine="streaming").to_arrow()
+
+
 def setup_polars_sql(data: str):
     import polars as pl
 
@@ -62,14 +70,20 @@ def setup_polars_sql(data: str):
     return lambda q: ctx.execute(QUERIES[q]).collect().to_arrow()
 
 
-SETUP = {"workhouse": setup_workhouse, "duckdb": setup_duckdb, "polars": setup_polars, "polars-sql": setup_polars_sql}
+SETUP = {
+    "iara": setup_iara,
+    "duckdb": setup_duckdb,
+    "polars": setup_polars,
+    "polars-streaming": setup_polars_streaming,
+    "polars-sql": setup_polars_sql,
+}
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("data")
     ap.add_argument("--runs", type=int, default=5)
-    ap.add_argument("--engines", default="workhouse,duckdb,polars")
+    ap.add_argument("--engines", default="iara,duckdb,polars")
     ap.add_argument("--queries", default="")
     ap.add_argument("--json", default="")
     ap.add_argument("--validate", action="store_true", help="check every engine's results against DuckDB")

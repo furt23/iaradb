@@ -1,6 +1,6 @@
 "use client";
 
-import type { CellOutput, TableInfo } from "@workhouse/protocol";
+import type { CellOutput, TableInfo } from "@iara/protocol";
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 
@@ -10,7 +10,7 @@ import { catalogSchema, previewTable, tableInfo } from "@/server/actions/catalog
 import { tableFromPathname, tableHref } from "./links";
 import { dataTabsReducer, emptyDataTabs, parseDataTabs, type DataTabs, type DataTabsAction } from "./dataTabsState";
 
-const STORAGE_KEY = "workhouse.dataTabs.v1";
+const STORAGE_KEY = "iara.dataTabs.v1";
 
 export type Load<T> = { status: "loading" } | { status: "ready"; data: T } | { status: "failed"; type: string; message: string };
 export type Columns = Record<string, { name: string; type: string }[]>;

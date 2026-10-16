@@ -37,8 +37,8 @@ test("the toolbar shows the notebook's execution time", async ({ page }) => {
 test("completions, signatures and diagnostics come from the kernel", async ({ page }) => {
   await newNotebook(page, "notebooks/e2e_assist.py");
   const cell = await addCell(page, "Python");
-  await setCode(cell, "import workhouse as wh\n");
-  await page.keyboard.type("lf = wh.sc");
+  await setCode(cell, "import iara as ia\n");
+  await page.keyboard.type("lf = ia.sc");
   const options = page.locator(".cm-tooltip-autocomplete");
   await expect(options.getByText("scan_parquet")).toBeVisible();
   await page.keyboard.press("Escape");

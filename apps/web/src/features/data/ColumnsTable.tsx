@@ -7,9 +7,9 @@ import TableCell from "@mui/material/TableCell";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import Tooltip from "@mui/material/Tooltip";
-import type { TableInfo } from "@workhouse/protocol";
+import type { TableInfo } from "@iara/protocol";
 
-import { formatCount } from "@/lib/format";
+import { formatCount, typeLabel } from "@/lib/format";
 
 const MONO = "'JetBrains Mono Variable', monospace";
 const VALUE = { fontFamily: MONO, fontSize: 12, maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as const;
@@ -42,7 +42,7 @@ export function ColumnsTable({ info }: { info: TableInfo }) {
               <TableCell sx={{ color: "text.disabled", fontFamily: MONO, fontSize: 11 }}>{i + 1}</TableCell>
               <TableCell sx={{ fontWeight: 650 }}>{c.name}</TableCell>
               <TableCell>
-                <Chip label={c.type} variant="outlined" size="small" sx={{ fontFamily: MONO, fontWeight: 500 }} />
+                <Chip label={typeLabel(c.type)} title={c.type} variant="outlined" size="small" sx={{ fontFamily: MONO, fontWeight: 500 }} />
                 {c.nullable === false && <Chip label="NOT NULL" size="small" sx={{ ml: 0.75, height: 18, fontSize: 10 }} />}
               </TableCell>
               <Tooltip title={`${show(s?.min)}${approx}`} enterDelay={500}>

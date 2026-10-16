@@ -1,0 +1,58 @@
+---
+import Base from '../layouts/Base.astro';
+import BenchSummary from '../components/BenchSummary.astro';
+import Features from '../components/Features.astro';
+import Hero from '../components/Hero.astro';
+import LogoMark from '../components/LogoMark.astro';
+import QueryFlow from '../components/QueryFlow.astro';
+import SpillDiagram from '../components/SpillDiagram.astro';
+import Studio from '../components/Studio.astro';
+import TwoWays from '../components/TwoWays.astro';
+import { DOCS_URL, GITHUB_URL } from '../config';
+---
+
+<Base
+  title="Iara: a parallel query engine"
+  description="Iara is a parallel query engine for analytics on a single machine, written in Rust on Apache Arrow, with a Python DataFrame API and SQL."
+>
+  <Hero />
+  <BenchSummary />
+  <QueryFlow />
+  <TwoWays />
+  <SpillDiagram />
+  <Features />
+  <Studio />
+
+  <section class="section section--alt closing">
+    <div class="container closing__inner">
+      <LogoMark size={56} />
+      <h2>Read the docs.</h2>
+      <p class="lede">The quickstart, the DataFrame and SQL reference, Delta tables and object storage.</p>
+      <div class="closing__actions">
+        <a class="button button--primary" href={DOCS_URL}>Open the documentation</a>
+        <a class="button button--ghost" href={GITHUB_URL}>Source on GitHub</a>
+      </div>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .closing__inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+
+  .closing__inner :global(svg) {
+    margin-bottom: 20px;
+  }
+
+  .closing__actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 12px;
+    margin-top: 8px;
+  }
+</style>

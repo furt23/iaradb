@@ -1,0 +1,321 @@
+---
+import LogoMark from './LogoMark.astro';
+
+const points = [
+  'Reactive Python notebooks in the marimo format',
+  'SQL files with parameters',
+  'A data catalog with Delta table history',
+  'Query profiles and charts',
+  'Scheduled jobs with task dependencies',
+  'On-demand clusters on AWS',
+];
+
+const priorities = [
+  { n: '1', name: '1-URGENT', count: '300,343', value: 300343 },
+  { n: '2', name: '2-HIGH', count: '300,091', value: 300091 },
+  { n: '3', name: '3-MEDIUM', count: '298,723', value: 298723 },
+  { n: '4', name: '4-NOT SPECIFIED', count: '300,254', value: 300254 },
+];
+const maxCount = Math.max(...priorities.map((p) => p.value));
+const bars = priorities.map((p) => ({ ...p, width: ((p.value / maxCount) * 100).toFixed(1) }));
+
+const railIcons = [0, 1, 2, 3, 4];
+---
+
+<section class="section" id="studio">
+  <div class="container">
+    <div class="grid grid--2 studio">
+      <div class="studio__text">
+        <span class="eyebrow">Iara Studio</span>
+        <h2>A workspace for notebooks and SQL.</h2>
+        <p class="lede">Iara Studio runs in the browser. Notebooks are reactive and saved as plain .py files, so they diff and review like any other code.</p>
+
+        <ul class="features">
+          {points.map((text) => (
+            <li>
+              <svg class="check" viewBox="0 0 16 16" width="100%" role="img" aria-label="Included">
+                <path d="M3.5 8.5l3 3 6-6.5" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+              <span>{text}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div class="window" aria-hidden="true">
+        <div class="window__bar">
+          <LogoMark size={20} />
+          <span class="window__name">Iara</span>
+          <span class="window__path"> / tpch-demo</span>
+        </div>
+
+        <div class="window__body">
+          <div class="rail">
+            {railIcons.map((i) => (
+              <span class={i === 0 ? 'rail__item rail__item--active' : 'rail__item'}></span>
+            ))}
+          </div>
+
+          <div class="main">
+            <div class="cell">
+              <pre class="code-line">orders = iara.scan_parquet("data/orders")</pre>
+            </div>
+
+            <div class="cell cell--active">
+              <pre class="code-line">iara.sql("select o_orderpriority, count(*) from orders group by 1")</pre>
+
+              <div class="cell__out">
+                <table class="table">
+                  <thead>
+                    <tr>
+                      <th scope="col">o_orderpriority</th>
+                      <th scope="col" class="num">count</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {priorities.map((p) => (
+                      <tr>
+                        <td>{p.name}</td>
+                        <td class="num">{p.count}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+
+                <div class="mini-chart">
+                  {bars.map((b) => (
+                    <div class="mini-chart__row">
+                      <span class="mini-chart__label">{b.n}</span>
+                      <span class="mini-chart__track">
+                        <span class="mini-chart__bar" style={`width: ${b.width}%`}></span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .studio > * {
+    min-width: 0;
+  }
+
+  .studio__text h2 {
+    margin-top: 0;
+  }
+
+  .features {
+    list-style: none;
+    padding: 0;
+    margin: 28px 0 0;
+    display: grid;
+    gap: 12px;
+  }
+
+  .features li {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    color: var(--ink);
+  }
+
+  .check {
+    flex: 0 0 16px;
+    width: 16px;
+    height: 16px;
+    margin-top: 5px;
+  }
+
+  .check path {
+    stroke: var(--cobalt);
+  }
+
+  /* illustration of the Studio UI, paper look */
+  .window {
+    min-width: 0;
+    max-width: 100%;
+    background: var(--vellum);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+
+  .window__bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--rule);
+    font-size: 13px;
+  }
+
+  .window__name {
+    font-family: var(--font-display);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+
+  .window__path {
+    color: var(--ink-3);
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .window__body {
+    display: flex;
+    min-width: 0;
+  }
+
+  .rail {
+    flex: 0 0 44px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 0;
+    background: var(--parchment);
+    border-right: 1px solid var(--rule);
+  }
+
+  .rail__item {
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    background: var(--rule);
+  }
+
+  .rail__item--active {
+    background: var(--cobalt);
+  }
+
+  .main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px;
+  }
+
+  .cell {
+    min-width: 0;
+    padding: 10px;
+    background: var(--vellum);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+  }
+
+  .cell--active {
+    border-left: 2px solid var(--cobalt);
+  }
+
+  .code-line {
+    margin: 0;
+    padding: 8px 10px;
+    background: var(--parchment-2);
+    border-radius: 6px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--ink);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .cell__out {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    margin-top: 10px;
+    min-width: 0;
+  }
+
+  .table {
+    flex: 1 1 auto;
+    min-width: 0;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+
+  .table th,
+  .table td {
+    padding: 4px 6px;
+    text-align: left;
+    border-bottom: 1px solid var(--rule);
+    white-space: nowrap;
+  }
+
+  .table thead th {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    color: var(--ink-2);
+  }
+
+  .table tbody td {
+    color: var(--ink);
+  }
+
+  .num {
+    text-align: right;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .mini-chart {
+    flex: 0 0 38%;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding-top: 4px;
+  }
+
+  .mini-chart__row {
+    display: grid;
+    grid-template-columns: 14px minmax(0, 1fr);
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--ink-3);
+  }
+
+  .mini-chart__track {
+    min-width: 0;
+  }
+
+  .mini-chart__bar {
+    display: block;
+    height: 10px;
+    border-radius: 2px;
+    background: var(--azure);
+  }
+
+  @media (max-width: 900px) {
+    .studio {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 48px;
+    }
+  }
+
+  @media (max-width: 500px) {
+    .cell__out {
+      flex-direction: column;
+    }
+
+    .mini-chart {
+      flex: none;
+      width: 100%;
+    }
+  }
+</style>

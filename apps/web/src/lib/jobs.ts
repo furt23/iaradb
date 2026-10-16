@@ -312,5 +312,5 @@ export function jobToml(spec: JobSpec): string {
   if (spec.notify.length) cfg.notify = spec.notify.map((n) => ({ on: n.on, webhook: n.webhook }));
   // one task: the header names its target (so moving the target can retarget the file)
   const runs = spec.tasks.length === 1 ? spec.tasks[0].target : `${spec.tasks.length} tasks`;
-  return `# A Workhouse job: runs ${runs}${spec.schedule ? " on a schedule (cron, UTC)" : " by hand"}.\n${stringify(cfg)}\n`;
+  return `# A Iara job: runs ${runs}${spec.schedule ? " on a schedule (cron, UTC)" : " by hand"}.\n${stringify(cfg)}\n`;
 }

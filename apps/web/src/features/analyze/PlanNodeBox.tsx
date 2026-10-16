@@ -4,7 +4,7 @@ import Box from "@mui/material/Box";
 import LinearProgress from "@mui/material/LinearProgress";
 import { alpha } from "@mui/material/styles";
 import Typography from "@mui/material/Typography";
-import type { AnalyzedNode } from "@workhouse/protocol";
+import type { AnalyzedNode } from "@iara/protocol";
 
 import { operatorColor } from "@/features/results/operators";
 import { formatCount, formatDuration } from "@/lib/format";

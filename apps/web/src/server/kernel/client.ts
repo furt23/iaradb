@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { KernelEventName, KernelInfo, KernelMethod, ParamsOf, ResultOf } from "@workhouse/protocol";
+import type { KernelEventName, KernelInfo, KernelMethod, ParamsOf, ResultOf } from "@iara/protocol";
 
 import type { Transport } from "./transport";
 import { parseMessage } from "./wire";
@@ -78,6 +78,11 @@ export class KernelClient {
 
   get pid(): number | undefined {
     return this.transport.pid;
+  }
+
+  /** a copy of the last lines the kernel wrote to stderr */
+  get stderr(): string[] {
+    return [...this.stderrTail];
   }
 
   get busy(): boolean {

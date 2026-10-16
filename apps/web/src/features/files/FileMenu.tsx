@@ -19,6 +19,7 @@ import Menu from "@mui/material/Menu";
 import MenuItem from "@mui/material/MenuItem";
 import { useRouter } from "next/navigation";
 import { useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 
 import { AddTableDialog } from "@/features/data/AddTableDialog";
 import { NewQueryDialog } from "@/features/queries/NewQueryDialog";
@@ -54,11 +55,13 @@ function Item({ icon, label, onClick, danger }: { icon: ReactNode; label: string
 
 /** Actions on any entry of the file tree: open, rename / move, duplicate, download, delete, new items in folders. */
 export function FileMenu({ target, onClose }: { target: FileMenuTarget | null; onClose(): void }) {
+  const { t } = useTranslation();
   const { act } = useWorkbench();
   const [dialog, setDialog] = useState<Dialog>(null);
   const guard = useGuard();
   const notify = useNotify();
   const router = useRouter();
+
 
   const node = target?.node;
   const anchor = target?.anchor;
@@ -88,40 +91,41 @@ export function FileMenu({ target, onClose }: { target: FileMenuTarget | null; o
   const items: ReactNode[] = [];
   if (node?.kind === "notebook" || node?.kind === "sql") {
     items.push(
-      <Item key="open" icon={<MenuBookOutlined fontSize="small" />} label="Open" onClick={run((n) => act({ type: "open", path: n.path }, true))} />,
-      <Item key="side" icon={<VerticalSplitOutlined fontSize="small" />} label="Open in a new pane" onClick={run((n) => act({ type: "openToSide", path: n.path }, true))} />,
-      <Item key="job" icon={<EventRepeatOutlined fontSize="small" />} label="Schedule as a job…" onClick={run((n) => router.push(`/jobs?new=${encodeURIComponent(n.path)}`))} />,
+      <Item key="open" icon={<MenuBookOutlined fontSize="small" />} label={t("Open")} onClick={run((n) => act({ type: "open", path: n.path }, true))} />,
+      <Item key="side" icon={<VerticalSplitOutlined fontSize="small" />} label={t("Open in a new pane")} onClick={run((n) => act({ type: "openToSide", path: n.path }, true))} />,
+      <Item key="job" icon={<EventRepeatOutlined fontSize="small" />} label={t("Schedule as a job…")} onClick={run((n) => router.push(`/jobs?new=${encodeURIComponent(n.path)}`))} />,
       <Divider key="d1" />,
     );
   } else if (node?.kind === "dir") {
     items.push(
-      <Item key="nb" icon={<NoteAddOutlined fontSize="small" />} label="New notebook here…" onClick={open("notebook")} />,
-      <Item key="query" icon={<PostAddOutlined fontSize="small" />} label="New SQL query here…" onClick={open("query")} />,
-      <Item key="folder" icon={<CreateNewFolderOutlined fontSize="small" />} label="New folder…" onClick={open("folder")} />,
-      <Item key="table" icon={<TableChartOutlined fontSize="small" />} label="Add to the catalog…" onClick={open("table")} />,
+      <Item key="nb" icon={<NoteAddOutlined fontSize="small" />} label={t("New notebook here…")} onClick={open("notebook")} />,
+      <Item key="query" icon={<PostAddOutlined fontSize="small" />} label={t("New SQL query here…")} onClick={open("query")} />,
+      <Item key="folder" icon={<CreateNewFolderOutlined fontSize="small" />} label={t("New folder…")} onClick={open("folder")} />,
+      <Item key="table" icon={<TableChartOutlined fontSize="small" />} label={t("Add to the catalog…")} onClick={open("table")} />,
       <Divider key="d1" />,
     );
   } else if (target?.href) {
     const href = target.href;
     items.push(
-      <Item key="open" icon={<OpenInNewOutlined fontSize="small" />} label="Open" onClick={run(() => router.push(href))} />,
+      <Item key="open" icon={<OpenInNewOutlined fontSize="small" />} label={t("Open")} onClick={run(() => router.push(href))} />,
       <Divider key="d1" />,
     );
   } else if (node?.kind === "data") {
-    items.push(<Item key="table" icon={<TableChartOutlined fontSize="small" />} label="Add to the catalog…" onClick={open("table")} />, <Divider key="d1" />);
+    items.push(<Item key="table" icon={<TableChartOutlined fontSize="small" />} label={t("Add to the catalog…")} onClick={open("table")} />, <Divider key="d1" />);
   }
   items.push(
-    <Item key="rename" icon={<DriveFileRenameOutline fontSize="small" />} label="Rename / move…" onClick={open("rename")} />,
-    <Item key="dup" icon={<FileCopyOutlined fontSize="small" />} label="Duplicate" onClick={duplicate} />,
+    <Item key="rename" icon={<DriveFileRenameOutline fontSize="small" />} label={t("Rename / move…")} onClick={open("rename")} />,
+    <Item key="dup" icon={<FileCopyOutlined fontSize="small" />} label={t("Duplicate")} onClick={duplicate} />,
   );
   if (node && node.kind !== "dir" && node.kind !== "notebook") {
-    items.push(<Item key="dl" icon={<DownloadOutlined fontSize="small" />} label="Download" onClick={download} />);
+    items.push(<Item key="dl" icon={<DownloadOutlined fontSize="small" />} label={t("Download")} onClick={download} />);
   }
   items.push(
-    <Item key="copy" icon={<LinkOutlined fontSize="small" />} label="Copy path" onClick={copyPath} />,
+    <Item key="copy" icon={<LinkOutlined fontSize="small" />} label={t("Copy path")} onClick={copyPath} />,
     <Divider key="d2" />,
-    <Item key="delete" icon={<DeleteOutline fontSize="small" />} label="Delete…" onClick={open("delete")} danger />,
+    <Item key="delete" icon={<DeleteOutline fontSize="small" />} label={t("Delete…")} onClick={open("delete")} danger />,
   );
+
 
   const close = () => setDialog(null);
   return (

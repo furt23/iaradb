@@ -1,0 +1,41 @@
+---
+/**
+ * Replaces Starlight's SocialIcons in the header with two text links
+ * back to the landing site and the source repository.
+ */
+const links = [
+	{ label: 'Home', href: 'https://workhouse.dev' },
+	{ label: 'GitHub', href: 'https://github.com/furt23/workhouse_engine' },
+];
+---
+
+<nav class="header-links" aria-label="Iara links">
+	{
+		links.map(({ label, href }) => (
+			<a href={href} rel="me">
+				{label}
+			</a>
+		))
+	}
+</nav>
+
+<style>
+	@layer starlight.core {
+		.header-links {
+			display: flex;
+			align-items: center;
+			gap: 20px;
+		}
+
+		.header-links a {
+			font-size: 0.9rem;
+			color: var(--sl-color-gray-2);
+			text-decoration: none;
+			white-space: nowrap;
+		}
+
+		.header-links a:hover {
+			color: var(--sl-color-white);
+		}
+	}
+</style>

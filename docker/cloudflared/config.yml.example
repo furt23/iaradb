@@ -4,6 +4,8 @@ tunnel: <TUNNEL_ID>
 credentials-file: /etc/cloudflared/<TUNNEL_ID>.json
 
 ingress:
+  - hostname: workhouse.dev
+    service: http://site:8080
   - hostname: docs.workhouse.dev
     service: http://docs:8080
   - hostname: studio-default.workhouse.dev

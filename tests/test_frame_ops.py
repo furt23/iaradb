@@ -11,7 +11,7 @@ import duckdb
 import pyarrow as pa
 import pytest
 
-import workhouse as wh
+import iara as ia
 
 sys.path.insert(0, os.path.dirname(__file__))
 from compare import diff  # noqa: E402
@@ -44,8 +44,8 @@ def src() -> pa.Table:
     return _table()
 
 
-def _lf(t: pa.Table) -> wh.LazyFrame:
-    return wh.from_arrow(t).lazy()
+def _lf(t: pa.Table) -> ia.LazyFrame:
+    return ia.from_arrow(t).lazy()
 
 
 def _duck(t: pa.Table, sql: str) -> pa.Table:
@@ -54,7 +54,7 @@ def _duck(t: pa.Table, sql: str) -> pa.Table:
     return con.execute(sql).arrow().read_all()
 
 
-def _ours(lf: wh.LazyFrame) -> pa.Table:
+def _ours(lf: ia.LazyFrame) -> pa.Table:
     return lf.collect().to_arrow()
 
 
@@ -218,7 +218,7 @@ def test_with_row_index_on_empty(src: pa.Table) -> None:
 
 # ---- describe -------------------------------------------------------------
 def test_describe_matches_duckdb(src: pa.Table) -> None:
-    out = wh.from_arrow(src).describe().to_pydict()
+    out = ia.from_arrow(src).describe().to_pydict()
     rows = dict(zip(out["statistic"], zip(*(out[c] for c in ["i", "a"]))))
     con = duckdb.connect()
     con.register("src", src)
@@ -238,7 +238,7 @@ def test_describe_matches_duckdb(src: pa.Table) -> None:
 
 
 def test_describe_strings_and_dates(src: pa.Table) -> None:
-    out = wh.from_arrow(src).describe().to_pydict()
+    out = ia.from_arrow(src).describe().to_pydict()
     s = dict(zip(out["statistic"], out["s"]))
     assert s["count"] == str(N - sum(1 for k in range(N) if k % 9 == 0))
     assert s["mean"] is None and s["25%"] is None
@@ -247,13 +247,13 @@ def test_describe_strings_and_dates(src: pa.Table) -> None:
 
 
 def test_describe_empty(src: pa.Table) -> None:
-    out = wh.from_arrow(src.slice(0, 0)).describe().to_pydict()
+    out = ia.from_arrow(src.slice(0, 0)).describe().to_pydict()
     assert dict(zip(out["statistic"], out["i"]))["count"] == "0"
     assert dict(zip(out["statistic"], out["i"]))["mean"] is None
 
 
 def test_summary_is_describe(src: pa.Table) -> None:
-    df = wh.from_arrow(src)
+    df = ia.from_arrow(src)
     assert df.summary().to_pydict() == df.describe().to_pydict()
 
 
@@ -277,19 +277,19 @@ def test_union_by_name_matches_duckdb() -> None:
 
 
 def test_concat_diagonal_accepts_dataframes_and_empty() -> None:
-    a = wh.from_dict({"x": [1, 2]})
-    b = wh.from_dict({"y": ["p"]})
-    out = wh.concat([a, b], how="diagonal")
-    assert isinstance(out, wh.DataFrame)
+    a = ia.from_dict({"x": [1, 2]})
+    b = ia.from_dict({"y": ["p"]})
+    out = ia.concat([a, b], how="diagonal")
+    assert isinstance(out, ia.DataFrame)
     assert out.to_pydict() == {"x": [1, 2, None], "y": [None, None, "p"]}
-    empty = wh.from_arrow(pa.table({"x": pa.array([], type=pa.int64())}))
-    assert wh.concat([empty, a], how="diagonal").height == 2
+    empty = ia.from_arrow(pa.table({"x": pa.array([], type=pa.int64())}))
+    assert ia.concat([empty, a], how="diagonal").height == 2
 
 
 def test_concat_vertical_needs_same_columns() -> None:
-    a = wh.from_dict({"x": [1]})
-    assert wh.concat([a, a]).height == 2
+    a = ia.from_dict({"x": [1]})
+    assert ia.concat([a, a]).height == 2
     with pytest.raises(ValueError):
-        wh.concat([a, wh.from_dict({"y": [1]})])
+        ia.concat([a, ia.from_dict({"y": [1]})])
     with pytest.raises(ValueError):
-        wh.concat([a], how="sideways")
+        ia.concat([a], how="sideways")

@@ -23,6 +23,7 @@
 # large data, reports and local output
 examples
 benchmarks
+.data
 docs-gap
 test-briefs
 **/test-results

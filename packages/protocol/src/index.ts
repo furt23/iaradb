@@ -5,6 +5,7 @@ export * from "./query";
 export * from "./results";
 export * from "./stream";
 export * from "./workspace";
+export * from "./wrangle";
 
 /**
  * Version of the kernel protocol these types describe. Version 2: the
@@ -14,7 +15,7 @@ export * from "./workspace";
 export const PROTOCOL_VERSION = 2;
 
 /**
- * Version of the workhouse engine (Python package) this Studio runs on
+ * Version of the iara engine (Python package) this Studio runs on
  * clusters: they install the wheel published for it.
  */
 export const ENGINE_VERSION = "0.1.0";

@@ -1,4 +1,4 @@
-import type { Cell } from "@workhouse/protocol";
+import type { Cell } from "@iara/protocol";
 import { describe, expect, it } from "vitest";
 
 import { exportName, fileStem, toIpynb, toMarkdown } from "./notebookExport";
@@ -16,12 +16,12 @@ describe("toIpynb", () => {
       metadata: {
         kernelspec: { name: "python3", display_name: "Python 3", language: "python" },
         language_info: { name: "python" },
-        workhouse: { name: "tour" },
+        iara: { name: "tour" },
       },
       cells: [
         { cell_type: "markdown", id: "m1", metadata: {}, source: ["# Intro\n", "Some text"] },
         { cell_type: "code", id: "p1", execution_count: null, metadata: {}, outputs: [], source: ["import pandas as pd\n", "x = 1\n"] },
-        { cell_type: "code", id: "s1", execution_count: null, metadata: { workhouse: { kind: "sql" } }, outputs: [], source: ["%%sql\n", "select *\n", "from t"] },
+        { cell_type: "code", id: "s1", execution_count: null, metadata: { iara: { kind: "sql" } }, outputs: [], source: ["%%sql\n", "select *\n", "from t"] },
       ],
     });
   });

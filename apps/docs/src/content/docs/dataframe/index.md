@@ -6,13 +6,13 @@ description: In-memory materialized tabular dataset.
 A `DataFrame` represents a materialized result in memory, backed by Apache Arrow record batches owned by the engine. It provides fast zero-copy conversion to PyArrow, Pandas, and Polars, as well as eager chaining transformations.
 
 ```python
-import workhouse as wh
+import iara
 ```
 
 ## Quick Example
 
 ```python
->>> df = wh.from_dict({"a": [1, 2, 3], "b": [10.5, 20.0, 30.5]})
+>>> df = iara.from_dict({"a": [1, 2, 3], "b": [10.5, 20.0, 30.5]})
 >>> df.show()
 ┌─────┬──────┐
 │ a   │ b    │

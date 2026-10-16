@@ -11,6 +11,7 @@ import { NewQueryDialog } from "@/features/queries/NewQueryDialog";
 import { ParamBar } from "@/features/queries/ParamBar";
 import { joinQuery, type ParamSpecs } from "@/features/queries/queryHeader";
 import { detectParams, mergeSpecs, type ParamRaw, resolveParams } from "@/features/queries/queryParams";
+import { useTranslation } from "@/i18n";
 import { PageHeader } from "@/features/shell/PageHeader";
 
 import { SqlResult } from "./SqlResult";
@@ -19,6 +20,7 @@ import { useSqlRunner } from "./useSqlRunner";
 
 /** Scratch queries on the default cluster; one worth keeping is saved as a .sql file. */
 export function SqlWorkbench({ initialQuery, schema }: { initialQuery: string; schema: Record<string, { name: string }[]> }) {
+  const { t } = useTranslation();
   const [query, setQuery] = useState(initialQuery);
   const [saving, setSaving] = useState(false);
   const runner = useSqlRunner();
@@ -30,12 +32,12 @@ export function SqlWorkbench({ initialQuery, schema }: { initialQuery: string; s
   return (
     <Box sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       <PageHeader
-        title="SQL editor"
-        subtitle="Scratch queries over the workspace catalog, on the default cluster"
+        title={t("SQL editor")}
+        subtitle={t("Scratch queries over the workspace catalog, on the default cluster")}
         actions={
           <>
             <Button startIcon={<SaveOutlined />} onClick={() => setSaving(true)} sx={{ color: "text.secondary" }}>
-              Save as…
+              {t("Save as…")}
             </Button>
             <SqlRunButtons runner={runner} onRun={run} query={query} values={paramValues} blocked={missing.length > 0} />
           </>

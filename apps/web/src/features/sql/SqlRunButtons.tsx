@@ -5,8 +5,9 @@ import InsightsOutlined from "@mui/icons-material/InsightsOutlined";
 import PlayArrowRounded from "@mui/icons-material/PlayArrowRounded";
 import StopCircleOutlined from "@mui/icons-material/StopCircleOutlined";
 import Button from "@mui/material/Button";
-import type { QueryParams } from "@workhouse/protocol";
+import type { QueryParams } from "@iara/protocol";
 
+import { useTranslation } from "@/i18n";
 import { useAnalyze } from "@/features/analyze/useAnalyze";
 
 import type { useSqlRunner } from "./useSqlRunner";
@@ -32,25 +33,26 @@ export function SqlRunButtons({
   blocked?: boolean;
 }) {
   const { analyze, pending } = useAnalyze();
+  const { t } = useTranslation();
   return (
     <>
       <Button startIcon={<AccountTreeOutlined />} disabled={blocked} onClick={() => runner.explain(query, values)} sx={{ color: "text.secondary" }}>
-        Explain
+        {t("Explain")}
       </Button>
       <Button
         startIcon={<InsightsOutlined />}
-        aria-label="analyze query"
+        aria-label={t("analyze query")}
         onClick={() => analyze(query, source, values)}
         disabled={runner.running || pending || !query.trim() || blocked}
         sx={{ color: "text.secondary" }}
       >
-        Analyze
+        {t("Analyze")}
       </Button>
       <Button startIcon={<StopCircleOutlined />} color="error" disabled={!runner.running} onClick={runner.interrupt}>
-        Interrupt
+        {t("Interrupt")}
       </Button>
       <Button variant="contained" color="secondary" startIcon={<PlayArrowRounded />} onClick={onRun} disabled={runner.running || blocked}>
-        Run
+        {t("Run")}
       </Button>
     </>
   );

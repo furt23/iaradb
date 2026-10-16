@@ -2,6 +2,7 @@ import "server-only";
 
 import { JOB_CLUSTER, type JobSpec } from "@/lib/jobs";
 
+import { MAX_HOURS } from "../compute/instanceTypes";
 import { clusters } from "../compute/service";
 import { LOCAL_CLUSTER } from "../compute/types";
 import type { ClusterLease, ClusterRef } from "./orchestrator";
@@ -49,6 +50,8 @@ export function jobClusterLease(spec: JobSpec, runId: string, log: (t: string) =
           instanceType: spec.instanceType ?? undefined,
           // the run's own watchdog: no longer than the job's timeout (plus the boot)
           autoTerminateMinutes: Math.max(5, Math.min(spec.timeoutMinutes, 24 * 60)),
+          // the run's hard limit: its timeout plus the boot, rounded up to whole hours
+          maxHours: Math.min(MAX_HOURS, Math.ceil((spec.timeoutMinutes + 15) / 60)),
           job: runId,
         });
         made = c.id;

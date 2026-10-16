@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { PROTOCOL_VERSION, type KernelInfo } from "@workhouse/protocol";
+import { PROTOCOL_VERSION, type KernelInfo } from "@iara/protocol";
 
 import { checkProtocol } from "./bootstrap";
 import { KernelClient } from "./client";

@@ -2,11 +2,11 @@
 
 import Box from "@mui/material/Box";
 import { DataGrid, type GridColDef, type GridPaginationModel, type GridSortModel } from "@mui/x-data-grid";
-import type { CellValue, ResultMeta, ResultPage } from "@workhouse/protocol";
+import type { CellValue, ResultMeta, ResultPage } from "@iara/protocol";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useNotify } from "@/features/shell/notify";
-import { isNumericType } from "@/lib/format";
+import { isNumericType, typeLabel } from "@/lib/format";
 import { fetchResultPage } from "@/server/actions/kernels";
 
 type Row = { id: number } & Record<string, CellValue>;
@@ -84,7 +84,7 @@ export function ResultTable({ kernelKey, meta, height = 360 }: { kernelKey: stri
           renderHeader: () => (
             <Box sx={{ lineHeight: 1.15, overflow: "hidden" }}>
               <Box sx={{ fontWeight: 650, fontSize: 12.5 }}>{c.name}</Box>
-              <Box sx={{ fontSize: 10.5, color: "text.disabled", fontFamily: "var(--mono)" }}>{c.type}</Box>
+              <Box sx={{ fontSize: 10.5, color: "text.disabled" }}>{typeLabel(c.type)}</Box>
             </Box>
           ),
         } satisfies GridColDef<Row>;
@@ -114,8 +114,18 @@ export function ResultTable({ kernelKey, meta, height = 360 }: { kernelKey: stri
           border: 0,
           fontFamily: "'JetBrains Mono Variable', monospace",
           fontSize: 12.5,
+          backgroundColor: "transparent",
           "& .MuiDataGrid-columnHeaders": { fontFamily: "inherit" },
+          "& .MuiDataGrid-columnHeader, & .MuiDataGrid-filler, & .MuiDataGrid-scrollbarFiller": {
+            backgroundColor: "transparent",
+            borderTop: "1px solid",
+            borderBottom: "1px solid",
+            borderColor: "text.primary",
+          },
+          "& .MuiDataGrid-columnSeparator": { display: "none" },
           "& .MuiDataGrid-cell": { borderColor: "divider" },
+          "& .MuiDataGrid-row:hover": { backgroundColor: "action.hover" },
+          "& .MuiDataGrid-footerContainer": { borderColor: "divider" },
         }}
       />
     </Box>

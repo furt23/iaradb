@@ -9,6 +9,8 @@ import TextField from "@mui/material/TextField";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { useTranslation } from "react-i18next";
+
 import { useGuard } from "@/features/shell/notify";
 import { useWorkbench } from "@/features/workbench/WorkbenchProvider";
 import { unwrap } from "@/lib/action";
@@ -17,6 +19,7 @@ import { createQuery } from "@/server/actions/queries";
 
 /** A new `.sql` file (with `text`: the scratch query being saved), opened in the workbench. */
 export function NewQueryDialog({ open, onClose, folder = "queries", text }: { open: boolean; onClose(): void; folder?: string; text?: string }) {
+  const { t } = useTranslation();
   const [name, setName] = useState(joinPath(folder, "untitled.sql"));
   const [busy, setBusy] = useState(false);
   const { act } = useWorkbench();
@@ -39,25 +42,26 @@ export function NewQueryDialog({ open, onClose, folder = "queries", text }: { op
 
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
-      <DialogTitle>{text === undefined ? "New SQL query" : "Save the query"}</DialogTitle>
+      <DialogTitle>{text === undefined ? t("New SQL query") : t("Save the query")}</DialogTitle>
       <DialogContent>
         <TextField
           autoFocus
           fullWidth
-          label="Query path in the workspace"
+          label={t("Query path in the workspace")}
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && void create()}
-          helperText="A .sql file: versioned with the workspace, run on the default cluster"
+          helperText={t("A .sql file: versioned with the workspace, run on the default cluster")}
           sx={{ mt: 1 }}
         />
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose}>{t("Cancel")}</Button>
         <Button variant="contained" onClick={() => void create()} disabled={busy || !name.trim()}>
-          {text === undefined ? "Create" : "Save"}
+          {text === undefined ? t("Create") : t("Save")}
         </Button>
       </DialogActions>
     </Dialog>
   );
 }
+

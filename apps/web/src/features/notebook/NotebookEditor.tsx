@@ -3,7 +3,7 @@
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
-import type { CellKind, NotebookView, Variable } from "@workhouse/protocol";
+import type { CellKind, NotebookView, Variable } from "@iara/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { NotebookClusterSelect } from "@/features/compute/NotebookClusterSelect";
@@ -112,6 +112,8 @@ export function NotebookEditor({ initial, schema }: { initial: NotebookView; sch
         onRestartAndRunAll={nb.restartAndRunAll}
         onClearOutputs={() => clearOutputs(null)}
         onShowSetup={setup ? () => setSetupOpen(true) : undefined}
+        autorun={nb.autorun}
+        onAutorun={nb.setAutorun}
         onToggleSide={() => setShowSide((v) => !v)}
         sideOpen={showSide}
         onOutputs={(hide) => outputs.setHidden(hide ? new Set(cells.map((c) => c.id)) : new Set())}

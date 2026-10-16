@@ -3,7 +3,7 @@
 import Box from "@mui/material/Box";
 import ButtonBase from "@mui/material/ButtonBase";
 import Paper from "@mui/material/Paper";
-import type { Cell, CellKind, CellState, ChartSpec, QueryProfile } from "@workhouse/protocol";
+import type { Cell, CellKind, CellState, ChartSpec, QueryProfile } from "@iara/protocol";
 import { memo, useMemo, useState } from "react";
 
 import { CodeEditor } from "@/features/editor/CodeEditor";
@@ -12,6 +12,7 @@ import { LiveProgress } from "@/features/results/ProfileView";
 
 import { cellAssist } from "./cellAssist";
 import { CellHeader } from "./CellHeader";
+import { FrameList } from "./FrameList";
 import { statusColor } from "./CellStatus";
 import type { DragHandle } from "./SortableCell";
 
@@ -76,7 +77,8 @@ function CellViewImpl(p: CellViewProps) {
   const run = () => p.onRun(cell.id);
   const onChange = (code: string) => p.onEdit(cell.id, { code });
   const border = statusColor(state.status, p.stale);
-  const hasOutput = state.streams.length > 0 || (!!state.output && cell.kind !== "markdown");
+  const frames = state.frames ?? [];
+  const hasOutput = state.streams.length > 0 || frames.length > 0 || (!!state.output && cell.kind !== "markdown");
 
   return (
     <Paper
@@ -127,6 +129,7 @@ function CellViewImpl(p: CellViewProps) {
             <HiddenOutput onShow={() => p.onToggleOutput(cell.id)} />
           ) : (
             <>
+              <FrameList frames={frames} />
               <Streams streams={state.streams} />
               {state.output && state.output.type !== "markdown" && (
                 <OutputView

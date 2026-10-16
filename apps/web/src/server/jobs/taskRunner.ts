@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { CatalogChange, CellOutput, RunResult } from "@workhouse/protocol";
+import type { CatalogChange, CellOutput, RunResult } from "@iara/protocol";
 
 import { splitQuery } from "@/features/queries/queryHeader";
 import { detectParams, mergeSpecs, type ParamRaw, resolveParams } from "@/features/queries/queryParams";

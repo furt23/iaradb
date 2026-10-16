@@ -1,8 +1,9 @@
-# Workhouse on one host: the docs site and one Studio per team, reached through a Cloudflare Tunnel.
+# Iara on one host: the landing site, the docs site and one Studio per team, reached through a Cloudflare Tunnel.
 #
 # No port needs to be public. cloudflared makes an outbound connection to Cloudflare, and the
 # public hostnames (the ingress rules in docker/cloudflared/config.yml) forward to services on
 # this compose network:
+#   workhouse.dev                -> http://site:8080
 #   docs.workhouse.dev           -> http://docs:8080
 #   studio-<team>.workhouse.dev  -> http://studio-<team>:3870
 #
@@ -12,17 +13,28 @@
 # add the hostname to config.yml and route it (cloudflared tunnel route dns workhouse <hostname>),
 # then: docker compose up -d studio-<team> && docker compose restart cloudflared
 #
-# Local checks (127.0.0.1 only): docs at http://127.0.0.1:4321, the Studio at http://127.0.0.1:3870.
+# Local checks (127.0.0.1 only): the site at http://127.0.0.1:4322, docs at http://127.0.0.1:4321, the Studio at http://127.0.0.1:3870.
 # The Studio port clashes with `pnpm dev`, so stop one of them before the other.
 
-name: workhouse
+name: iara
 
 services:
+  site:
+    build:
+      context: .
+      dockerfile: docker/site.Dockerfile
+    image: iara-site:local
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:4322:8080"
+
   docs:
     build:
       context: .
       dockerfile: docker/docs.Dockerfile
-    image: workhouse-docs:local
+    image: iara-docs:local
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -33,7 +45,7 @@ services:
     build:
       context: .
       dockerfile: docker/studio.Dockerfile
-    image: workhouse-studio:local
+    image: iara-studio:local
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -56,6 +68,7 @@ services:
     volumes:
       - ./docker/cloudflared:/etc/cloudflared:ro
     depends_on:
+      - site
       - docs
       - studio-default
 

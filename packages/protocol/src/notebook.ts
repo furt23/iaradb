@@ -1,7 +1,7 @@
-/** Notebooks, cells and their outputs (see workhouse.kernel.notebook). */
+/** Notebooks, cells and their outputs (see iara.kernel.notebook). */
 
 import type { PlanNode, QueryProfile } from "./query";
-import type { ResultMeta } from "./results";
+import type { ColumnInfo, ResultMeta } from "./results";
 
 export type CellKind = "python" | "sql" | "markdown";
 
@@ -65,6 +65,15 @@ export interface StreamChunk {
   text: string;
 }
 
+/** A frame a cell made: its variable (null: the unnamed value the cell ends with), rows and columns. */
+export interface FrameInfo {
+  name: string | null;
+  kind: "DataFrame" | "LazyFrame";
+  /** a DataFrame's row count; a LazyFrame is not run, so it has none */
+  rows: number | null;
+  columns: ColumnInfo[];
+}
+
 export interface CellState {
   status: CellStatus;
   /** the cell was edited since its last run */
@@ -72,6 +81,8 @@ export interface CellState {
   output: CellOutput | null;
   streams: StreamChunk[];
   elapsed_ms: number | null;
+  /** the frames the last run made */
+  frames?: FrameInfo[];
 }
 
 export type WidgetKind = "text" | "number" | "dropdown" | "multiselect" | "checkbox" | "date";
@@ -79,7 +90,7 @@ export type WidgetKind = "text" | "number" | "dropdown" | "multiselect" | "check
 /** A widget value as JSON: text, number, choice, list of choices, boolean, or an ISO date (null: no date). */
 export type WidgetValue = string | number | boolean | string[] | null;
 
-/** A notebook widget (`wh.widgets.*`): what a cell defined. */
+/** A notebook widget (`ia.widgets.*`): what a cell defined. */
 export interface WidgetDefinition {
   name: string;
   kind: WidgetKind;

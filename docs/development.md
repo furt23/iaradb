@@ -15,13 +15,27 @@ Wheels will be published to PyPI; until then, build from source.
 
 ### Without Visual Studio
 
-<!-- TODO: verified commands -->
-Use llvm-mingw and Rust's `x86_64-pc-windows-gnullvm` target:
+Use the GNU host toolchain, which bundles a MinGW linker:
 
 ```bash
-rustup target add x86_64-pc-windows-gnullvm
-maturin develop --release --target x86_64-pc-windows-gnullvm
+rustup toolchain install stable-x86_64-pc-windows-gnu
+rustup target add x86_64-pc-windows-gnullvm --toolchain stable-x86_64-pc-windows-gnu
 ```
+
+Point the gnullvm target at the bundled MinGW in `.cargo/config.toml` (or `%USERPROFILE%\.cargo\config.toml`); replace `<user>` with your user name:
+
+```toml
+[target.x86_64-pc-windows-gnullvm]
+linker = "C:/Users/<user>/.rustup/toolchains/stable-x86_64-pc-windows-gnu/lib/rustlib/x86_64-pc-windows-gnu/bin/self-contained/x86_64-w64-mingw32-gcc.exe"
+```
+
+Build with that toolchain:
+
+```bash
+rustup run stable-x86_64-pc-windows-gnu maturin develop --release --target x86_64-pc-windows-gnullvm
+```
+
+The resulting `_iara.pyd` loads `libunwind.dll` at runtime. Copy it from an [llvm-mingw](https://github.com/mstorsjo/llvm-mingw/releases) release (`x86_64-w64-mingw32/bin/libunwind.dll`) next to `python/iara/_iara.pyd`, or put that folder on `PATH`.
 
 ## Build the engine
 
@@ -43,7 +57,7 @@ pnpm install
 pnpm dev                           # http://localhost:3870, on the example workspace
 ```
 
-Or, from an installed package, `workhouse serve <workspace>` (options: `--port`, `--dev`, `--no-browser`). `workhouse init [directory]` creates a workspace.
+Or, from an installed package, `iara serve <workspace>` (options: `--port`, `--dev`, `--no-browser`). `iara init [directory]` creates a workspace.
 
 ## Tests
 
@@ -51,25 +65,25 @@ Or, from an installed package, `workhouse serve <workspace>` (options: `--port`,
 pytest          # engine, SQL, cloud and kernel tests (tests/)
 pnpm test       # Studio unit tests (Vitest)
 pnpm e2e        # Studio browser tests (Playwright)
-cargo test -p workhouse-core
+cargo test -p iara-core
 ```
 
 ## Settings
 
 | Variable | Default | Effect |
 |---|---|---|
-| `WORKHOUSE_PROFILE` | `0` | `1` prints pipeline timings to stderr. |
-| `WORKHOUSE_BATCH_SIZE` | `8192` | Rows per batch. |
-| `WORKHOUSE_STRING_VIEW` | `1` | `0` reads Parquet strings as `Utf8`. |
-| `WORKHOUSE_AGG_PARTITIONS` | `4 x threads` | Partitions when aggregation switches to radix mode. |
-| `WORKHOUSE_MEMORY_LIMIT` | 75% of RAM on Linux, none elsewhere | Bytes, a unit (`4GB`) or a percentage (`60%`). |
-| `WORKHOUSE_SPILL_DIR` | system temp dir | Where spill files go. |
-| `WORKHOUSE_RESULT_MEMORY` | `128MB` | Notebook results larger than this are kept on disk instead of in memory. |
-| `WORKHOUSE_WORKSPACE` | | Workspace directory for the kernel and Studio. |
-| `WORKHOUSE_PYTHON` | | Python interpreter Studio uses for kernels. |
-| `WORKHOUSE_KERNEL_IDLE_MINUTES` | `60` | Idle time before Studio stops a kernel. |
+| `IARA_PROFILE` | `0` | `1` prints pipeline timings to stderr. |
+| `IARA_BATCH_SIZE` | `8192` | Rows per batch. |
+| `IARA_STRING_VIEW` | `1` | `0` reads Parquet strings as `Utf8`. |
+| `IARA_AGG_PARTITIONS` | `4 x threads` | Partitions of the shared tables a high-cardinality aggregation uses. |
+| `IARA_MEMORY_LIMIT` | 75% of RAM on Linux, none elsewhere | Bytes, a unit (`4GB`) or a percentage (`60%`). |
+| `IARA_SPILL_DIR` | system temp dir | Where spill files go. |
+| `IARA_RESULT_MEMORY` | `128MB` | Notebook results larger than this are kept on disk instead of in memory. |
+| `IARA_WORKSPACE` | | Workspace directory for the kernel and Studio. |
+| `IARA_PYTHON` | | Python interpreter Studio uses for kernels. |
+| `IARA_KERNEL_IDLE_MINUTES` | `60` | Idle time before Studio stops a kernel. |
 
-The thread count defaults to the number of cores. Change it with `wh.set_num_threads(n)` before the first query. Object store variables are in [storage-and-cloud.md](storage-and-cloud.md); Studio's are in [studio.md](studio.md).
+The thread count defaults to the number of cores. Change it with `iara.set_num_threads(n)` before the first query. Object store variables are in [storage-and-cloud.md](storage-and-cloud.md); Studio's are in [studio.md](studio.md).
 
 ## Known limits
 

@@ -5,7 +5,7 @@ import { expect, test } from "@playwright/test";
 
 import { newNotebook, newQuery, typeQuery } from "./helpers";
 
-const workspace = () => process.env.WORKHOUSE_E2E_WORKSPACE!;
+const workspace = () => process.env.IARA_E2E_WORKSPACE!;
 
 test("a job runs a query file by hand and keeps its log", async ({ page }) => {
   await newQuery(page, "queries/e2e_job.sql");
@@ -35,7 +35,7 @@ test("a job runs a query file by hand and keeps its log", async ({ page }) => {
   await page.waitForURL("**/jobs/e2e_job");
   await expect(page.getByLabel("run log")).toContainText("statement 2/2: 1 rows × 1 columns");
   // the table the job created joined the catalog
-  await expect.poll(() => fs.readFileSync(path.join(workspace(), "workhouse.toml"), "utf8")).toContain("[tables.e2e_job_out]");
+  await expect.poll(() => fs.readFileSync(path.join(workspace(), "iara.toml"), "utf8")).toContain("[tables.e2e_job_out]");
 });
 
 test("a notebook is scheduled from its menu in the file tree", async ({ page }) => {

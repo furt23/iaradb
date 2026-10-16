@@ -14,7 +14,7 @@ next-env.d.ts
 /apps/web/test-results/
 /apps/web/playwright-report/
 /examples/workspace/data/
-/examples/workspace/.workhouse/
+/examples/workspace/.iara/
 /examples/workspace/exports/
 /apps/web/.next-e2e/
 bench_ec2.json
@@ -29,3 +29,4 @@ docker/*.env
 !docker/*.env.example
 docker/cloudflared/*
 !docker/cloudflared/config.yml.example
+.data

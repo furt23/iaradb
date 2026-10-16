@@ -1,7 +1,7 @@
 "use client";
 
 import Box from "@mui/material/Box";
-import type { AnalyzedNode } from "@workhouse/protocol";
+import type { AnalyzedNode } from "@iara/protocol";
 import { useMemo } from "react";
 
 import { layoutTree } from "./layout";

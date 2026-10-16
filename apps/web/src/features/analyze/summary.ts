@@ -1,4 +1,4 @@
-import type { QueryAnalysis } from "@workhouse/protocol";
+import type { QueryAnalysis } from "@iara/protocol";
 
 import { formatBytes, formatCount, formatDuration } from "@/lib/format";
 

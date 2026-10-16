@@ -4,7 +4,7 @@ import Box from "@mui/material/Box";
 import LinearProgress from "@mui/material/LinearProgress";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
-import type { PipelineStats, QueryProfile } from "@workhouse/protocol";
+import type { PipelineStats, QueryProfile } from "@iara/protocol";
 
 import { formatBytes, formatCompact, formatCount, formatDuration } from "@/lib/format";
 
@@ -56,7 +56,7 @@ function PipelineRow({ p, total, index }: { p: PipelineStats; total: number; ind
         <LinearProgress
           variant="determinate"
           value={p.finished ? share : (p.morsels_done / Math.max(1, p.morsels_total)) * 100}
-          color={p.finished ? "secondary" : "primary"}
+          color={p.finished ? "primary" : "ochre"}
           sx={{ height: 6, borderRadius: 3 }}
         />
       </Box>

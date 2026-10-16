@@ -13,11 +13,12 @@ DataFrame.lazy() -> LazyFrame
 
 #### Example
 ```python
->>> import workhouse as wh
->>> df = wh.from_dict({"a": [1, 2, 3]})
->>> lf = df.lazy().filter(wh.col("a") > 1)
+>>> import iara
+>>> from iara import functions as F
+>>> df = iara.from_dict({"a": [1, 2, 3]})
+>>> lf = df.lazy().filter(F.col("a") > 1)
 >>> type(lf)
-<class 'workhouse.LazyFrame'>
+<class 'iara.LazyFrame'>
 ```
 
 ---
@@ -37,8 +38,8 @@ Every transformation available on `LazyFrame` is also provided directly on `Data
 
 #### Example
 ```python
->>> df = wh.from_dict({"val": [10, 20, 30]})
->>> df.filter(wh.col("val") > 15).show()
+>>> df = iara.from_dict({"val": [10, 20, 30]})
+>>> df.filter(F.col("val") > 15).show()
 ┌─────┐
 │ val │
 │ i64 │

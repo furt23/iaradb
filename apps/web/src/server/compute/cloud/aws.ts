@@ -31,6 +31,8 @@ import { TAG_CLUSTER, TAG_COMPONENT, type CloudApi, type InstanceStatus, type La
 import { rolePolicy, TRUST_POLICY } from "./policies";
 import { roleName, securityGroupName, teamId, teamTags } from "./team";
 
+/** launch errors after which a spot request is retried on-demand */
+const NO_SPOT_CAPACITY = ["InsufficientInstanceCapacity", "SpotMaxPriceTooLow", "MaxSpotInstanceCountExceeded", "InsufficientCapacity", "UnfulfillableCapacity"];
 const AMI_PARAM = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64";
 
 function errorName(e: unknown): string {
@@ -48,7 +50,7 @@ async function retry<T>(fn: () => Promise<T>, retryOn: string[], attempts = 12, 
   }
 }
 
-/** Tags of the shared resources of this Studio's team (security group, role); throws on an invalid `WORKHOUSE_TEAM`. */
+/** Tags of the shared resources of this Studio's team (security group, role); throws on an invalid `IARA_TEAM`. */
 function sharedTags(team: string | null): Tag[] {
   return [{ Key: TAG_COMPONENT, Value: "clusters" }, ...teamTags(team)];
 }
@@ -76,7 +78,7 @@ export class AwsCloud implements CloudApi {
   async artifactsBucket(): Promise<string> {
     if (this.bucket) return this.bucket;
     const account = (await this.sts.send(new GetCallerIdentityCommand({}))).Account;
-    const name = `workhouse-artifacts-${account}-${this.region}`;
+    const name = `iara-artifacts-${account}-${this.region}`;
     try {
       await this.s3.send(new HeadBucketCommand({ Bucket: name }));
     } catch (e) {
@@ -121,7 +123,7 @@ export class AwsCloud implements CloudApi {
       const made = await this.ec2.send(
         new CreateSecurityGroupCommand({
           GroupName: name,
-          Description: "Workhouse clusters: SSH from the Studio only",
+          Description: "Iara clusters: SSH from the Studio only",
           VpcId: vpc,
           TagSpecifications: [{ ResourceType: "security-group", Tags: sharedTags(team) }],
         }),
@@ -132,7 +134,7 @@ export class AwsCloud implements CloudApi {
     const ssh = (group.IpPermissions ?? []).filter((p) => p.FromPort === 22 && p.ToPort === 22);
     const current = new Set(ssh.flatMap((p) => (p.IpRanges ?? []).map((r) => r.CidrIp!)));
     const wanted = new Set(cidrs);
-    const rule = (list: string[]): IpPermission[] => [{ IpProtocol: "tcp", FromPort: 22, ToPort: 22, IpRanges: list.map((c) => ({ CidrIp: c, Description: "workhouse studio" })) }];
+    const rule = (list: string[]): IpPermission[] => [{ IpProtocol: "tcp", FromPort: 22, ToPort: 22, IpRanges: list.map((c) => ({ CidrIp: c, Description: "iara studio" })) }];
     const stale = [...current].filter((c) => !wanted.has(c));
     const missing = [...wanted].filter((c) => !current.has(c));
     if (stale.length) await this.ec2.send(new RevokeSecurityGroupIngressCommand({ GroupId: id, IpPermissions: rule(stale) }));
@@ -150,7 +152,7 @@ export class AwsCloud implements CloudApi {
       await this.iam.send(new GetRoleCommand({ RoleName: role }));
     } catch (e) {
       if (errorName(e) !== "NoSuchEntityException") throw e;
-      await this.iam.send(new CreateRoleCommand({ RoleName: role, Path: "/workhouse/", AssumeRolePolicyDocument: JSON.stringify(TRUST_POLICY), Tags: tags }));
+      await this.iam.send(new CreateRoleCommand({ RoleName: role, Path: "/iara/", AssumeRolePolicyDocument: JSON.stringify(TRUST_POLICY), Tags: tags }));
       created = true;
     }
     await this.iam.send(new PutRolePolicyCommand({ RoleName: role, PolicyName: "data-access", PolicyDocument: JSON.stringify(rolePolicy(artifacts, dataBuckets)) }));
@@ -158,7 +160,7 @@ export class AwsCloud implements CloudApi {
       await this.iam.send(new GetInstanceProfileCommand({ InstanceProfileName: role }));
     } catch (e) {
       if (errorName(e) !== "NoSuchEntityException") throw e;
-      await this.iam.send(new CreateInstanceProfileCommand({ InstanceProfileName: role, Path: "/workhouse/", Tags: tags }));
+      await this.iam.send(new CreateInstanceProfileCommand({ InstanceProfileName: role, Path: "/iara/", Tags: tags }));
       await this.iam.send(new AddRoleToInstanceProfileCommand({ InstanceProfileName: role, RoleName: role }));
       created = true;
     }
@@ -167,15 +169,17 @@ export class AwsCloud implements CloudApi {
     return role;
   }
 
-  async launch(spec: LaunchSpec): Promise<string> {
+  async launch(spec: LaunchSpec): Promise<{ instanceId: string; spot: boolean }> {
     const ami = (await this.ssm.send(new GetParameterCommand({ Name: AMI_PARAM }))).Parameter?.Value;
-    const tags: Tag[] = [
-      { Key: "Name", Value: `workhouse-${spec.clusterName}` },
+    const iaraTags: Tag[] = [
+      { Key: "Name", Value: `iara-${spec.clusterName}` },
       { Key: TAG_CLUSTER, Value: spec.clusterId },
       { Key: TAG_COMPONENT, Value: "cluster" },
       ...teamTags(teamId()),
     ];
-    const run = () =>
+    const taken = new Set(iaraTags.map((t) => t.Key));
+    const tags = [...iaraTags, ...Object.entries(spec.tags).filter(([k]) => !taken.has(k)).map(([Key, Value]) => ({ Key, Value }))];
+    const run = (spot: boolean) =>
       this.ec2.send(
         new RunInstancesCommand({
           ImageId: ami,
@@ -189,12 +193,21 @@ export class AwsCloud implements CloudApi {
           BlockDeviceMappings: [{ DeviceName: "/dev/xvda", Ebs: { VolumeSize: spec.volumeGb, VolumeType: "gp3", DeleteOnTermination: true, Encrypted: true } }],
           UserData: Buffer.from(spec.userData).toString("base64"),
           TagSpecifications: ["instance", "volume", "network-interface"].map((t) => ({ ResourceType: t as never, Tags: tags })),
+          ...(spot ? { InstanceMarketOptions: { MarketType: "spot" as const, SpotOptions: { SpotInstanceType: "one-time" as const, InstanceInterruptionBehavior: "terminate" as const } } } : {}),
         }),
       );
-    const out = await retry(run, ["InvalidParameterValue"]);
-    const id = out.Instances?.[0]?.InstanceId;
-    if (!id) throw new Error("EC2 did not return an instance");
-    return id;
+    let spot = spec.spot;
+    let out;
+    try {
+      out = await retry(() => run(spot), ["InvalidParameterValue"]);
+    } catch (e) {
+      if (!spot || !NO_SPOT_CAPACITY.includes(errorName(e))) throw e;
+      spot = false; // no spot capacity: an on-demand machine instead
+      out = await retry(() => run(false), ["InvalidParameterValue"]);
+    }
+    const instanceId = out.Instances?.[0]?.InstanceId;
+    if (!instanceId) throw new Error("EC2 did not return an instance");
+    return { instanceId, spot };
   }
 
   async describe(instanceIds: string[]): Promise<Record<string, InstanceStatus>> {
@@ -203,7 +216,7 @@ export class AwsCloud implements CloudApi {
     try {
       const res = await this.ec2.send(new DescribeInstancesCommand({ InstanceIds: instanceIds }));
       for (const r of res.Reservations ?? []) {
-        for (const i of r.Instances ?? []) out[i.InstanceId!] = { state: i.State?.Name ?? "unknown", publicIp: i.PublicIpAddress };
+        for (const i of r.Instances ?? []) out[i.InstanceId!] = { state: i.State?.Name ?? "unknown", publicIp: i.PublicIpAddress, reason: i.StateReason?.Code };
       }
     } catch (e) {
       if (errorName(e) !== "InvalidInstanceID.NotFound") throw e;
@@ -222,7 +235,7 @@ export class AwsCloud implements CloudApi {
   }
 
   async studioCidrs(): Promise<string[]> {
-    const fixed = process.env.WORKHOUSE_STUDIO_CIDRS;
+    const fixed = process.env.IARA_STUDIO_CIDRS;
     if (fixed) return fixed.split(",").map((c) => c.trim()).filter(Boolean);
     const ip = (await (await fetch("https://checkip.amazonaws.com", { signal: AbortSignal.timeout(10_000) })).text()).trim();
     if (!/^\d+\.\d+\.\d+\.\d+$/.test(ip)) throw new Error("could not find this machine's public address");

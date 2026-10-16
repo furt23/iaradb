@@ -13,8 +13,8 @@ DataFrame.to_arrow() -> pyarrow.Table
 
 #### Example
 ```python
->>> import workhouse as wh
->>> df = wh.from_dict({"a": [1, 2], "b": [3.0, 4.0]})
+>>> import iara
+>>> df = iara.from_dict({"a": [1, 2], "b": [3.0, 4.0]})
 >>> table = df.to_arrow()
 >>> type(table)
 <class 'pyarrow.lib.Table'>
@@ -117,7 +117,7 @@ DataFrame.item() -> Any
 
 #### Example
 ```python
->>> count_df = wh.from_dict({"cnt": [42]})
+>>> count_df = iara.from_dict({"cnt": [42]})
 >>> count_df.item()
 42
 ```

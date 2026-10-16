@@ -4,10 +4,10 @@ import fs from "node:fs";
 import path from "node:path";
 
 /**
- * Studio configuration, from the environment set by `workhouse serve`:
+ * Studio configuration, from the environment set by `iara serve`:
  *
- * - `WORKHOUSE_WORKSPACE`: workspace root (default: the repository's example workspace)
- * - `WORKHOUSE_PYTHON`: Python interpreter with `workhouse` installed
+ * - `IARA_WORKSPACE`: workspace root (default: the repository's example workspace)
+ * - `IARA_PYTHON`: Python interpreter with `iara` installed
  *   (default: the repository's `.venv`, else `python` on PATH)
  */
 export interface StudioConfig {
@@ -40,11 +40,11 @@ function defaultPython(repo: string | null): string {
 function loadConfig(): StudioConfig {
   const repo = findUp(process.cwd(), "pyproject.toml");
   const example = repo ? path.join(repo, "examples", "workspace") : null;
-  const workspace = process.env.WORKHOUSE_WORKSPACE || (example && fs.existsSync(example) ? example : process.cwd());
+  const workspace = process.env.IARA_WORKSPACE || (example && fs.existsSync(example) ? example : process.cwd());
   return {
     workspace: path.resolve(workspace),
-    python: process.env.WORKHOUSE_PYTHON || defaultPython(repo),
-    idleMinutes: Number(process.env.WORKHOUSE_KERNEL_IDLE_MINUTES || 60),
+    python: process.env.IARA_PYTHON || defaultPython(repo),
+    idleMinutes: Number(process.env.IARA_KERNEL_IDLE_MINUTES || 60),
   };
 }
 

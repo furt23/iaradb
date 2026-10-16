@@ -20,13 +20,13 @@ import {
 import { discoverTables } from "./discovery";
 import { appendConfigEntry, readConfigText, writeConfigText } from "./sources";
 
-/** `read` over workhouse.toml's text (empty when there is none), a broken file reported to the catalog panel. */
+/** `read` over iara.toml's text (empty when there is none), a broken file reported to the catalog panel. */
 async function catalogOf<T>(read: (text: string) => T | Promise<T>): Promise<T> {
   const text = (await readConfigText()) ?? "";
   try {
     return await read(text);
   } catch (e) {
-    throw new Error(`workhouse.toml could not be read: ${(e as Error).message}`);
+    throw new Error(`iara.toml could not be read: ${(e as Error).message}`);
   }
 }
 
@@ -50,17 +50,17 @@ async function readCatalog(): Promise<{ tables: CatalogTable[]; schemas: Catalog
   });
 }
 
-/** The tables of workhouse.toml plus those discovered under schema locations: no kernel (nor cluster) needed. */
+/** The tables of iara.toml plus those discovered under schema locations: no kernel (nor cluster) needed. */
 export async function catalogTables(): Promise<CatalogTable[]> {
   return (await readCatalog()).tables;
 }
 
-/** The schemas of workhouse.toml: `main` first, then declared and used ones. */
+/** The schemas of iara.toml: `main` first, then declared and used ones. */
 export async function catalogSchemas(): Promise<CatalogSchema[]> {
   return (await readCatalog()).schemas;
 }
 
-/** Remove a table from workhouse.toml (its data is not touched). */
+/** Remove a table from iara.toml (its data is not touched). */
 export async function removeCatalogTable(name: string): Promise<void> {
   const found = (await catalogTables()).find((t) => t.name === displayName(parseTableName(name) ?? { schema: MAIN_SCHEMA, table: name }));
   if (found?.discovered) {
@@ -70,11 +70,11 @@ export async function removeCatalogTable(name: string): Promise<void> {
   }
   const text = await readConfigText();
   const next = text === null ? null : removeTableSection(text, name);
-  if (next === null) throw new Error(`workhouse.toml has no [tables.${name}] section`);
+  if (next === null) throw new Error(`iara.toml has no [tables.${name}] section`);
   await writeConfigText(next);
 }
 
-/** Declare a schema in workhouse.toml. */
+/** Declare a schema in iara.toml. */
 export async function addCatalogSchema(name: string, description: string | null, location?: string | null): Promise<void> {
   if (!isIdentifier(name)) throw new Error("schema names are letters, digits and underscores");
   const schema = name.toLowerCase();
@@ -85,7 +85,7 @@ export async function addCatalogSchema(name: string, description: string | null,
   await appendConfigEntry(schemaEntry(schema, description, place));
 }
 
-/** Remove an empty schema's declaration from workhouse.toml. */
+/** Remove an empty schema's declaration from iara.toml. */
 export async function removeCatalogSchema(name: string): Promise<void> {
   const schema = name.toLowerCase();
   if (schema === MAIN_SCHEMA) throw new Error("main cannot be removed");
@@ -98,6 +98,6 @@ export async function removeCatalogSchema(name: string): Promise<void> {
   if (found.length) throw new Error(`schema ${schema} has ${found.length} ${found.length === 1 ? "table" : "tables"}: remove them first`);
   const text = (await readConfigText()) ?? "";
   const next = removeSchemaSection(text, schema);
-  if (next === null) throw new Error(`schema ${schema} is not declared in workhouse.toml`);
+  if (next === null) throw new Error(`schema ${schema} is not declared in iara.toml`);
   await writeConfigText(next);
 }

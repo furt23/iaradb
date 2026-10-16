@@ -8,10 +8,10 @@ from typing import Any
 
 import pytest
 
-from workhouse.kernel.analyze import analyze_query
-from workhouse.kernel.history import History
-from workhouse.kernel.runtime.interrupt import Interruptor
-from workhouse.kernel.session import KernelSession
+from iara.kernel.analyze import analyze_query
+from iara.kernel.history import History
+from iara.kernel.runtime.interrupt import Interruptor
+from iara.kernel.session import KernelSession
 
 GROUPED = "select grp, count(*) as n from sales where amount > 400 group by grp order by grp"
 

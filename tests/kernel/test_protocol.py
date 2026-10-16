@@ -13,13 +13,13 @@ from typing import Any
 
 import pytest
 
-from workhouse.kernel import PROTOCOL_VERSION
+from iara.kernel import PROTOCOL_VERSION
 
 
 class KernelProcess:
     def __init__(self, workspace: Path) -> None:
         self.proc = subprocess.Popen(
-            [sys.executable, "-m", "workhouse.kernel", "--workspace", str(workspace)],
+            [sys.executable, "-m", "iara.kernel", "--workspace", str(workspace)],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

@@ -16,6 +16,7 @@ import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { useState, type ReactNode } from "react";
 
+import { useTranslation } from "@/i18n";
 import { KernelMenu } from "./KernelMenu";
 import { RunTimer, type RunTimerProps } from "./RunTimer";
 
@@ -32,6 +33,8 @@ export interface NotebookToolbarProps {
   onClearOutputs(): void;
   /** opens the setup code (absent: the notebook has none) */
   onShowSetup?(): void;
+  autorun: boolean;
+  onAutorun(on: boolean): void;
   /** the side panel: outline and variables */
   onToggleSide(): void;
   sideOpen: boolean;
@@ -57,6 +60,7 @@ function ToolButton({ label, icon, sx, ...props }: { label: string; icon: ReactN
 }
 
 function MoreMenu({ onOutputs }: Pick<NotebookToolbarProps, "onOutputs">) {
+  const { t } = useTranslation();
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const run = (fn: () => void) => () => {
     setAnchor(null);
@@ -64,7 +68,7 @@ function MoreMenu({ onOutputs }: Pick<NotebookToolbarProps, "onOutputs">) {
   };
   return (
     <>
-      <IconButton aria-label="notebook actions" onClick={(e) => setAnchor(e.currentTarget)} sx={{ color: "text.secondary" }}>
+      <IconButton aria-label={t("notebook actions")} onClick={(e) => setAnchor(e.currentTarget)} sx={{ color: "text.secondary" }}>
         <MoreVert fontSize="small" />
       </IconButton>
       <Menu anchorEl={anchor} open={anchor !== null} onClose={() => setAnchor(null)}>
@@ -72,13 +76,13 @@ function MoreMenu({ onOutputs }: Pick<NotebookToolbarProps, "onOutputs">) {
           <ListItemIcon>
             <UnfoldLess fontSize="small" />
           </ListItemIcon>
-          Hide all outputs
+          {t("Hide all outputs")}
         </MenuItem>
         <MenuItem onClick={run(() => onOutputs(false))}>
           <ListItemIcon>
             <UnfoldMore fontSize="small" />
           </ListItemIcon>
-          Show all outputs
+          {t("Show all outputs")}
         </MenuItem>
       </Menu>
     </>
@@ -86,6 +90,7 @@ function MoreMenu({ onOutputs }: Pick<NotebookToolbarProps, "onOutputs">) {
 }
 
 export function NotebookToolbar(p: NotebookToolbarProps) {
+  const { t } = useTranslation();
   const parts = p.path.split("/");
   return (
     <Box
@@ -117,14 +122,14 @@ export function NotebookToolbar(p: NotebookToolbarProps) {
         </Box>
       </Typography>
       <Typography variant="body2" className="save-state" sx={{ color: p.dirty ? "warning.main" : "text.disabled", flexShrink: 0 }}>
-        {p.dirty ? "unsaved" : "saved"}
+        {p.dirty ? t("unsaved") : t("saved")}
       </Typography>
       {p.fileMenu}
       <RunTimer {...p.timer} />
       <Box sx={{ flex: 1 }} />
       {p.cluster}
-      <ToolButton label="Run all" icon={<PlayCircleOutline />} onClick={p.onRunAll} disabled={p.running} variant="contained" color="secondary" />
-      <ToolButton label="Interrupt" icon={<StopCircleOutlined />} onClick={p.onInterrupt} disabled={!p.running} color="error" />
+      <ToolButton label={t("Run all")} icon={<PlayCircleOutline />} onClick={p.onRunAll} disabled={p.running} variant="contained" color="secondary" />
+      <ToolButton label={t("Interrupt")} icon={<StopCircleOutlined />} onClick={p.onInterrupt} disabled={!p.running} color="error" />
       <KernelMenu
         running={p.running}
         onInterrupt={p.onInterrupt}
@@ -133,8 +138,10 @@ export function NotebookToolbar(p: NotebookToolbarProps) {
         onRestartAndRunAll={p.onRestartAndRunAll}
         onClearOutputs={p.onClearOutputs}
         onShowSetup={p.onShowSetup}
+        autorun={p.autorun}
+        onAutorun={p.onAutorun}
       />
-      <ToolButton label="Outline" icon={<ViewSidebarOutlined />} onClick={p.onToggleSide} sx={{ color: p.sideOpen ? "secondary.main" : "text.secondary" }} />
+      <ToolButton label={t("Outline")} icon={<ViewSidebarOutlined />} onClick={p.onToggleSide} sx={{ color: p.sideOpen ? "secondary.main" : "text.secondary" }} />
       <MoreMenu onOutputs={p.onOutputs} />
     </Box>
   );

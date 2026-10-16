@@ -1,6 +1,6 @@
 "use server";
 
-import type { ExplainResult, HistoryEntry, QueryParams } from "@workhouse/protocol";
+import type { ExplainResult, HistoryEntry, QueryParams } from "@iara/protocol";
 
 import { requireUser } from "../auth/session";
 import { kernels } from "../kernel/manager";

@@ -12,7 +12,7 @@ export function localLauncher(cfg: StudioConfig): Launcher {
     start: () =>
       processTransport({
         command: cfg.python,
-        args: ["-m", "workhouse.kernel", "--workspace", cfg.workspace],
+        args: ["-m", "iara.kernel", "--workspace", cfg.workspace],
         cwd: cfg.workspace,
         env: { ...process.env, PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8" },
       }),

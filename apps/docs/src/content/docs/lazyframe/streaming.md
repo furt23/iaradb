@@ -29,9 +29,10 @@ LazyFrame.sink_parquet(
 
 #### Example
 ```python
->>> import workhouse as wh
->>> lf = wh.scan_parquet("data/input.parquet")
->>> total_rows = lf.filter(wh.col("active") == True).sink_parquet("data/active.parquet")
+>>> import iara
+>>> from iara import functions as F
+>>> lf = iara.scan_parquet("data/input.parquet")
+>>> total_rows = lf.filter(F.col("active") == True).sink_parquet("data/active.parquet")
 >>> print(f"Wrote {total_rows} rows to output.")
 ```
 

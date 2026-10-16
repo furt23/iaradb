@@ -53,9 +53,9 @@ export class Scheduler {
   }
 }
 
-const g = globalThis as { __workhouseScheduler?: Scheduler };
+const g = globalThis as { __iaraScheduler?: Scheduler };
 
 /** Started once per server (see instrumentation.ts). */
 export function startScheduler(): Scheduler {
-  return (g.__workhouseScheduler ??= new Scheduler().start());
+  return (g.__iaraScheduler ??= new Scheduler().start());
 }

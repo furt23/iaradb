@@ -14,6 +14,7 @@ import Typography from "@mui/material/Typography";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { useTranslation } from "@/i18n";
 import { useGuard } from "@/features/shell/notify";
 import { SidePanelHeader } from "@/features/shell/SidePanelHeader";
 import { unwrap } from "@/lib/action";
@@ -47,7 +48,7 @@ export function CatalogPanel({ tables, schemas = [], error }: { tables: CatalogT
   const active = tableFromPathname(usePathname());
   const names = tables.map((t) => t.name).join("\n");
 
-  // tables removed from workhouse.toml lose their tabs
+  // tables removed from iara.toml lose their tabs
   useEffect(() => {
     if (!error) act({ type: "keep", names: names ? names.split("\n") : [] });
   }, [names, error, act]);
@@ -69,30 +70,31 @@ export function CatalogPanel({ tables, schemas = [], error }: { tables: CatalogT
   const shown = tables.filter((t) => matches(t, filter));
   // while filtering, a schema without a matching table is hidden
   const groups = schemaGroups(schemas, shown).filter((g) => !filter.trim() || g.tables.length > 0);
+  const { t } = useTranslation();
   return (
     <>
       <SidePanelHeader
-        overline="Data"
-        title="Catalog"
+        overline={t("Data")}
+        title={t("Catalog")}
         actions={
           <>
-            <Tooltip title="Add a table">
-              <IconButton onClick={() => setAdding(true)} aria-label="add table">
+            <Tooltip title={t("Add a table")}>
+              <IconButton onClick={() => setAdding(true)} aria-label={t("add table")}>
                 <Add fontSize="small" />
               </IconButton>
             </Tooltip>
-            <Tooltip title="New schema…">
-              <IconButton onClick={() => setCreating(true)} aria-label="new schema">
+            <Tooltip title={t("New schema…")}>
+              <IconButton onClick={() => setCreating(true)} aria-label={t("new schema")}>
                 <CreateNewFolderOutlined fontSize="small" />
               </IconButton>
             </Tooltip>
-            <Tooltip title="Refresh schema locations">
-              <IconButton onClick={refresh} aria-label="refresh schema locations">
+            <Tooltip title={t("Refresh schema locations")}>
+              <IconButton onClick={refresh} aria-label={t("refresh schema locations")}>
                 <FolderSync fontSize="small" />
               </IconButton>
             </Tooltip>
-            <Tooltip title="Reload workhouse.toml">
-              <IconButton onClick={reload} aria-label="reload catalog">
+            <Tooltip title={t("Reload iara.toml")}>
+              <IconButton onClick={reload} aria-label={t("reload catalog")}>
                 <Refresh fontSize="small" />
               </IconButton>
             </Tooltip>
@@ -103,12 +105,12 @@ export function CatalogPanel({ tables, schemas = [], error }: { tables: CatalogT
         <TextField
           size="small"
           fullWidth
-          placeholder="Filter tables"
+          placeholder={t("Filter tables")}
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           onKeyDown={(e) => e.key === "Escape" && setFilter("")}
           slotProps={{
-            htmlInput: { "aria-label": "filter tables" },
+            htmlInput: { "aria-label": t("filter tables") },
             input: {
               startAdornment: (
                 <InputAdornment position="start">
@@ -129,12 +131,12 @@ export function CatalogPanel({ tables, schemas = [], error }: { tables: CatalogT
         <CatalogTree groups={groups} active={active} />
         {!error && tables.length > 0 && shown.length === 0 && (
           <Typography variant="body2" sx={{ color: "text.secondary", p: 1.5 }}>
-            No table matches “{filter}”.
+            {t("No table matches “{{filter}}”.", { filter })}
           </Typography>
         )}
         {!error && tables.length === 0 && (
           <Typography variant="body2" sx={{ color: "text.secondary", p: 1.5 }}>
-            No tables yet: add a Parquet or CSV dataset to query it by name.
+            {t("No tables yet: add a Parquet or CSV dataset to query it by name.")}
           </Typography>
         )}
       </Box>

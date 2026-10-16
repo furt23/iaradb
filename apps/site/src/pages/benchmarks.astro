@@ -1,0 +1,172 @@
+---
+import Base from '../layouts/Base.astro';
+import BenchBars from '../components/BenchBars.astro';
+import { GITHUB_URL } from '../config';
+
+const fmt = (v: number, unit: string) => (unit === 'ms' ? Math.round(v).toString() : v.toFixed(v < 10 ? 2 : 1));
+
+const totals = [
+  { label: 'TPC-H SF10, sum of 22 queries', unit: 's', values: [5.88, 7.69, 8.11] },
+  { label: 'TPC-H SF10, geometric mean', unit: 'ms', values: [224, 293, 248] },
+  { label: 'TPC-H SF100, sum of 22 queries', unit: 's', values: [60.6, 82.1, 90.0] },
+  { label: 'TPC-H SF100, geometric mean', unit: 's', values: [2.2, 3.07, 2.51] },
+  { label: 'ClickBench, sum of 32 queries', unit: 's', values: [17.6, 18.0, 20.3] },
+  { label: 'ClickBench, geometric mean', unit: 'ms', values: [229, 338, 259] },
+];
+
+// [query, Iara ms, DuckDB ms, Polars ms] at SF100
+const queries: [string, number, number, number][] = [
+  ['Q1', 3730, 3542, 4766],
+  ['Q2', 735, 912, 368],
+  ['Q3', 2410, 3350, 2849],
+  ['Q4', 1137, 1998, 1464],
+  ['Q5', 3250, 4148, 3288],
+  ['Q6', 1248, 1759, 1270],
+  ['Q7', 3310, 4432, 6857],
+  ['Q8', 3880, 5492, 3848],
+  ['Q9', 6173, 8382, 6617],
+  ['Q10', 3403, 3870, 3771],
+  ['Q11', 615, 892, 733],
+  ['Q12', 1109, 2243, 1278],
+  ['Q13', 3250, 4387, 4499],
+  ['Q14', 2032, 2813, 2041],
+  ['Q15', 1995, 2859, 2097],
+  ['Q16', 807, 1156, 785],
+  ['Q17', 3244, 4495, 1865],
+  ['Q18', 5731, 5585, 4459],
+  ['Q19', 2960, 3789, 2733],
+  ['Q20', 2747, 3747, 4200],
+  ['Q21', 6152, 10885, 29426],
+  ['Q22', 637, 1334, 779],
+];
+const perQuery = queries.map(([label, iara, duckdb, polars]) => ({ label, iara, duckdb, polars }));
+---
+
+<Base
+  title="Benchmarks · Iara"
+  description="TPC-H and ClickBench results for Iara, DuckDB and Polars."
+>
+  <section class="section">
+    <div class="container page">
+      <header class="page-head">
+        <span class="eyebrow">Benchmarks</span>
+        <h1>Benchmarks</h1>
+        <p class="lede">
+          TPC-H (all 22 queries) and ClickBench run on the same Parquet files in Iara, DuckDB 1.5.6 and Polars 2.0.0:
+          TPC-H data comes from tpchgen-cli with DECIMAL(15,2) prices, and ClickBench uses the single-file hits.parquet.
+          Each figure is the median wall-clock time after a warm-up run, and TPC-H results are checked against DuckDB.
+          The machine is an AWS m7i.4xlarge (16 vCPUs, Xeon 8488C, 64 GB RAM) on Amazon Linux 2023, with Python 3.12
+          and the engine built with <code>-C target-cpu=native</code>.
+        </p>
+      </header>
+
+      <h2>Totals</h2>
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th scope="col">Metric</th>
+              <th scope="col" class="num">Iara</th>
+              <th scope="col" class="num">DuckDB</th>
+              <th scope="col" class="num">Polars</th>
+            </tr>
+          </thead>
+          <tbody>
+            {totals.map((t) => {
+              const best = Math.min(...t.values);
+              return (
+                <tr>
+                  <th scope="row">{t.label}</th>
+                  {t.values.map((v) => {
+                    const text = `${fmt(v, t.unit)} ${t.unit}`;
+                    return <td class="num">{v === best ? <strong>{text}</strong> : text}</td>;
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <h2>TPC-H SF100, per query</h2>
+      <div class="chart">
+        <BenchBars title="TPC-H SF100, per query" unit="ms" rows={perQuery} />
+      </div>
+      <p class="muted small">
+        Polars runs its own DataFrame versions of the queries (<code>benchmarks/tpch_polars.py</code>); for Q2, Q17 and Q18
+        they read <code>partsupp</code> or <code>lineitem</code> once where the SQL plans read them twice.
+      </p>
+
+      <h2>Where Iara is slower</h2>
+      <p>
+        In ClickBench, Iara is slowest on <code>GROUP BY URL</code> (Q33 and Q34, about 2.1-2.4 s against DuckDB's 1.8 s)
+        and on grouped <code>COUNT(DISTINCT ...)</code> (Q8 and Q9). Against Polars, Iara is slower on TPC-H Q2, Q17 and Q18.
+      </p>
+
+      <h2>Reproduce</h2>
+      <p>
+        The scripts are in the <a href={`${GITHUB_URL}/tree/master/benchmarks`}>benchmarks/ folder</a> of the repository.
+      </p>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .page-head {
+    max-width: 720px;
+    margin-bottom: 56px;
+  }
+
+  .page h2 {
+    margin: 72px 0 24px;
+  }
+
+  .table-wrap {
+    overflow-x: auto;
+    background: var(--vellum);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow);
+  }
+
+  .table {
+    width: 100%;
+    min-width: 520px;
+    border-collapse: collapse;
+    font-size: 0.92rem;
+  }
+
+  .table th,
+  .table td {
+    padding: 12px 18px;
+    text-align: left;
+    border-bottom: 1px solid var(--rule);
+    white-space: nowrap;
+  }
+
+  .table tbody tr:last-child th,
+  .table tbody tr:last-child td {
+    border-bottom: none;
+  }
+
+  .table thead th {
+    color: var(--ink-2);
+    font-weight: 600;
+  }
+
+  .table tbody th {
+    font-weight: 500;
+    color: var(--ink);
+  }
+
+  .num {
+    text-align: right;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .chart {
+    max-width: 760px;
+    margin-bottom: 16px;
+  }
+</style>

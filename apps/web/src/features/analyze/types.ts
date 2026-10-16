@@ -1,4 +1,4 @@
-import type { QueryAnalysis } from "@workhouse/protocol";
+import type { QueryAnalysis } from "@iara/protocol";
 
 /** An analysis as the Studio keeps it: the kernel's result under its id. */
 export interface StoredAnalysis extends QueryAnalysis {

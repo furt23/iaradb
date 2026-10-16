@@ -6,6 +6,7 @@ import Divider from "@mui/material/Divider";
 import Menu from "@mui/material/Menu";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { useGuard, useNotify } from "@/features/shell/notify";
 import { unwrap } from "@/lib/action";
@@ -24,6 +25,7 @@ export interface SchemaMenuTarget {
 
 /** Actions on a schema: add a table to it, or remove it when it is empty. */
 export function SchemaMenu({ target, onClose }: { target: SchemaMenuTarget | null; onClose(): void }) {
+  const { t } = useTranslation();
   const [addingTo, setAddingTo] = useState<string | null>(null);
   const guard = useGuard();
   const notify = useNotify();
@@ -35,10 +37,10 @@ export function SchemaMenu({ target, onClose }: { target: SchemaMenuTarget | nul
     onClose();
     void fn(target);
   };
-  const remove = (t: SchemaMenuTarget) =>
+  const remove = (tTarget: SchemaMenuTarget) =>
     guard(async () => {
-      unwrap(await removeSchema(t.schema));
-      notify(`Removed schema ${t.schema}`, "success");
+      unwrap(await removeSchema(tTarget.schema));
+      notify(`Removed schema ${tTarget.schema}`, "success");
       router.refresh();
     });
   return (
@@ -51,11 +53,12 @@ export function SchemaMenu({ target, onClose }: { target: SchemaMenuTarget | nul
         anchorPosition={point ? { top: point.y, left: point.x } : undefined}
         slotProps={{ list: { dense: true, "aria-label": target ? `actions for schema ${target.schema}` : undefined } }}
       >
-        <ActionItem icon={<Add fontSize="small" />} label="Add table here…" onClick={run((t) => setAddingTo(t.schema))} />
+        <ActionItem icon={<Add fontSize="small" />} label={t("Add table here…")} onClick={run((tTarget) => setAddingTo(tTarget.schema))} />
         <Divider />
-        <ActionItem icon={<DeleteOutline fontSize="small" />} label="Remove schema" onClick={run(remove)} danger disabled={!!target && target.tables > 0} />
+        <ActionItem icon={<DeleteOutline fontSize="small" />} label={t("Remove schema")} onClick={run(remove)} danger disabled={!!target && target.tables > 0} />
       </Menu>
       <AddTableDialog open={addingTo !== null} schema={addingTo ?? undefined} onClose={() => setAddingTo(null)} />
     </>
   );
 }
+

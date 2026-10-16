@@ -12,12 +12,18 @@ export interface LaunchSpec {
   userData: string;
   securityGroupId: string;
   instanceProfile: string;
+  /** ask for a spot machine (the launch result says whether it got one) */
+  spot: boolean;
+  /** extra tags, after the Iara ones (which they never override) */
+  tags: Record<string, string>;
 }
 
 export interface InstanceStatus {
   /** pending | running | shutting-down | terminated | stopping | stopped */
   state: string;
   publicIp?: string;
+  /** why the instance is in this state (EC2 state reason code, e.g. Server.SpotInstanceTermination) */
+  reason?: string;
 }
 
 export interface CloudApi {
@@ -30,14 +36,15 @@ export interface CloudApi {
   ensureNetwork(cidrs: string[]): Promise<string>;
   /** the machines' role: the artifacts and the workspace's data buckets */
   ensureRole(dataBuckets: string[]): Promise<string>;
-  launch(spec: LaunchSpec): Promise<string>;
+  /** `spot` is false when the machine is on-demand (also after a spot fallback) */
+  launch(spec: LaunchSpec): Promise<{ instanceId: string; spot: boolean }>;
   describe(instanceIds: string[]): Promise<Record<string, InstanceStatus>>;
   terminate(instanceId: string): Promise<void>;
   /** addresses the Studio connects from */
   studioCidrs(): Promise<string[]>;
 }
 
-export const TAG_COMPONENT = "workhouse:component";
-export const TAG_CLUSTER = "workhouse:cluster";
-/** set on everything created for a team (when `WORKHOUSE_TEAM` is set); names: see ./team.ts */
-export const TAG_TEAM = "workhouse:team";
+export const TAG_COMPONENT = "iara:component";
+export const TAG_CLUSTER = "iara:cluster";
+/** set on everything created for a team (when `IARA_TEAM` is set); names: see ./team.ts */
+export const TAG_TEAM = "iara:team";

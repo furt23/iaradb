@@ -1,0 +1,50 @@
+---
+import BenchBars from './BenchBars.astro';
+
+const cards = [
+  { title: 'TPC-H SF10', label: 'sum of 22 queries', iara: 5.88, duckdb: 7.69, polars: 8.11, unit: 's' },
+  { title: 'TPC-H SF100', label: 'sum of 22 queries', iara: 60.6, duckdb: 82.1, polars: 90.0, unit: 's' },
+  { title: 'ClickBench', label: 'sum of 32 queries', iara: 17.6, duckdb: 18.0, polars: 20.3, unit: 's' },
+];
+---
+
+<section class="section section--alt" id="benchmarks">
+  <div class="container">
+    <div class="section-head">
+      <span class="eyebrow">Benchmarks</span>
+      <h2>Measured against DuckDB and Polars.</h2>
+      <p class="lede">TPC-H (all 22 queries) and ClickBench on the same Parquet files, on an AWS m7i.4xlarge with 16 vCPUs and 64 GB of RAM. Lower is better.</p>
+    </div>
+
+    <div class="grid grid--3">
+      {cards.map((c) => (
+        <div class="card bench-card">
+          <h3>{c.title}</h3>
+          <BenchBars
+            title={c.title}
+            unit={c.unit}
+            rows={[{ label: c.label, iara: c.iara, duckdb: c.duckdb, polars: c.polars }]}
+          />
+        </div>
+      ))}
+    </div>
+
+    <div class="bench-more">
+      <a class="button button--ghost" href="/benchmarks/">Per-query results</a>
+    </div>
+  </div>
+</section>
+
+<style>
+  .bench-card {
+    min-width: 0;
+  }
+
+  .bench-card h3 {
+    font-size: 1.1rem;
+  }
+
+  .bench-more {
+    margin-top: 40px;
+  }
+</style>

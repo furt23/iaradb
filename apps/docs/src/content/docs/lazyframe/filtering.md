@@ -18,12 +18,12 @@ LazyFrame.filter(*predicates: Any) -> LazyFrame
 
 #### Example
 ```python
->>> import workhouse as wh
->>> from workhouse import col
->>> df = wh.from_dict({"age": [17, 25, 40, 15], "active": [True, True, False, True]})
+>>> import iara
+>>> from iara import functions as F
+>>> df = iara.from_dict({"age": [17, 25, 40, 15], "active": [True, True, False, True]})
 >>> df.lazy().filter(
-...     col("age") >= 18,
-...     col("active") == True
+...     F.col("age") >= 18,
+...     F.col("active") == True
 ... ).collect().show()
 ┌─────┬────────┐
 │ age │ active │
@@ -49,7 +49,7 @@ LazyFrame.head(n: int = 5) -> LazyFrame
 
 #### Example
 ```python
->>> df = wh.from_dict({"v": [10, 20, 30, 40, 50]})
+>>> df = iara.from_dict({"v": [10, 20, 30, 40, 50]})
 >>> df.lazy().limit(3).collect().show()
 ┌─────┐
 │ v   │
@@ -77,7 +77,7 @@ LazyFrame.slice(offset: int, length: int | None = None) -> LazyFrame
 
 #### Example
 ```python
->>> df = wh.from_dict({"num": [100, 200, 300, 400, 500]})
+>>> df = iara.from_dict({"num": [100, 200, 300, 400, 500]})
 >>> df.lazy().slice(1, 2).collect().show()
 ┌─────┐
 │ num │
@@ -101,7 +101,7 @@ LazyFrame.distinct() -> LazyFrame
 
 #### Example
 ```python
->>> df = wh.from_dict({"tag": ["A", "B", "A", "C", "B"]})
+>>> df = iara.from_dict({"tag": ["A", "B", "A", "C", "B"]})
 >>> df.lazy().unique().sort("tag").collect().show()
 ┌──────┐
 │ tag  │

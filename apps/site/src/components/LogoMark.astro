@@ -1,0 +1,23 @@
+---
+/** Iara's scales stacked 1-2-3. `tone` picks the blues for parchment ("light") or night ("dark") backgrounds. */
+interface Props {
+  size?: number;
+  tone?: 'light' | 'dark';
+  class?: string;
+}
+
+const { size = 32, tone = 'light', class: className } = Astro.props;
+const shades = tone === 'dark' ? ['#4A8FE0', '#7FB2F0', '#C9DEF8'] : ['#1E5BB8', '#4A8FE0', '#A9CBF2'];
+const scales: [string, number][] = [
+  ['M11.2 7.6A4.8 4.8 0 0 0 20.8 7.6Z', 0],
+  ['M6.2 13.6A4.8 4.8 0 0 0 15.8 13.6Z', 0],
+  ['M16.2 13.6A4.8 4.8 0 0 0 25.8 13.6Z', 1],
+  ['M1.2 19.6A4.8 4.8 0 0 0 10.8 19.6Z', 1],
+  ['M11.2 19.6A4.8 4.8 0 0 0 20.8 19.6Z', 2],
+  ['M21.2 19.6A4.8 4.8 0 0 0 30.8 19.6Z', 1],
+];
+---
+
+<svg class={className} width={size} height={size} viewBox="0 0 32 32" role="img" aria-label="Iara">
+  {scales.map(([d, shade]) => <path d={d} fill={shades[shade]} />)}
+</svg>

@@ -1,0 +1,55 @@
+<section class="section section--alt" id="sql">
+  <div class="container">
+    <div class="section-head">
+      <p class="eyebrow">Python or SQL</p>
+      <h2>The same plan, either way.</h2>
+      <p class="lede">The DataFrame API and SQL build the same logical plan, so they run through the same optimizer and the same execution engine. SQL follows a DuckDB-like dialect; the DataFrame API reads like Polars.</p>
+    </div>
+
+    <div class="grid grid--2">
+      <article class="card">
+        <h3>DataFrame</h3>
+        <pre class="code"><span class="fn">lf</span> = iara.<span class="fn">scan_parquet</span>(<span class="str">"s3://bucket/events/"</span>)
+<span class="fn">top</span> = (
+    lf.<span class="fn">filter</span>(F.<span class="fn">col</span>(<span class="str">"country"</span>) == <span class="str">"BR"</span>)
+      .<span class="fn">group_by</span>(<span class="str">"page"</span>)
+      .<span class="fn">agg</span>(views=F.<span class="fn">len</span>())
+      .<span class="fn">sort</span>(<span class="str">"views"</span>, descending=<span class="kw">True</span>)
+      .<span class="fn">head</span>(<span class="num">10</span>)
+)
+top.<span class="fn">collect</span>()</pre>
+      </article>
+
+      <article class="card">
+        <h3>SQL</h3>
+        <pre class="code">iara.<span class="fn">sql</span>(<span class="str">"""
+    select page, count(*) as views
+    from read_parquet('s3://bucket/events/')
+    where country = 'BR'
+    group by page
+    order by views desc
+    limit 10
+"""</span>)</pre>
+      </article>
+    </div>
+
+    <p class="small muted note">Inputs can also be pyarrow tables, pandas or Polars DataFrames: <code>iara.sql("select k, sum(v) from t group by k", t=arrow_table)</code>.</p>
+  </div>
+</section>
+
+<style>
+  .card h3 {
+    margin-bottom: 18px;
+  }
+
+  .card .code {
+    font-size: 0.8rem;
+    padding: 20px 22px;
+  }
+
+  .note {
+    margin-top: 28px;
+    margin-bottom: 0;
+    max-width: 720px;
+  }
+</style>

@@ -3,7 +3,7 @@
 import Box from "@mui/material/Box";
 import CircularProgress from "@mui/material/CircularProgress";
 import Typography from "@mui/material/Typography";
-import type { ChartData, ChartSpec, ResultMeta } from "@workhouse/protocol";
+import type { ChartData, ChartSpec, ResultMeta } from "@iara/protocol";
 import { useEffect, useMemo, useState } from "react";
 
 import { fetchResultChart } from "@/server/actions/kernels";

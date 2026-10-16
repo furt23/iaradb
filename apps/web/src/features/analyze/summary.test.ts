@@ -1,4 +1,4 @@
-import type { QueryAnalysis } from "@workhouse/protocol";
+import type { QueryAnalysis } from "@iara/protocol";
 import { describe, expect, it } from "vitest";
 
 import { summaryFacts } from "./summary";

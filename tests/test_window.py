@@ -11,7 +11,8 @@ import numpy as np
 import pyarrow as pa
 import pytest
 
-import workhouse as wh
+import iara as ia
+from iara import functions as F
 
 sys.path.insert(0, os.path.dirname(__file__))
 from compare import diff  # noqa: E402
@@ -52,8 +53,8 @@ def duck(tables) -> duckdb.DuckDBPyConnection:
 
 
 @pytest.fixture(scope="module")
-def ctx(tables) -> wh.SessionContext:
-    c = wh.SessionContext()
+def ctx(tables) -> ia.SessionContext:
+    c = ia.SessionContext()
     for name, t in tables.items():
         c.register(name, t)
     return c
@@ -153,7 +154,7 @@ def test_recursive_cte_limit_stops_infinite_recursion(ctx):
     ],
 )
 def test_window_errors(ctx, sql, message):
-    with pytest.raises(wh.WorkhouseError, match=message):
+    with pytest.raises(ia.IaraError, match=message):
         ctx.sql(sql).collect()
 
 
@@ -189,7 +190,7 @@ API_CASES = {
 def test_window_api(tables, name):
     f = API_CASES[name]
     t = tables["t"].drop(["d"])
-    res = wh.from_arrow(t).lazy().select([wh.col("id"), *f(wh.col)]).collect().to_arrow()
+    res = ia.from_arrow(t).lazy().select([F.col("id"), *f(F.col)]).collect().to_arrow()
     exp = pl.from_arrow(t).lazy().select([pl.col("id"), *f(pl.col)]).collect().to_arrow()
     exp = exp.cast(res.schema)
     assert diff(res, exp, ordered=False, rtol=1e-6) is None
@@ -197,24 +198,24 @@ def test_window_api(tables, name):
 
 def test_window_api_rolling_min_periods(tables):
     t = tables["t"].select(["id", "x"])
-    res = wh.from_arrow(t).select("id", wh.col("x").rolling_sum(4, 2).alias("v")).to_arrow()
+    res = ia.from_arrow(t).select("id", F.col("x").rolling_sum(4, 2).alias("v")).to_arrow()
     exp = pl.from_arrow(t).select("id", pl.col("x").rolling_sum(4, min_samples=2).alias("v")).to_arrow()
     assert diff(res, exp.cast(res.schema), ordered=False, rtol=1e-6) is None
 
 
 def test_window_api_filter_and_row_number(tables):
-    df = wh.from_arrow(tables["t"])
-    top = df.filter(wh.col("y").rank("ordinal", descending=True).over("g") <= 2)
+    df = ia.from_arrow(tables["t"])
+    top = df.filter(F.col("y").rank("ordinal", descending=True).over("g") <= 2)
     assert top.columns == tables["t"].column_names
     exp = pl.from_arrow(tables["t"]).filter(pl.col("y").rank("ordinal", descending=True).over("g") <= 2)
     assert top.to_arrow().num_rows == exp.height
-    firsts = df.with_columns(wh.row_number().over("g", order_by="id").alias("rn")).filter(wh.col("rn") == 1)
+    firsts = df.with_columns(F.row_number().over("g", order_by="id").alias("rn")).filter(F.col("rn") == 1)
     assert firsts.to_arrow().num_rows == pl.from_arrow(tables["t"])["g"].n_unique()
 
 
 def test_window_api_errors(tables):
-    lf = wh.from_arrow(tables["t"]).lazy()
-    with pytest.raises(wh.WorkhouseError, match="over"):
-        lf.select(wh.col("x").over("g")).collect()
+    lf = ia.from_arrow(tables["t"]).lazy()
+    with pytest.raises(ia.IaraError, match="over"):
+        lf.select(F.col("x").over("g")).collect()
     with pytest.raises(ValueError, match="rank method"):
-        wh.col("x").rank("random")
+        F.col("x").rank("random")

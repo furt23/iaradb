@@ -1,71 +1,106 @@
 /**
- * Custom Starlight styling for Workhouse Python Documentation
- * Inspired by the Observatory design system (packages/ui/src/tokens.ts)
+ * Iara docs styling. Matches the landing site (apps/site/src/styles/global.css):
+ * parchment paper with navy ink in light mode, a night palette in dark mode,
+ * and the blues of the logo as the accent.
  */
 
-/* Dark Mode (Native Scheme) */
+/* Dark mode (native scheme, used when no light theme is selected) */
 :root {
-  --sl-color-accent-low: #221a0d;
-  --sl-color-accent: #d4a24c;
-  --sl-color-accent-high: #f5d28a;
-
-  --sl-color-white: #e6eaf2;
-  --sl-color-gray-1: #c8d0e0;
-  --sl-color-gray-2: #9aa4bc;
-  --sl-color-gray-3: #5e6a86;
-  --sl-color-gray-4: #26314f;
-  --sl-color-gray-5: #1a2440;
-  --sl-color-gray-6: #121a2e;
-  --sl-color-black: #0b1020;
-
-  --sl-font-system: 'Inter Variable', Inter, system-ui, -apple-system, sans-serif;
+  --sl-font: 'Inter Variable', Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --sl-font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, Consolas, monospace;
+  --iara-display: 'Roboto Slab Variable', 'Roboto Slab', Georgia, 'Times New Roman', serif;
 
-  /* Custom Workhouse palette tokens */
-  --wh-accent-nebula: #6ea8fe;
-  --wh-accent-brass: #d4a24c;
-  --wh-accent-aurora: #5fd3a6;
-  --wh-accent-nova: #f5c46b;
-  --wh-accent-mars: #f2777a;
+  --sl-color-accent-low: #10213a;
+  --sl-color-accent: #7fb2f0;
+  --sl-color-accent-high: #c9def8;
+
+  --sl-color-white: #e4ecf6;
+  --sl-color-gray-1: #c9d5e3;
+  --sl-color-gray-2: #9fb2c8;
+  --sl-color-gray-3: #6f819a;
+  --sl-color-gray-4: #24354d;
+  --sl-color-gray-5: #15243a;
+  --sl-color-gray-6: #101d30;
+  --sl-color-black: #0e1a2b;
+
+  --sl-color-bg-nav: #0e1a2b;
+  --sl-color-bg-sidebar: #15243a;
+  --sl-color-bg-inline-code: #15243a;
+  --sl-color-hairline: #24354d;
+  --sl-color-hairline-light: #24354d;
+  --sl-color-hairline-shade: #24354d;
+
+  /* RGB channels for the translucent badge fills and borders */
+  --iara-lazy-rgb: 127, 178, 240;
+  --iara-eager-rgb: 224, 176, 74;
+  --iara-expr-rgb: 124, 199, 189;
+  --iara-lazy: #7fb2f0;
+  --iara-eager: #e0b04a;
+  --iara-expr: #7cc7bd;
 }
 
-/* Light Mode (Paper Scheme) */
+/* Light mode (parchment) */
 :root[data-theme='light'] {
-  --sl-color-accent-low: #f8edd7;
-  --sl-color-accent: #a87a22;
-  --sl-color-accent-high: #5f430d;
+  --sl-color-text: #2a3744; /* body text in ink, not the secondary gray */
+  --sl-color-accent-low: #dce8f7;
+  --sl-color-accent: #1e5bb8;
+  --sl-color-accent-high: #123a75;
 
-  --sl-color-white: #1b2233;
-  --sl-color-gray-1: #2c3447;
-  --sl-color-gray-2: #5a6275;
-  --sl-color-gray-3: #8c93a3;
-  --sl-color-gray-4: #dedbd2;
-  --sl-color-gray-5: #efede6;
-  --sl-color-gray-6: #ffffff;
-  --sl-color-black: #f7f6f2;
+  --sl-color-white: #1d2a36;
+  --sl-color-gray-1: #2a3744;
+  --sl-color-gray-2: #4e5b66;
+  --sl-color-gray-3: #85898a;
+  --sl-color-gray-4: #d9cdb2;
+  --sl-color-gray-5: #eae1cc;
+  --sl-color-gray-6: #fbf7ee;
+  --sl-color-gray-7: #fffdf7;
+  --sl-color-black: #f3ecdc;
 
-  --wh-accent-nebula: #2f6fd6;
-  --wh-accent-brass: #a87a22;
-  --wh-accent-aurora: #1f9e73;
-  --wh-accent-nova: #b7801a;
-  --wh-accent-mars: #c93b40;
+  --sl-color-bg-nav: #f3ecdc;
+  --sl-color-bg-sidebar: #eae1cc;
+  --sl-color-bg-inline-code: #eae1cc;
+  --sl-color-hairline: #d9cdb2;
+  --sl-color-hairline-light: #d9cdb2;
+  --sl-color-hairline-shade: #d9cdb2;
+
+  --iara-lazy-rgb: 30, 91, 184;
+  --iara-eager-rgb: 168, 122, 21;
+  --iara-expr-rgb: 43, 122, 116;
+  --iara-lazy: #1e5bb8;
+  --iara-eager: #a87a15;
+  --iara-expr: #2b7a74;
 }
 
-/* Header & Navigation Polish */
+/* Headings and the site title use the display serif */
+h1,
+h2,
+h3,
+.sl-markdown-content h1,
+.sl-markdown-content h2,
+.sl-markdown-content h3 {
+  font-family: var(--iara-display);
+  font-weight: 560;
+  letter-spacing: -0.015em;
+}
+
+/* Header & navigation */
 header.header {
-  border-bottom: 1px solid var(--sl-color-gray-4);
-  background-color: var(--sl-color-black);
+  border-bottom: 1px solid var(--sl-color-hairline);
+  background-color: var(--sl-color-bg-nav);
 }
 
 .site-title {
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  font-family: var(--iara-display);
+  font-size: 1.35rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--sl-color-white);
 }
 
 .site-title::after {
-  content: "Python API";
-  font-size: 0.75rem;
+  content: 'Python API';
+  font-family: var(--sl-font);
+  font-size: 0.7rem;
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -74,11 +109,23 @@ header.header {
   border-radius: 4px;
   background-color: var(--sl-color-gray-5);
   color: var(--sl-color-accent);
-  border: 1px solid var(--sl-color-gray-4);
+  border: 1px solid var(--sl-color-hairline);
   vertical-align: middle;
 }
 
-/* Signature & Method Badges */
+/* Code frames: rounded, with the theme's border color */
+.expressive-code {
+  --ec-brdRad: 12px;
+  --ec-brdCol: var(--sl-color-hairline);
+}
+
+.expressive-code .frame {
+  border-radius: 12px;
+  border: 1px solid var(--sl-color-hairline);
+  overflow: hidden;
+}
+
+/* Signature & method badges */
 .api-badge {
   display: inline-block;
   font-size: 0.75rem;
@@ -90,21 +137,21 @@ header.header {
 }
 
 .api-badge-lazy {
-  background-color: rgba(110, 168, 254, 0.15);
-  color: var(--wh-accent-nebula);
-  border: 1px solid rgba(110, 168, 254, 0.3);
+  background-color: rgba(var(--iara-lazy-rgb), 0.15);
+  color: var(--iara-lazy);
+  border: 1px solid rgba(var(--iara-lazy-rgb), 0.3);
 }
 
 .api-badge-eager {
-  background-color: rgba(212, 162, 76, 0.15);
-  color: var(--wh-accent-brass);
-  border: 1px solid rgba(212, 162, 76, 0.3);
+  background-color: rgba(var(--iara-eager-rgb), 0.15);
+  color: var(--iara-eager);
+  border: 1px solid rgba(var(--iara-eager-rgb), 0.3);
 }
 
 .api-badge-expr {
-  background-color: rgba(95, 211, 166, 0.15);
-  color: var(--wh-accent-aurora);
-  border: 1px solid rgba(95, 211, 166, 0.3);
+  background-color: rgba(var(--iara-expr-rgb), 0.15);
+  color: var(--iara-expr);
+  border: 1px solid rgba(var(--iara-expr-rgb), 0.3);
 }
 
 /* PySpark-style code and doc tables */

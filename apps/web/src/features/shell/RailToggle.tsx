@@ -5,9 +5,12 @@ import ChevronRight from "@mui/icons-material/ChevronRight";
 import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
 
+import { useTranslation } from "@/i18n";
+
 /** Collapses the navigation rail to icons, or expands it back to the labels. */
 export function RailToggle({ expanded, onToggle }: { expanded: boolean; onToggle(): void }) {
-  const label = expanded ? "collapse sidebar" : "expand sidebar";
+  const { t } = useTranslation();
+  const label = expanded ? t("collapse sidebar") : t("expand sidebar");
   return (
     <Tooltip title={label} placement="right" disableFocusListener>
       <IconButton aria-label={label} onClick={onToggle} sx={{ width: 40, height: 36, borderRadius: 2, color: "text.secondary" }}>

@@ -1,4 +1,4 @@
-"""Schemas: tables named ``schema.table`` in ``workhouse.toml``, the statements
+"""Schemas: tables named ``schema.table`` in ``iara.toml``, the statements
 that create and drop schemas, and qualified names in notebook analysis.
 
 Tests marked ``engine_schemas`` need the engine's schema support (``CREATE
@@ -13,15 +13,15 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-import workhouse as wh
-from workhouse.kernel import catalog
-from workhouse.kernel.notebook.analysis import analyze, sql_identifiers
-from workhouse.kernel.notebook.graph import DependencyGraph
-from workhouse.kernel.notebook.model import Cell
-from workhouse.sqlwrite import is_schema_statement, is_write
-from workhouse.workspaces import CONFIG_NAME, add_table, parse_config, schema_entry, table_entry
+import iara as ia
+from iara.kernel import catalog
+from iara.kernel.notebook.analysis import analyze, sql_identifiers
+from iara.kernel.notebook.graph import DependencyGraph
+from iara.kernel.notebook.model import Cell
+from iara.sqlwrite import is_schema_statement, is_write
+from iara.workspaces import CONFIG_NAME, add_table, parse_config, schema_entry, table_entry
 
-engine_schemas = pytest.mark.skipif(not hasattr(wh.SessionContext, "schemas"), reason="engine without schemas")
+engine_schemas = pytest.mark.skipif(not hasattr(ia.SessionContext, "schemas"), reason="engine without schemas")
 
 
 def _parquet(path: Path, rows: int) -> None:
@@ -47,7 +47,7 @@ description = "Sales figures"
 """
 
 
-# -- workhouse.toml -----------------------------------------------------------
+# -- iara.toml -----------------------------------------------------------
 
 
 def test_nested_and_quoted_sections_name_qualified_tables(tmp_path: Path) -> None:
@@ -293,7 +293,7 @@ def test_drop_schema_without_cascade_refuses_tables(tmp_path: Path) -> None:
     ws = parse_config('[tables.tpch.region]\npath = "data/tpch/region.parquet"\n', tmp_path)
     changes: list[dict] = []
     ws.on_catalog_change = changes.append
-    with pytest.raises(wh.WorkhouseError):
+    with pytest.raises(ia.IaraError):
         ws.sql("drop schema tpch").collect()
     assert changes == [] and [t.name for t in ws.tables] == ["tpch.region"]
 
@@ -320,5 +320,5 @@ def test_use_sets_the_default_schema_and_emits_nothing(tmp_path: Path) -> None:
     assert ws.sql("select count(*) as n from region").collect().to_pydict()["n"] == [5]
 
     ws.sql("use main").collect()
-    with pytest.raises(wh.WorkhouseError):
+    with pytest.raises(ia.IaraError):
         ws.sql("select count(*) as n from region").collect()

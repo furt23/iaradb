@@ -2,10 +2,10 @@
 
 import CssBaseline from "@mui/material/CssBaseline";
 import { ThemeProvider } from "@mui/material/styles";
-import { createWorkhouseTheme } from "@workhouse/ui";
+import { createIaraTheme } from "@iara/ui";
 import type { ReactNode } from "react";
 
-const theme = createWorkhouseTheme();
+const theme = createIaraTheme();
 
 export function ThemeRegistry({ children }: { children: ReactNode }) {
   return (

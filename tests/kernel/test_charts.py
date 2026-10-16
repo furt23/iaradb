@@ -5,8 +5,8 @@ from __future__ import annotations
 import pyarrow as pa
 import pytest
 
-from workhouse.kernel.runtime import charts
-from workhouse.kernel.runtime.charts import chart_data
+from iara.kernel.runtime import charts
+from iara.kernel.runtime.charts import chart_data
 
 
 @pytest.fixture()

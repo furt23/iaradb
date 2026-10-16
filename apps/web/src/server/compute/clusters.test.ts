@@ -47,25 +47,26 @@ class FakeCloud implements CloudApi {
   instances: Record<string, InstanceStatus> = {};
   launched: LaunchSpec[] = [];
   published = true;
+  noSpot = false;
   roleBuckets: string[] = [];
   async artifactsBucket() {
     return "artifacts";
   }
   async engineWheel(version: string) {
-    return this.published ? `s3://artifacts/engine/${version}/workhouse.whl` : null;
+    return this.published ? `s3://artifacts/engine/${version}/iara.whl` : null;
   }
   async ensureNetwork() {
     return "sg-1";
   }
   async ensureRole(buckets: string[]) {
     this.roleBuckets = buckets;
-    return "workhouse-cluster";
+    return "iara-cluster";
   }
   async launch(spec: LaunchSpec) {
     this.launched.push(spec);
     const id = `i-${this.launched.length}`;
     this.instances[id] = { state: "pending" };
-    return id;
+    return { instanceId: id, spot: spec.spot && !this.noSpot };
   }
   async describe(ids: string[]) {
     return Object.fromEntries(ids.map((id) => [id, this.instances[id] ?? { state: "terminated" }]));
@@ -83,12 +84,17 @@ function setup(opts: { local?: boolean } = {}) {
   const store = new MemoryStore();
   const cloud = new FakeCloud();
   let ready = false;
+  const commands: string[] = [];
+  const replies: { match: RegExp; code?: number; stdout: string }[] = [];
   const activity = { lastUsed: 0, busy: false };
   const svc = new ClusterService({
     store,
     cloud: () => cloud,
-    exec: async (ep) => {
+    exec: async (ep, command) => {
       ep.onHostKey?.("SHA256-host");
+      commands.push(command);
+      const reply = replies.find((r) => r.match.test(command));
+      if (reply) return { code: reply.code ?? 0, stdout: reply.stdout };
       return { code: ready ? 0 : 1, stdout: ready ? "ready\n" : "" };
     },
     engineVersion: "0.1.0",
@@ -106,7 +112,7 @@ function setup(opts: { local?: boolean } = {}) {
   const stopped: string[] = [];
   svc.onTerminate((id) => stopped.push(id));
   svc.activityFrom(() => activity);
-  return { svc, store, cloud, stopped, activity, tick: (ms: number) => (now += ms), now: () => now };
+  return { svc, store, cloud, commands, replies, stopped, activity, tick: (ms: number) => (now += ms), now: () => now };
 }
 
 describe("clusters", () => {
@@ -118,8 +124,8 @@ describe("clusters", () => {
     const rec = store.cluster(c.id)!;
     expect(rec.runtime).toMatchObject({ state: "running", instanceId: "i-1", publicIp: "198.51.100.9", hostKey: "SHA256-host" });
     expect(cloud.roleBuckets).toEqual(["sales-data"]);
-    expect(cloud.launched[0]).toMatchObject({ instanceType: "m7i-flex.large", securityGroupId: "sg-1", volumeGb: 40 });
-    expect(cloud.launched[0].userData).toContain("s3://artifacts/engine/0.1.0/workhouse.whl");
+    expect(cloud.launched[0]).toMatchObject({ instanceType: "m7i-flex.large", securityGroupId: "sg-1", volumeGb: 40, spot: false, tags: {} });
+    expect(cloud.launched[0].userData).toContain("s3://artifacts/engine/0.1.0/iara.whl");
     // the machine's watchdog waits a little longer than the Studio's reaper
     expect(cloud.launched[0].userData).toContain(`-ge ${20 * 60} ]`);
   });
@@ -131,7 +137,7 @@ describe("clusters", () => {
     svc.start(c.id);
     await svc.settled(c.id);
     expect(store.cluster(c.id)!.runtime).toMatchObject({ state: "error" });
-    expect(store.cluster(c.id)!.runtime.error).toMatch(/workhouse.cloud publish/);
+    expect(store.cluster(c.id)!.runtime.error).toMatch(/iara.cloud publish/);
     expect(cloud.launched).toHaveLength(0);
   });
 
@@ -234,7 +240,7 @@ describe("clusters", () => {
       "machine i-1 running at 198.51.100.9",
       "start requested",
       "idle timeout 15 → 30 min",
-      "m7i-flex.large, 40 GB, 15 min idle limit",
+      "m7i-flex.large, 40 GB, 15 min idle limit, 1 h limit",
     ]);
   });
 
@@ -256,7 +262,7 @@ describe("clusters", () => {
     svc.start(c.id);
     await svc.settled(c.id);
     expect(svc.eventsOf(c.id).slice(0, 2).map((e) => e.kind)).toEqual(["error", "start"]);
-    expect(svc.eventsOf(c.id)[0].message).toMatch(/workhouse.cloud publish/);
+    expect(svc.eventsOf(c.id)[0].message).toMatch(/iara.cloud publish/);
   });
 
   it("clones a cluster's machine and limits, without starting it", () => {
@@ -264,6 +270,7 @@ describe("clusters", () => {
     const a = svc.create({ name: "dev", instanceType: "r7i.xlarge", autoTerminateMinutes: 30, volumeGb: 100 });
     const copy = svc.clone(a.id);
     expect(copy).toMatchObject({ name: "dev copy", instanceType: "r7i.xlarge", autoTerminateMinutes: 30, volumeGb: 100 });
+    expect(copy).toMatchObject({ libraries: [], spot: false, maxHours: 1 });
     expect(copy.runtime.state).toBe("terminated");
     expect(svc.eventsOf(copy.id).map((e) => e.kind)).toEqual(["cloned"]);
     expect(store.read().clusters).toHaveLength(2);
@@ -296,6 +303,131 @@ describe("clusters", () => {
     expect(svc.eventsOf(b.id).map((e) => e.kind)).toEqual(["detached", "attached", "created"]);
     svc.detach("nb/x.py"); // nothing attached any more: no event
     expect(svc.eventsOf(b.id)).toHaveLength(3);
+  });
+});
+
+describe("cluster settings", () => {
+  it("stores and clones the new settings, and shows them in the views", () => {
+    const { svc } = setup({ local: false });
+    const a = svc.create({ name: "a", libraries: ["polars==1.9"], env: { A: "1" }, initScript: "echo hi", spot: true, maxHours: 3, tags: { team: "x" } });
+    expect(svc.eventsOf(a.id)[0].message).toBe("m7i-flex.large, 40 GB, 15 min idle limit, spot, 3 h limit");
+    const copy = svc.clone(a.id);
+    expect(copy).toMatchObject({ libraries: ["polars==1.9"], env: { A: "1" }, initScript: "echo hi", spot: true, maxHours: 3, tags: { team: "x" } });
+    expect(svc.views().find((v) => v.id === a.id)).toMatchObject({ libraries: ["polars==1.9"], libraryStatus: {}, spot: true, maxHours: 3 });
+    expect(() => svc.create({ name: "b", maxHours: 13 })).toThrow(/between 1 and 12/);
+  });
+
+  it("machine fields change only while terminated; the rest any time", async () => {
+    const { svc } = setup();
+    const c = svc.create({ name: "dev" });
+    svc.update(c.id, { spot: true, initScript: "ls", tags: { a: "b" } });
+    svc.start(c.id);
+    await svc.settled(c.id);
+    for (const patch of [{ spot: false }, { initScript: "" }, { tags: {} }, { volumeGb: 100 }]) {
+      expect(() => svc.update(c.id, patch)).toThrow(/terminate the cluster before changing its machine, spot, init script or tags/);
+    }
+    svc.update(c.id, { name: "dev2", env: { X: "1" }, maxHours: 2, autoTerminateMinutes: 30 });
+    expect(svc.eventsOf(c.id)[0].message).toBe("name dev → dev2, idle timeout 15 → 30 min, environment changed, time limit 1 → 2 h");
+  });
+
+  it("installs added libraries on a running machine, and a failure does not break the cluster", async () => {
+    const { svc, store, commands, replies } = setup();
+    const c = svc.create({ name: "dev", libraries: ["a"] });
+    svc.start(c.id);
+    await svc.settled(c.id);
+    expect(store.cluster(c.id)!.runtime.libraries).toEqual({ a: { state: "installed" } });
+    svc.update(c.id, { libraries: ["a", "pandas[parquet]", "b>=1"] });
+    expect(store.cluster(c.id)!.runtime.libraries).toMatchObject({ "pandas[parquet]": { state: "installing" } });
+    await svc.settled(c.id);
+    expect(commands.at(-1)).toContain("uv pip install -q --python /home/ec2-user/venv/bin/python 'pandas[parquet]' 'b>=1'");
+    expect(store.cluster(c.id)!.runtime.libraries).toMatchObject({ a: { state: "installed" }, "b>=1": { state: "installed" } });
+    replies.push({ match: /uv pip install/, code: 1, stdout: "no such package\n" });
+    svc.update(c.id, { libraries: ["a", "nope"] });
+    await svc.settled(c.id);
+    const rt = store.cluster(c.id)!.runtime;
+    expect(rt.state).toBe("running");
+    expect(rt.libraries).toEqual({ a: { state: "installed" }, nope: { state: "failed", error: "no such package" } });
+    expect(svc.eventsOf(c.id).filter((e) => e.kind === "libraries").map((e) => e.message)).toEqual([
+      "install failed: no such package",
+      "installing nope",
+      "installed pandas[parquet], b>=1",
+      "installing pandas[parquet], b>=1",
+    ]);
+  });
+
+  it("terminates a cluster at its time limit, however busy", async () => {
+    const { svc, tick, activity } = setup();
+    const c = svc.create({ name: "dev", maxHours: 1 });
+    svc.start(c.id);
+    await svc.settled(c.id);
+    activity.busy = true;
+    tick(50 * 60_000);
+    expect(await svc.reap()).toEqual([]);
+    tick(11 * 60_000);
+    expect(await svc.reap()).toEqual([c.id]);
+    expect(svc.eventsOf(c.id)[0]).toMatchObject({ kind: "auto-terminate", message: "time limit of 1 h" });
+  });
+
+  it("moves the machine's own limit when the time limit changes", async () => {
+    const { svc, commands, tick } = setup();
+    const c = svc.create({ name: "dev" });
+    svc.start(c.id);
+    await svc.settled(c.id);
+    tick(30 * 60_000);
+    svc.update(c.id, { maxHours: 2 });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(commands.some((x) => x.startsWith("sudo shutdown -c; sudo shutdown -h +90"))).toBe(true);
+  });
+
+  it("logs a spot request that fell back to on-demand, and a spot reclaim", async () => {
+    const { svc, store, cloud } = setup();
+    cloud.noSpot = true;
+    const c = svc.create({ name: "dev", spot: true });
+    svc.start(c.id);
+    await svc.settled(c.id);
+    expect(store.cluster(c.id)!.runtime.spot).toBe(false);
+    expect(svc.eventsOf(c.id).find((e) => e.kind === "spot")?.message).toBe("no spot capacity: started an on-demand machine");
+    expect(svc.views().find((v) => v.id === c.id)?.runningSpot).toBe(false);
+    cloud.noSpot = false;
+    await svc.terminate(c.id);
+    cloud.instances["i-1"] = { state: "terminated" };
+    await svc.reconcile();
+    svc.start(c.id);
+    await svc.settled(c.id);
+    expect(store.cluster(c.id)!.runtime.spot).toBe(true);
+    cloud.instances["i-2"] = { state: "terminated", reason: "Server.SpotInstanceTermination" };
+    await svc.reconcile();
+    expect(store.cluster(c.id)!.runtime.phase).toBe("AWS reclaimed the spot machine");
+  });
+
+  it("keeps the log of a failed boot and serves it when the machine is gone", async () => {
+    const { svc, store, replies } = setup();
+    replies.push(
+      { match: /test -f/, stdout: "failed:the init script failed: see the Init script log\n" },
+      { match: /tail -n 80 \/var\/log\/iara-init.log/, stdout: "line 1\nboom\n" },
+    );
+    const c = svc.create({ name: "dev", initScript: "exit 1" });
+    svc.start(c.id);
+    await svc.settled(c.id);
+    const rt = store.cluster(c.id)!.runtime;
+    expect(rt).toMatchObject({ state: "error", error: "the init script failed: see the Init script log", lastBootLog: ["line 1", "boom"] });
+    expect(await svc.logs(c.id, "init")).toEqual({ lines: ["line 1", "boom"], unavailable: "the machine is gone: lines from its last failed start" });
+    svc.start(c.id);
+    expect(store.cluster(c.id)!.runtime.lastBootLog).toBeUndefined();
+  });
+
+  it("reads machine logs over SSH, with a reason when there are none", async () => {
+    const { svc, replies } = setup({ local: false });
+    const c = svc.create({ name: "dev", initScript: "echo" });
+    const plain = svc.create({ name: "plain" });
+    expect(await svc.logs("local", "boot")).toEqual({ lines: [], unavailable: "the local cluster has no machine logs" });
+    expect(await svc.logs(plain.id, "init")).toEqual({ lines: [], unavailable: "this cluster has no init script" });
+    expect(await svc.logs(c.id, "boot")).toEqual({ lines: [], unavailable: "the cluster is terminated" });
+    svc.start(c.id);
+    await svc.settled(c.id);
+    replies.push({ match: /tail -n 500 \/var\/log\/cloud-init/, stdout: "a\nb\n" });
+    expect(await svc.logs(c.id, "boot")).toEqual({ lines: ["a", "b"] });
   });
 });
 

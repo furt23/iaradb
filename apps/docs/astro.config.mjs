@@ -5,8 +5,9 @@ export default defineConfig({
   site: 'https://docs.workhouse.dev',
   integrations: [
     starlight({
-      title: 'Workhouse Python API',
-      description: 'Official Python API documentation and reference for the Workhouse Engine.',
+      title: 'Iara',
+      logo: { light: './src/assets/logo-light.svg', dark: './src/assets/logo-dark.svg' },
+      description: 'Official Python API documentation and reference for the Iara Engine.',
       defaultLocale: 'root',
       locales: {
         root: {
@@ -14,8 +15,17 @@ export default defineConfig({
           lang: 'en',
         },
       },
-      customCss: ['./src/styles/custom.css'],
+      components: {
+        SocialIcons: './src/components/HeaderLinks.astro',
+      },
+      customCss: [
+        '@fontsource-variable/inter',
+        '@fontsource-variable/jetbrains-mono',
+        '@fontsource-variable/roboto-slab',
+        './src/styles/custom.css',
+      ],
       expressiveCode: {
+        themes: ['github-dark', 'github-light'],
         shiki: {
           bundledLangs: ['python', 'bash', 'sql', 'json', 'yaml', 'toml'],
         },

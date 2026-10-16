@@ -11,14 +11,14 @@ from typing import Any
 
 import pytest
 
-from workhouse import widgets
-from workhouse.kernel.notebook import marimo_io
-from workhouse.kernel.notebook.analysis import analyze, sql_placeholders
-from workhouse.kernel.notebook.codegen import detect_sql, sql_source
-from workhouse.kernel.notebook.graph import DependencyGraph
-from workhouse.kernel.notebook.model import Cell, Notebook
-from workhouse.kernel.session import KernelSession
-from workhouse.workspaces import Workspace
+from iara import widgets
+from iara.kernel.notebook import marimo_io
+from iara.kernel.notebook.analysis import analyze, sql_placeholders
+from iara.kernel.notebook.codegen import detect_sql, sql_source
+from iara.kernel.notebook.graph import DependencyGraph
+from iara.kernel.notebook.model import Cell, Notebook
+from iara.kernel.session import KernelSession
+from iara.workspaces import Workspace
 
 from test_session import SETUP, Recorder, py, run, session, sql  # noqa: F401
 
@@ -27,7 +27,7 @@ PARAMS_SUPPORTED = "params" in inspect.signature(Workspace.sql).parameters
 
 @pytest.fixture()
 def standalone(monkeypatch: pytest.MonkeyPatch):
-    """A fresh process-wide registry (no kernel), without WORKHOUSE_PARAM_* variables."""
+    """A fresh process-wide registry (no kernel), without IARA_PARAM_* variables."""
     for k in [k for k in os.environ if k.startswith(widgets.ENV_PREFIX)]:
         monkeypatch.delenv(k)
     reg = widgets.Registry(env=True)
@@ -55,13 +55,13 @@ def test_defaults_and_get(standalone):
 
 
 def test_env_vars_set_widgets_outside_the_studio(standalone, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("WORKHOUSE_PARAM_N", "7")
-    monkeypatch.setenv("WORKHOUSE_PARAM_REGION", "south")
-    monkeypatch.setenv("WORKHOUSE_PARAM_TAGS", "x, z")
-    monkeypatch.setenv("WORKHOUSE_PARAM_FLAG", "yes")
-    monkeypatch.setenv("WORKHOUSE_PARAM_DAY", "2025-01-31")
-    monkeypatch.setenv("WORKHOUSE_PARAM_BAD", "oops")
-    monkeypatch.setenv("WORKHOUSE_PARAM_RAW", "from-env")
+    monkeypatch.setenv("IARA_PARAM_N", "7")
+    monkeypatch.setenv("IARA_PARAM_REGION", "south")
+    monkeypatch.setenv("IARA_PARAM_TAGS", "x, z")
+    monkeypatch.setenv("IARA_PARAM_FLAG", "yes")
+    monkeypatch.setenv("IARA_PARAM_DAY", "2025-01-31")
+    monkeypatch.setenv("IARA_PARAM_BAD", "oops")
+    monkeypatch.setenv("IARA_PARAM_RAW", "from-env")
     assert widgets.number("n", 1) == 7 and isinstance(widgets.get("n"), int)
     assert widgets.dropdown("region", "north", ["north", "south"]) == "south"
     assert widgets.multiselect("tags", [], ["x", "y", "z"]) == ["x", "z"]
@@ -136,14 +136,14 @@ def cell(code: str, kind: str = "python", output: str | None = None) -> Cell:
 
 
 def test_analysis_detects_widget_calls():
-    a = analyze(cell('region = wh.widgets.dropdown("region", "a", ["a"])\nn = widgets.get("n")\nprint(wh.widgets.get(name="m"))'))
+    a = analyze(cell('region = ia.widgets.dropdown("region", "a", ["a"])\nn = widgets.get("n")\nprint(ia.widgets.get(name="m"))'))
     assert a.widget_defs == {"region"}
     assert a.widgets == {"region", "n", "m"}
     assert analyze(cell("x = 1")).widgets == frozenset()
     assert analyze(cell('other.get("x")')).widgets == frozenset()
     # a name that is not a literal, or params(), stands for any widget
-    assert analyze(cell("wh.widgets.text(name)")).widgets == {"*"}
-    assert analyze(cell("p = wh.widgets.params()")).widgets == {"*"}
+    assert analyze(cell("ia.widgets.text(name)")).widgets == {"*"}
+    assert analyze(cell("p = ia.widgets.params()")).widgets == {"*"}
 
 
 def test_sql_placeholders_add_widget_dependencies():
@@ -155,11 +155,11 @@ def test_sql_placeholders_add_widget_dependencies():
 
 def test_graph_finds_widget_readers():
     cells = [
-        Cell("def", "python", 'v = wh.widgets.text("v")'),
-        Cell("use", "python", 'print(wh.widgets.get("v"))'),
+        Cell("def", "python", 'v = ia.widgets.text("v")'),
+        Cell("use", "python", 'print(ia.widgets.get("v"))'),
         Cell("q", "sql", "select :v", output="q"),
         Cell("other", "python", "y = 1"),
-        Cell("dyn", "python", "wh.widgets.get(k)"),
+        Cell("dyn", "python", "ia.widgets.get(k)"),
     ]
     assert DependencyGraph(cells).widget_readers("v") == ["def", "use", "q", "dyn"]
 
@@ -169,7 +169,7 @@ def test_graph_finds_widget_readers():
 
 def test_sql_cell_with_placeholders_round_trips():
     code = sql_source("top", "select * from sales where grp = :grp", ["recent"])
-    assert "params=wh.widgets.params()," in code
+    assert "params=iara.widgets.params()," in code
     assert detect_sql(code) == ("select * from sales where grp = :grp", "top")
     ast.parse(code)
     plain = sql_source("top", "select 1", [])
@@ -178,10 +178,10 @@ def test_sql_cell_with_placeholders_round_trips():
 
 def test_notebook_with_placeholder_cell_serializes_and_parses(tmp_path: Path):
     nb = marimo_io.new_notebook(tmp_path / "n.py")
-    nb.cells.append(Cell("w", "python", 'grp = wh.widgets.number("grp", 1)'))
+    nb.cells.append(Cell("w", "python", 'grp = iara.widgets.number("grp", 1)'))
     nb.cells.append(Cell("q", "sql", "select * from sales where grp = :grp", output="df"))
     text = marimo_io.serialize(nb)
-    assert "params=wh.widgets.params()" in text
+    assert "params=iara.widgets.params()" in text
     ast.parse(text)
     back = marimo_io.parse(text, tmp_path / "n.py")
     q = back.cell("q")
@@ -195,10 +195,10 @@ def test_notebook_with_placeholder_cell_serializes_and_parses(tmp_path: Path):
 def widget_cells() -> list[dict[str, Any]]:
     return [
         SETUP,
-        py("w", 'n = wh.widgets.number("n", 2, min=0, max=100)\nregion = wh.widgets.dropdown("region", "north", ["north", "south"])'),
-        py("a", 'print("a", wh.widgets.get("n"))\na_val = wh.widgets.get("n") * 10\na_val'),
+        py("w", 'n = ia.widgets.number("n", 2, min=0, max=100)\nregion = ia.widgets.dropdown("region", "north", ["north", "south"])'),
+        py("a", 'print("a", ia.widgets.get("n"))\na_val = ia.widgets.get("n") * 10\na_val'),
         py("b", "b_val = a_val + 1\nb_val"),
-        py("c", 'c_val = wh.widgets.get("region")\nc_val'),
+        py("c", 'c_val = ia.widgets.get("region")\nc_val'),
         py("free", "free = 5\nfree"),
     ]
 
@@ -260,11 +260,11 @@ def test_widgets_set_validates(session: KernelSession):
 
 def test_set_without_readers_only_stores(session: KernelSession):
     session.notebook.create("notebooks/w4.py")
-    run(session, [SETUP, py("w", 'v = wh.widgets.text("v", "x")')], None)
+    run(session, [SETUP, py("w", 'v = ia.widgets.text("v", "x")')], None)
     rec = Recorder()
     # the defining cell counts as a reader, so it runs and returns the new value
     assert session.notebook.set_widget("v", "y", None, rec)["ran"] == ["w"]
-    run(session, [SETUP, py("w", 'wh.widgets.text("v", "x")')], None)
+    run(session, [SETUP, py("w", 'ia.widgets.text("v", "x")')], None)
     session.notebook.widgets.remove("v")
     with pytest.raises(ValueError):
         session.notebook.set_widget("v", "z", None, rec)
@@ -282,9 +282,9 @@ def test_deleted_cells_widgets_disappear(session: KernelSession):
 
 def test_edited_cell_drops_the_widget_it_no_longer_defines(session: KernelSession):
     session.notebook.create("notebooks/w6.py")
-    cells = [SETUP, py("w", 'a = wh.widgets.text("a", "1")\nb = wh.widgets.text("b", "2")')]
+    cells = [SETUP, py("w", 'a = ia.widgets.text("a", "1")\nb = ia.widgets.text("b", "2")')]
     run(session, cells)
-    cells[1] = py("w", 'a = wh.widgets.text("a", "1")')
+    cells[1] = py("w", 'a = ia.widgets.text("a", "1")')
     _, rec = run(session, cells, ["w"])
     assert [d["name"] for d in last_widgets(rec)["definitions"]] == ["a"]
 
@@ -308,8 +308,8 @@ def test_restart_keeps_values_through_preset(session: KernelSession, workspace: 
 def job_source(workspace: Path) -> str:
     nb = marimo_io.new_notebook(workspace / "notebooks" / "job.py")
     nb.cells += [
-        Cell("w", "python", 'n = wh.widgets.number("n", 1)\nregion = wh.widgets.dropdown("region", "north", ["north", "south"])'),
-        Cell("p", "python", 'print(f"n={n} region={region} tags={wh.widgets.multiselect(\'tags\', [], [\'x\', \'y\'])}")'),
+        Cell("w", "python", 'n = iara.widgets.number("n", 1)\nregion = iara.widgets.dropdown("region", "north", ["north", "south"])'),
+        Cell("p", "python", 'print(f"n={n} region={region} tags={iara.widgets.multiselect(\'tags\', [], [\'x\', \'y\'])}")'),
     ]
     return marimo_io.serialize(nb)
 
@@ -349,14 +349,14 @@ def test_sql_cell_binds_widget_values(session: KernelSession):
     session.notebook.create("notebooks/w8.py")
     cells = [
         SETUP,
-        py("w", 'grp = wh.widgets.number("grp", 1, min=0, max=6)'),
+        py("w", 'grp = ia.widgets.number("grp", 1, min=0, max=6)'),
         sql("q", "select count(*) as n from sales where grp = :grp", "q"),
     ]
     run(session, cells)
     states = session.notebook.view()["states"]
     assert states["q"]["status"] == "done", states["q"]["output"]
-    first = session.notebook.values["q"].to_arrow().column("n")[0].as_py()
+    first = session.notebook.namespace()["q"].to_arrow().column("n")[0].as_py()
     assert first == len([i for i in range(1000) if i % 7 == 1])
     result = session.notebook.set_widget("grp", 3, None, Recorder())
     assert result["ran"] == ["w", "q"]
-    assert session.notebook.values["q"].to_arrow().column("n")[0].as_py() == len([i for i in range(1000) if i % 7 == 3])
+    assert session.notebook.namespace()["q"].to_arrow().column("n")[0].as_py() == len([i for i in range(1000) if i % 7 == 3])

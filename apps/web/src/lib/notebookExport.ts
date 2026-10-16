@@ -3,7 +3,7 @@
  * document, built from the cells as the editor holds them (unsaved edits too).
  */
 
-import type { Cell } from "@workhouse/protocol";
+import type { Cell } from "@iara/protocol";
 
 import { baseName } from "./paths";
 
@@ -25,7 +25,7 @@ function ipynbCell(cell: Cell): Record<string, unknown> {
   const id = cellId(cell.id);
   if (cell.kind === "markdown") return { cell_type: "markdown", id, metadata: {}, source: lines(cell.code) };
   // SQL cells run through the %%sql magic of Jupyter's SQL kernels
-  if (cell.kind === "sql") return codeCell(id, { workhouse: { kind: "sql" } }, lines(`%%sql\n${cell.code}`));
+  if (cell.kind === "sql") return codeCell(id, { iara: { kind: "sql" } }, lines(`%%sql\n${cell.code}`));
   return codeCell(id, {}, lines(cell.code));
 }
 
@@ -37,7 +37,7 @@ export function toIpynb(cells: Cell[], { name }: { name: string }): string {
     metadata: {
       kernelspec: { name: "python3", display_name: "Python 3", language: "python" },
       language_info: { name: "python" },
-      workhouse: { name },
+      iara: { name },
     },
     cells: cells.map(ipynbCell),
   };

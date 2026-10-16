@@ -2,7 +2,7 @@
 
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
-import type { PlanNode } from "@workhouse/protocol";
+import type { PlanNode } from "@iara/protocol";
 
 import { operatorColor } from "./operators";
 

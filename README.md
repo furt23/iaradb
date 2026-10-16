@@ -1,21 +1,21 @@
-# Workhouse
+# Iara
 
-A parallel query engine for analytics on a single machine. The core is written in Rust on Apache Arrow. It is used from Python, through a lazy DataFrame API and SQL, and from Workhouse Studio, a web workspace for notebooks and SQL.
+A parallel query engine for analytics on a single machine. The core is written in Rust on Apache Arrow. It is used from Python, through a lazy DataFrame API and SQL, and from Iara Studio, a web workspace for notebooks and SQL.
 
 ```python
-import workhouse as wh
-from workhouse import col
+import iara
+from iara import functions as F
 
 revenue = (
-    wh.scan_parquet("data/lineitem")
-    .join(wh.scan_parquet("data/orders"), left_on="l_orderkey", right_on="o_orderkey")
+    iara.scan_parquet("data/lineitem")
+    .join(iara.scan_parquet("data/orders"), left_on="l_orderkey", right_on="o_orderkey")
     .group_by("o_orderpriority")
-    .agg(revenue=(col("l_extendedprice") * (1 - col("l_discount"))).sum())
+    .agg(revenue=(F.col("l_extendedprice") * (1 - F.col("l_discount"))).sum())
     .sort("revenue", descending=True)
     .collect()
 )
 
-wh.sql("select k, sum(v) from t group by k", t=arrow_table)   # pyarrow, pandas or polars inputs
+iara.sql("select k, sum(v) from t group by k", t=arrow_table)   # pyarrow, pandas or polars inputs
 ```
 
 ## What it does
@@ -42,12 +42,13 @@ Wheels will be published to PyPI. Until then, build from source: see [docs/devel
 
 ## Performance
 
-TPC-H, all 22 queries over the same Parquet files (Ryzen 5 5600G, 16 GB RAM):
+TPC-H, all 22 queries over the same Parquet files, and ClickBench (AWS m7i.4xlarge, 16 vCPUs, 64 GB RAM):
 
-| | Workhouse | DuckDB 1.5.6 | Polars 1.44.2 |
+| | Iara | DuckDB 1.5.6 | Polars 2.0.0 |
 |---|---:|---:|---:|
-| SF1, total | **1.02 s** | 1.50 s | 1.99 s |
-| SF10, total | **9.87 s** | 13.94 s | 21.54 s |
+| TPC-H SF10, total | **5.88 s** | 7.69 s | 8.11 s |
+| TPC-H SF100, total | **60.6 s** | 82.1 s | 90.0 s |
+| ClickBench, 32 queries, total | **17.6 s** | 18.0 s | 20.3 s |
 
 Per-query numbers and how to reproduce them: [docs/benchmarks.md](docs/benchmarks.md).
 

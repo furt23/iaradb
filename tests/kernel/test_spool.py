@@ -8,15 +8,16 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pytest
 
-import workhouse as wh
-from workhouse.kernel.runtime.results import ResultStore
-from workhouse.kernel.runtime.spool import Spool, parse_size
+import iara as ia
+from iara import functions as F
+from iara.kernel.runtime.results import ResultStore
+from iara.kernel.runtime.spool import Spool, parse_size
 
 N = 200_000
 
 
 @pytest.fixture(scope="module")
-def lf() -> wh.LazyFrame:
+def lf() -> ia.LazyFrame:
     t = pa.table(
         {
             "id": pa.array(range(N), pa.int64()),
@@ -24,7 +25,7 @@ def lf() -> wh.LazyFrame:
             "s": [None if i % 17 == 0 else f"v{(i * 7) % 1000:04d}" for i in range(N)],
         }
     )
-    return wh.from_arrow(t).lazy()
+    return ia.from_arrow(t).lazy()
 
 
 def test_parse_size() -> None:
@@ -35,27 +36,27 @@ def test_parse_size() -> None:
         parse_size("lots")
 
 
-def test_small_results_stay_in_memory(lf: wh.LazyFrame, tmp_path: Path) -> None:
+def test_small_results_stay_in_memory(lf: ia.LazyFrame, tmp_path: Path) -> None:
     spooled = Spool(threshold=1 << 30, root=str(tmp_path)).collect(lf.stream())
     assert spooled.path is None
     assert spooled.table.equals(lf.collect().to_arrow())
     assert {"elapsed_ms", "memory_peak", "spilled_bytes", "pipelines"} <= spooled.profile.keys()
 
 
-def test_large_results_go_to_disk(lf: wh.LazyFrame, tmp_path: Path) -> None:
+def test_large_results_go_to_disk(lf: ia.LazyFrame, tmp_path: Path) -> None:
     spool = Spool(threshold=64 << 10, root=str(tmp_path))
-    spooled = spool.collect(lf.filter(wh.col("g") < 10).stream())
+    spooled = spool.collect(lf.filter(F.col("g") < 10).stream())
     assert spooled.path is not None and spooled.path.is_file() and tmp_path in spooled.path.parents
-    expected = lf.filter(wh.col("g") < 10).collect().to_arrow()
+    expected = lf.filter(F.col("g") < 10).collect().to_arrow()
     assert spooled.table.equals(expected)
     # the DataFrame of the cell's output variable reads the mapped file
-    assert wh.from_arrow(spooled.table).height == expected.num_rows
+    assert ia.from_arrow(spooled.table).height == expected.num_rows
     del spooled
     spool.close()
     assert not any(tmp_path.iterdir())
 
 
-def test_store_pages_and_sorts_spooled_results(lf: wh.LazyFrame, tmp_path: Path) -> None:
+def test_store_pages_and_sorts_spooled_results(lf: ia.LazyFrame, tmp_path: Path) -> None:
     store = ResultStore(spool=Spool(threshold=64 << 10, root=str(tmp_path)))
     spooled = store.spool.collect(lf.stream())
     out = store.put(spooled.table, "big", spooled.path)
@@ -73,7 +74,7 @@ def test_store_pages_and_sorts_spooled_results(lf: wh.LazyFrame, tmp_path: Path)
         assert tail["rows"] == [list(r.values()) for r in want.slice(N - 50).to_pylist()], sort
 
 
-def test_export_of_a_spooled_result(lf: wh.LazyFrame, tmp_path: Path) -> None:
+def test_export_of_a_spooled_result(lf: ia.LazyFrame, tmp_path: Path) -> None:
     store = ResultStore(spool=Spool(threshold=64 << 10, root=str(tmp_path / "spool")))
     spooled = store.spool.collect(lf.stream())
     rid = store.put(spooled.table, "big", spooled.path)["id"]

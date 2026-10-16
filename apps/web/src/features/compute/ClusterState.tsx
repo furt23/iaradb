@@ -55,9 +55,9 @@ export function StateChip({ cluster }: { cluster: ClusterView }) {
   );
 }
 
-/** "2 vCPU · 8 GiB · ≈$0.10/h" */
+/** "m7i.large · 2 vCPU · 8 GiB" */
 export function machineSummary(c: ClusterView): string {
   if (c.kind === "local") return "this machine";
   const t = c.instanceType;
-  return t ? `${t.name} · ${t.vcpus} vCPU · ${t.memoryGib} GiB · ≈$${t.usdPerHour.toFixed(2)}/h` : "unknown machine";
+  return t ? `${t.name} · ${t.vcpus} vCPU · ${t.memoryGib} GiB` : "unknown machine";
 }

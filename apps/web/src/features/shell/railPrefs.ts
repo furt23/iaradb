@@ -3,7 +3,7 @@
  * Expanded shows the section names next to the icons; collapsed shows icons only.
  */
 
-export const RAIL_KEY = "workhouse.rail";
+export const RAIL_KEY = "iara.rail";
 
 /** Expanded unless the browser stored "collapsed" (or nothing usable). */
 export function railExpandedFrom(stored: string | null | undefined): boolean {

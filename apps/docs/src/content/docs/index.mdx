@@ -1,5 +1,5 @@
 ---
-title: Workhouse Python API Reference
+title: Iara Python API Reference
 description: High-performance vectorized query engine with a lazy DataFrame API and SQL execution in Python.
 template: splash
 hero:
@@ -55,18 +55,18 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 ## Interactive Example
 
 ```python
-import workhouse as wh
-from workhouse import col
+import iara
+from iara import functions as F
 
 # 1. Lazily scan Parquet data
 plan = (
-    wh.scan_parquet("data/sales/*.parquet")
-    .filter(col("amount") > 100.0)
+    iara.scan_parquet("data/sales/*.parquet")
+    .filter(F.col("amount") > 100.0)
     .group_by("region")
     .agg(
-        total_revenue=col("amount").sum(),
-        avg_order=col("amount").mean(),
-        order_count=wh.len(),
+        total_revenue=F.col("amount").sum(),
+        avg_order=F.col("amount").mean(),
+        order_count=F.len(),
     )
     .sort("total_revenue", descending=True)
 )

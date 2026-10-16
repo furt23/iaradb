@@ -1,6 +1,6 @@
 /** The Studio's sections (the navigation rail) and which side panel each shows (pure). */
 
-export type SectionId = "workspace" | "data" | "sql" | "history" | "jobs" | "compute" | "git";
+export type SectionId = "workspace" | "data" | "wrangle" | "sql" | "history" | "jobs" | "compute" | "git";
 /** the side panel of a section, if it has one */
 export type PanelId = "files" | "catalog";
 
@@ -14,6 +14,7 @@ export interface Section {
 export const SECTIONS: Section[] = [
   { id: "workspace", href: "/notebooks", label: "Workspace", panel: "files" },
   { id: "data", href: "/data", label: "Data", panel: "catalog" },
+  { id: "wrangle", href: "/wrangle", label: "Wrangler", panel: "catalog" },
   { id: "sql", href: "/sql", label: "SQL editor", panel: null },
   { id: "history", href: "/history", label: "Query history", panel: null },
   { id: "jobs", href: "/jobs", label: "Jobs", panel: null },
@@ -27,6 +28,7 @@ const PREFIXES: [string, SectionId][] = [
   ["/files", "workspace"],
   ["/data", "data"],
   ["/catalog", "data"],
+  ["/wrangle", "wrangle"],
   ["/sql", "sql"],
   ["/history", "history"],
   ["/analyze", "history"],

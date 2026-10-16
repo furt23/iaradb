@@ -7,13 +7,14 @@ import path from "node:path";
 
 import { utils } from "ssh2";
 
+import { DEFAULT_MAX_HOURS } from "./instanceTypes";
 import type { ClusterRecord } from "./types";
 
 /**
  * The Studio's own state (not the workspace's): clusters, which notebook is
  * attached to which cluster, the default cluster, and the SSH identity the
  * Studio uses to reach its machines. One JSON file plus a private key in
- * `WORKHOUSE_STUDIO_DATA` (default ~/.workhouse/studio).
+ * `IARA_STUDIO_DATA` (default ~/.iara/studio).
  */
 
 export interface StudioState {
@@ -31,7 +32,7 @@ export interface Identity {
 }
 
 export function dataDir(): string {
-  return process.env.WORKHOUSE_STUDIO_DATA || path.join(os.homedir(), ".workhouse", "studio");
+  return process.env.IARA_STUDIO_DATA || path.join(os.homedir(), ".iara", "studio");
 }
 
 function writeAtomic(file: string, text: string, mode = 0o600): void {
@@ -39,6 +40,13 @@ function writeAtomic(file: string, text: string, mode = 0o600): void {
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, text, { mode });
   fs.renameSync(tmp, file);
+}
+
+type NewSettings = Pick<ClusterRecord, "libraries" | "env" | "initScript" | "spot" | "maxHours" | "tags">;
+
+/** A cluster read from disk, with the settings added since it was saved. */
+function withDefaults(c: Omit<ClusterRecord, keyof NewSettings> & Partial<NewSettings>): ClusterRecord {
+  return { libraries: [], env: {}, initScript: "", spot: false, maxHours: DEFAULT_MAX_HOURS, tags: {}, ...c };
 }
 
 export class Store {
@@ -54,7 +62,7 @@ export class Store {
     if (this.cache) return this.cache;
     try {
       const data = JSON.parse(fs.readFileSync(this.file, "utf8")) as Partial<StudioState>;
-      this.cache = { installationId: data.installationId ?? crypto.randomUUID(), clusters: data.clusters ?? [], attachments: data.attachments ?? {}, defaultCluster: data.defaultCluster };
+      this.cache = { installationId: data.installationId ?? crypto.randomUUID(), clusters: (data.clusters ?? []).map(withDefaults), attachments: data.attachments ?? {}, defaultCluster: data.defaultCluster };
     } catch {
       this.cache = { installationId: crypto.randomUUID(), clusters: [], attachments: {} };
     }
@@ -87,7 +95,7 @@ export class Store {
   identity(): Identity {
     const keyFile = path.join(this.dir, "id_ed25519");
     if (!fs.existsSync(keyFile)) {
-      const pair = utils.generateKeyPairSync("ed25519", { comment: "workhouse-studio" });
+      const pair = utils.generateKeyPairSync("ed25519", { comment: "iara-studio" });
       writeAtomic(keyFile, pair.private);
       writeAtomic(`${keyFile}.pub`, pair.public, 0o644);
     }

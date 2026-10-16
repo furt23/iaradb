@@ -1,4 +1,4 @@
-import { operatorColors } from "@workhouse/ui";
+import { operatorColors } from "@iara/ui";
 
 /** Operator family of a plan node or pipeline step, for colors and icons. */
 export function operatorFamily(name: string): keyof typeof operatorColors {

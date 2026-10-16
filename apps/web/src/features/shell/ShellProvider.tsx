@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 
 import { RAIL_KEY, railExpandedFrom, railStoredValue } from "./railPrefs";
 
-const STORAGE_KEY = "workhouse.sidePanel.v1";
+const STORAGE_KEY = "iara.sidePanel.v1";
 
 export interface ShellApi {
   /** the side panel is shown (it can be hidden for more room) */

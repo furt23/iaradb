@@ -1,6 +1,6 @@
 /** Notebook editor state: cells being edited plus what the kernel reports (pure). */
 
-import type { Cell, CellKind, CellState, CellStateEvent, CellStreamEvent, NotebookView, ProgressEvent, QueryProfile, WidgetValue, WidgetsState } from "@workhouse/protocol";
+import type { Cell, CellKind, CellState, CellStateEvent, CellStreamEvent, NotebookView, ProgressEvent, QueryProfile, WidgetValue, WidgetsState } from "@iara/protocol";
 
 /** The run in progress: what the kernel queued and what already finished. */
 export interface RunProgress {
@@ -34,7 +34,7 @@ export interface NotebookState {
   running: boolean;
   current: RunProgress | null;
   lastRun: RunSummary | null;
-  /** the widgets the cells defined (`wh.widgets.*`) and their values */
+  /** the widgets the cells defined (`iara.widgets.*`) and their values */
   widgets: WidgetsState;
 }
 

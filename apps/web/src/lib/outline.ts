@@ -6,7 +6,7 @@
  * tagged on the rendered heading.
  */
 
-import type { Cell } from "@workhouse/protocol";
+import type { Cell } from "@iara/protocol";
 
 /** A heading of a markdown text. */
 export interface MarkdownHeading {

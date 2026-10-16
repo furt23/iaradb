@@ -1,10 +1,10 @@
 "use server";
 
-import { ENGINE_VERSION } from "@workhouse/protocol";
+import { ENGINE_VERSION } from "@iara/protocol";
 
 import type { StudioUser } from "../auth/access";
 import { AuthError, requireUser } from "../auth/session";
-import { ClusterError } from "../compute/clusters";
+import { ClusterError } from "../compute/clusterError";
 import type { ClusterEvent } from "../compute/events";
 import { canManageCluster } from "../compute/permissions";
 import { INSTANCE_TYPES } from "../compute/instanceTypes";
@@ -67,12 +67,31 @@ export interface ClusterInput {
   instanceType: string;
   autoTerminateMinutes: number;
   volumeGb: number;
+  libraries: string[];
+  env: Record<string, string>;
+  initScript: string;
+  spot: boolean;
+  maxHours: number;
+  tags: Record<string, string>;
 }
 
-export async function createCluster(input: ClusterInput): Promise<ActionResult<{ id: string }>> {
+/** Where a cluster's log lines come from: the machine's boot (engine, libraries, init script) or the Studio's kernels. */
+export type ClusterLogSource = "boot" | "init" | "kernels";
+
+export interface ClusterLogs {
+  /** oldest first */
+  lines: string[];
+  /** why there are no lines (the cluster is terminated, the machine is not reachable yet) */
+  unavailable?: string;
+}
+
+/** A new cluster; `start` launches its machine at once. */
+export async function createCluster(input: ClusterInput, start: boolean): Promise<ActionResult<{ id: string }>> {
   return attempt(async () => {
     const user = await requireUser();
-    return { id: clusters.create({ ...input, owner: user.email || undefined }).id };
+    const { id } = clusters.create({ ...input, owner: user.email || undefined });
+    if (start) clusters.start(id);
+    return { id };
   });
 }
 
@@ -198,5 +217,17 @@ export async function restartClusterKernel(key: string): Promise<ActionResult<nu
     await requireUser();
     await kernels.restartNow(parseKernelKey(key));
     return null;
+  });
+}
+
+/** The last lines of a cluster's log (`boot` and `init` come from the machine over SSH, `kernels` from the Studio). */
+export async function clusterLogs(id: string, source: ClusterLogSource): Promise<ActionResult<ClusterLogs>> {
+  return attempt(async () => {
+    await requireUser();
+    if (source !== "kernels") return clusters.logs(id, source);
+    const running = kernels.stderrOn(id);
+    if (!running.length) return { lines: [], unavailable: "no kernel runs on this cluster" };
+    const lines = running.flatMap((k) => k.lines.map((l) => `[${k.key}] ${l}`));
+    return lines.length ? { lines } : { lines, unavailable: "no kernel wrote to stderr yet" };
   });
 }

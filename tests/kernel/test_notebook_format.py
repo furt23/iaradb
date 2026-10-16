@@ -7,10 +7,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from workhouse.kernel.notebook import marimo_io
-from workhouse.kernel.notebook.analysis import analyze_python, sql_identifiers
-from workhouse.kernel.notebook.graph import DependencyGraph
-from workhouse.kernel.notebook.model import Cell, new_cell_id
+from iara.kernel.notebook import marimo_io
+from iara.kernel.notebook.analysis import analyze_python, sql_identifiers
+from iara.kernel.notebook.graph import DependencyGraph
+from iara.kernel.notebook.model import Cell, new_cell_id
 
 
 def cell(code: str, kind: str = "python", output: str | None = None, cid: str | None = None) -> Cell:
@@ -61,8 +61,29 @@ def test_graph_edges_and_order():
 
 def test_graph_errors():
     g = DependencyGraph([cell("x = 1", cid="a"), cell("x = 2", cid="b"), cell("p = q", cid="c"), cell("q = p", cid="d")])
-    assert "more than one cell" in g.errors["a"] and "more than one cell" in g.errors["b"]
+    assert "a" not in g.errors and "b" not in g.errors
     assert "cycle" in g.errors["c"] and "cycle" in g.errors["d"]
+
+
+def test_a_redefined_name_is_read_from_the_nearest_cell_above():
+    g = DependencyGraph(
+        [
+            cell("print(df)", cid="early"),
+            cell("df = 1", cid="a"),
+            cell("df = df + 1", cid="b"),
+            cell("n = df * 10", cid="c"),
+            cell("df = 0", cid="d"),
+            cell("m = df", cid="e"),
+            cell("u = unique", cid="before"),
+            cell("unique = 1", cid="def"),
+        ]
+    )
+    assert g.deps["b"].sources == {"df": "a"} and g.deps["c"].sources == {"df": "b"} and g.deps["e"].sources == {"df": "d"}
+    # a name defined once is read from its cell wherever it is
+    assert g.deps["before"].sources == {"unique": "def"}
+    assert "read before the cells that define it" in g.errors["early"]
+    assert set(g.errors) == {"early"}
+    assert g.descendants("a") == {"b", "c"}
 
 
 def test_sql_cells_reference_frames_case_insensitively():
@@ -84,10 +105,10 @@ app = marimo.App(width="medium")
 @app.cell
 def _():
     import marimo as mo
-    import workhouse as wh
+    import iara as ia
 
-    ws = wh.workspace()
-    return mo, wh, ws
+    ws = ia.workspace()
+    return mo, ia, ws
 
 
 @app.cell(hide_code=True)
@@ -299,39 +320,19 @@ def test_notebook_with_ids_and_options_still_runs(workspace: Path):
 # the setup cell
 # ---------------------------------------------------------------------------
 
-OLD_TEMPLATE = """import marimo
-
-__generated_with = "0.16.0"
-app = marimo.App(width="medium")
-
-
-@app.cell(id="abc12345")
-def _():
-    import marimo as mo
-    import workhouse as wh
-
-    ws = wh.workspace()
-    return mo, wh, ws
-
-
-@app.cell
-def _(ws):
-    df = ws.sql("select 1 as a").collect()
-    return (df,)
-
-
-if __name__ == "__main__":
-    app.run()
-"""
-
-
 def test_new_notebook_starts_with_a_setup_cell(tmp_path: Path):
     nb = marimo_io.new_notebook(tmp_path / "nb.py")
     assert [(c.id, c.setup, c.name) for c in nb.cells] == [("setup", True, "setup")]
     assert nb.cells[0].code == marimo_io.TEMPLATE_CELL
     src = marimo_io.serialize(nb)
-    assert "with app.setup:\n    import marimo as mo\n    import workhouse as wh\n\n    ws = wh.workspace()\n" in src
+    setup = "with app.setup:\n    import marimo as mo\n    import iara\n\n    ws = iara.workspace()\n"
+    assert setup in src
     assert "@app.cell" not in src
+
+
+def test_a_saved_notebook_keeps_its_setup_cell(tmp_path: Path):
+    again = marimo_io.parse(marimo_io.serialize(marimo_io.new_notebook(tmp_path / "n.py")), tmp_path / "n.py")
+    assert [(c.id, c.setup) for c in again.cells] == [("setup", True)]
 
 
 def test_setup_names_are_not_cell_parameters(tmp_path: Path):
@@ -344,27 +345,3 @@ def test_setup_names_are_not_cell_parameters(tmp_path: Path):
     assert marimo_io.serialize(again) == src
 
 
-def test_an_old_template_cell_becomes_the_setup_cell(tmp_path: Path):
-    nb = marimo_io.parse(OLD_TEMPLATE, tmp_path / "nb.py")
-    assert nb.cells[0].id == "setup" and nb.cells[0].setup and len(nb.cells) == 2
-    src = marimo_io.serialize(nb)
-    assert "with app.setup:" in src and "def _():\n    df = ws.sql(" in src
-
-
-def test_the_template_matches_modulo_blank_lines_and_indentation(tmp_path: Path):
-    nb = marimo_io.new_notebook(tmp_path / "nb.py")
-    nb.cells = [Cell("x", "python", "\n  import marimo as mo\nimport workhouse as wh\nws = wh.workspace()\n\n")]
-    assert marimo_io.migrate_template(nb).cells[0].setup
-
-
-def test_other_first_cells_are_left_alone(tmp_path: Path):
-    changed = OLD_TEMPLATE.replace("ws = wh.workspace()", "ws = wh.workspace('x')")
-    nb = marimo_io.parse(changed, tmp_path / "nb.py")
-    assert not any(c.setup for c in nb.cells) and nb.cells[0].id == "abc12345"
-    # the template in second place is not migrated
-    nb = marimo_io.parse(OLD_TEMPLATE, tmp_path / "nb.py")
-    nb.cells = [Cell("a", "python", "x = 1"), Cell("b", "python", marimo_io.TEMPLATE_CELL)]
-    assert not any(c.setup for c in marimo_io.migrate_template(nb).cells)
-    # a notebook that already has a setup cell keeps its own
-    again = marimo_io.parse(marimo_io.serialize(marimo_io.new_notebook(tmp_path / "n.py")), tmp_path / "n.py")
-    assert [c.id for c in again.cells] == ["setup"]

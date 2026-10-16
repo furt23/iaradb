@@ -10,10 +10,10 @@ import { resolveWorkspacePath } from "./files";
 
 /**
  * The workspace files the Studio owns and sends to kernels (protocol 2):
- * notebooks and `workhouse.toml`.
+ * notebooks and `iara.toml`.
  */
 
-export const CONFIG_NAME = "workhouse.toml";
+export const CONFIG_NAME = "iara.toml";
 
 export async function readNotebookSource(rel: string): Promise<string> {
   try {
@@ -41,7 +41,7 @@ export async function writeNotebookSource(rel: string, source: string): Promise<
   await writeAtomic(resolveWorkspacePath(rel), source);
 }
 
-/** The text of `workhouse.toml` (null when the workspace has none). */
+/** The text of `iara.toml` (null when the workspace has none). */
 export async function readConfigText(): Promise<string | null> {
   try {
     return await fs.readFile(path.join(config.workspace, CONFIG_NAME), "utf8");
@@ -51,7 +51,7 @@ export async function readConfigText(): Promise<string | null> {
   }
 }
 
-/** The workspace's name: `[workspace] name` of workhouse.toml, else its folder's name. */
+/** The workspace's name: `[workspace] name` of iara.toml, else its folder's name. */
 export async function workspaceName(): Promise<string> {
   try {
     const cfg = parse((await readConfigText()) ?? "") as { workspace?: { name?: unknown } };

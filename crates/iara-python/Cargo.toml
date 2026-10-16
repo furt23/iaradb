@@ -1,0 +1,21 @@
+[package]
+name = "iara-python"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "_iara"
+crate-type = ["cdylib"]
+
+[dependencies]
+iara-core = { path = "../iara-core" }
+arrow.workspace = true
+chrono.workspace = true
+pyo3 = { version = "0.29", features = ["abi3-py310", "extension-module"] }
+parking_lot.workspace = true
+mimalloc = { version = "0.1", default-features = false }
+
+[features]
+default = ["s3"]
+s3 = ["iara-core/s3"]

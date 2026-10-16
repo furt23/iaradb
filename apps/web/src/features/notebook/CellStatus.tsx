@@ -4,7 +4,7 @@ import Box from "@mui/material/Box";
 import CircularProgress from "@mui/material/CircularProgress";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
-import type { CellStatus } from "@workhouse/protocol";
+import type { CellStatus } from "@iara/protocol";
 
 import { formatDuration } from "@/lib/format";
 
@@ -21,7 +21,7 @@ const LABELS: Record<CellStatus | "stale", string> = {
 const COLORS: Record<CellStatus | "stale", string> = {
   idle: "transparent",
   queued: "text.disabled",
-  running: "primary.main",
+  running: "ochre.main",
   done: "success.main",
   error: "error.main",
   cancelled: "warning.main",

@@ -41,13 +41,13 @@ webhook = "https://example.com/hook"
 describe("job files", () => {
   it("round-trip", () => {
     const text = jobToml(spec);
-    expect(text.startsWith("# A Workhouse job: runs notebooks/sales.py on a schedule")).toBe(true);
+    expect(text.startsWith("# A Iara job: runs notebooks/sales.py on a schedule")).toBe(true);
     expect(parseJob("nightly_sales", text)).toEqual(spec);
   });
 
   it("keep the one-target form of a single task", () => {
     expect(jobToml(spec)).toBe(
-      '# A Workhouse job: runs notebooks/sales.py on a schedule (cron, UTC).\nname = "Nightly sales"\ntarget = "notebooks/sales.py"\nschedule = "0 6 * * *"\ncluster = "job"\ninstance_type = "m7i-flex.large"\ntimeout_minutes = 60\n\n',
+      '# A Iara job: runs notebooks/sales.py on a schedule (cron, UTC).\nname = "Nightly sales"\ntarget = "notebooks/sales.py"\nschedule = "0 6 * * *"\ncluster = "job"\ninstance_type = "m7i-flex.large"\ntimeout_minutes = 60\n\n',
     );
   });
 
@@ -81,7 +81,7 @@ describe("job files", () => {
   it("write several tasks, params and notify, and read them back the same", () => {
     const job = parseJob("nightly", DAG_TOML);
     const text = jobToml(job);
-    expect(text.startsWith("# A Workhouse job: runs 2 tasks on a schedule")).toBe(true);
+    expect(text.startsWith("# A Iara job: runs 2 tasks on a schedule")).toBe(true);
     expect(text).toContain("[[task]]");
     // the target lines are in the tasks, not at the top of the file
     expect(text.split("[[")[0]).not.toContain("target =");

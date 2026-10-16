@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import type { QueryAnalysis } from "@workhouse/protocol";
+import type { QueryAnalysis } from "@iara/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { getAnalysis, listAnalyses, saveAnalysis } from "./store";

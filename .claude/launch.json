@@ -4,8 +4,32 @@
     {
       "name": "studio",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "@workhouse/web", "dev"],
+      "runtimeArgs": [
+        "--filter",
+        "@iara/web",
+        "dev"
+      ],
       "port": 3870
+    },
+    {
+      "name": "site",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--filter",
+        "@iara/site",
+        "dev"
+      ],
+      "port": 4322
+    },
+    {
+      "name": "docs",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--filter",
+        "@iara/docs",
+        "dev"
+      ],
+      "port": 4321
     }
   ]
 }

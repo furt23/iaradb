@@ -1,4 +1,4 @@
-import type { Completions, Diagnostic, SignatureHelp } from "@workhouse/protocol";
+import type { Completions, Diagnostic, SignatureHelp } from "@iara/protocol";
 
 /**
  * Code assistance an editor can ask for: computed elsewhere (the notebook's

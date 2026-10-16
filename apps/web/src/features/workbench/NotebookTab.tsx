@@ -3,7 +3,7 @@
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import CircularProgress from "@mui/material/CircularProgress";
-import type { NotebookView } from "@workhouse/protocol";
+import type { NotebookView } from "@iara/protocol";
 import { useEffect, useState } from "react";
 
 import { NotebookEditor } from "@/features/notebook/NotebookEditor";

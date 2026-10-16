@@ -30,14 +30,14 @@ GroupBy.agg(*aggs: Any, **named: Any) -> LazyFrame
 ```
 
 #### Parameters
-- **`*aggs`**: Aggregation expressions (e.g. `col("x").sum()`).
+- **`*aggs`**: Aggregation expressions (e.g. `F.col("x").sum()`).
 - **`**named`**: Aggregation expressions aliased automatically.
 
 #### Example
 ```python
->>> import workhouse as wh
->>> from workhouse import col
->>> df = wh.from_dict({
+>>> import iara
+>>> from iara import functions as F
+>>> df = iara.from_dict({
 ...     "category": ["Book", "Electronics", "Book", "Electronics"],
 ...     "price": [15.0, 300.0, 25.0, 150.0],
 ...     "units": [4, 1, 2, 2],
@@ -46,9 +46,9 @@ GroupBy.agg(*aggs: Any, **named: Any) -> LazyFrame
 ...     df.lazy()
 ...     .group_by("category")
 ...     .agg(
-...         total_revenue=(col("price") * col("units")).sum(),
-...         avg_price=col("price").mean(),
-...         order_count=wh.len(),
+...         total_revenue=(F.col("price") * F.col("units")).sum(),
+...         avg_price=F.col("price").mean(),
+...         order_count=F.len(),
 ...     )
 ...     .sort("category")
 ...     .collect()
@@ -75,11 +75,11 @@ LazyFrame.agg(*aggs: Any, **named: Any) -> LazyFrame
 
 #### Example
 ```python
->>> df = wh.from_dict({"val": [10.0, 20.0, 30.0]})
+>>> df = iara.from_dict({"val": [10.0, 20.0, 30.0]})
 >>> df.lazy().agg(
-...     total=col("val").sum(),
-...     avg=col("val").mean(),
-...     max=col("val").max()
+...     total=F.col("val").sum(),
+...     avg=F.col("val").mean(),
+...     max=F.col("val").max()
 ... ).collect().show()
 ┌───────┬──────┬──────┐
 │ total │ avg  │ max  │
@@ -94,15 +94,15 @@ LazyFrame.agg(*aggs: Any, **named: Any) -> LazyFrame
 ### Common Aggregation Functions
 
 The following functions can be used inside `.agg()`:
-- `wh.sum(name)` or `col(name).sum()`: Total sum of non-null values.
-- `wh.mean(name)` or `col(name).mean()`: Arithmetic average.
-- `wh.min(name)` or `col(name).min()`: Minimum value.
-- `wh.max(name)` or `col(name).max()`: Maximum value.
-- `wh.count()` or `col(name).count()`: Count of rows or non-null values.
-- `wh.len()`: Row count.
-- `col(name).n_unique()`: Number of distinct values.
-- `col(name).std(ddof=1)`: Sample standard deviation.
-- `col(name).var(ddof=1)`: Sample variance.
-- `col(name).median()`: Median value.
-- `col(name).first()` / `col(name).last()`: First or last encountered value.
-- `col(name).filter(predicate).sum()`: Filtered aggregate.
+- `F.sum(name)` or `F.col(name).sum()`: Total sum of non-null values.
+- `F.mean(name)` or `F.col(name).mean()`: Arithmetic average.
+- `F.min(name)` or `F.col(name).min()`: Minimum value.
+- `F.max(name)` or `F.col(name).max()`: Maximum value.
+- `F.count()` or `F.col(name).count()`: Count of rows or non-null values.
+- `F.len()`: Row count.
+- `F.col(name).n_unique()`: Number of distinct values.
+- `F.col(name).std(ddof=1)`: Sample standard deviation.
+- `F.col(name).var(ddof=1)`: Sample variance.
+- `F.col(name).median()`: Median value.
+- `F.col(name).first()` / `F.col(name).last()`: First or last encountered value.
+- `F.col(name).filter(predicate).sum()`: Filtered aggregate.

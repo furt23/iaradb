@@ -1,4 +1,4 @@
-import type { AssistRequest, CellKind } from "@workhouse/protocol";
+import type { AssistRequest, CellKind } from "@iara/protocol";
 
 import type { EditorAssist } from "@/features/editor/assist";
 import type { ActionResult } from "@/server/result";

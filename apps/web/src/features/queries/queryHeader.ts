@@ -1,17 +1,17 @@
 /**
  * A saved query keeps its settings in leading SQL comments, one per line:
  *
- *     -- workhouse:chart {"kind":"bar","x":"region","y":["revenue"],"agg":"sum"}
- *     -- workhouse:params {"region":{"type":"text","default":"EU"}}
+ *     -- iara:chart {"kind":"bar","x":"region","y":["revenue"],"agg":"sum"}
+ *     -- iara:params {"region":{"type":"text","default":"EU"}}
  *
  * so the file stays plain SQL that any tool can run. Lines with other keys are
  * kept as written (pure).
  */
 
-import type { ChartSpec, QueryParamType } from "@workhouse/protocol";
+import type { ChartSpec, QueryParamType } from "@iara/protocol";
 
-const PREFIX = "-- workhouse:";
-const LINE = /^-- workhouse:([A-Za-z][\w-]*) (.*)$/;
+const PREFIX = "-- iara:";
+const LINE = /^-- iara:([A-Za-z][\w-]*) (.*)$/;
 
 export const PARAM_TYPES: readonly QueryParamType[] = ["text", "number", "boolean", "date", "select"];
 

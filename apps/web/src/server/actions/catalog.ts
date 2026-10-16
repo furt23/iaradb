@@ -1,6 +1,6 @@
 "use server";
 
-import type { CellOutput, DeltaCommit, TableInfo, TableRef } from "@workhouse/protocol";
+import type { CellOutput, DeltaCommit, TableInfo, TableRef } from "@iara/protocol";
 
 import { type CatalogSchema, displayName, MAIN_SCHEMA, parseTableName, tableEntry } from "@/lib/catalogToml";
 
@@ -40,7 +40,7 @@ export async function previewTable(name: string, limit = 200): Promise<ActionRes
   });
 }
 
-/** The schemas of workhouse.toml (`main` first). */
+/** The schemas of iara.toml (`main` first). */
 export async function listSchemas(): Promise<ActionResult<CatalogSchema[]>> {
   return attempt(async () => {
     await requireUser();
@@ -64,15 +64,15 @@ export async function addTable(name: string, path: string, format?: "parquet" | 
   });
 }
 
-// workhouse.toml edits go through kernels.exclusive, as catalog changes from runs and jobs do: no edit is lost
+// iara.toml edits go through kernels.exclusive, as catalog changes from runs and jobs do: no edit is lost
 
-/** A running workspace kernel re-reads workhouse.toml (none is started for it). */
+/** A running workspace kernel re-reads iara.toml (none is started for it). */
 async function syncRunningKernel(): Promise<void> {
   const kernel = kernels.existing(WORKSPACE_KERNEL);
   if (kernel) await kernel.request("workspace.configure", { toml: await readConfigText() });
 }
 
-/** Remove a table from workhouse.toml; a running workspace kernel forgets it too. */
+/** Remove a table from iara.toml; a running workspace kernel forgets it too. */
 export async function removeTable(name: string): Promise<ActionResult<null>> {
   return attempt(async () => {
     await requireUser();
@@ -82,7 +82,7 @@ export async function removeTable(name: string): Promise<ActionResult<null>> {
   });
 }
 
-/** Declare a schema in workhouse.toml; a running workspace kernel sees it too. */
+/** Declare a schema in iara.toml; a running workspace kernel sees it too. */
 export async function createSchema(name: string, description?: string, location?: string): Promise<ActionResult<null>> {
   return attempt(async () => {
     await requireUser();
@@ -92,7 +92,7 @@ export async function createSchema(name: string, description?: string, location?
   });
 }
 
-/** Remove an empty schema from workhouse.toml. */
+/** Remove an empty schema from iara.toml. */
 export async function removeSchema(name: string): Promise<ActionResult<null>> {
   return attempt(async () => {
     await requireUser();
@@ -111,7 +111,7 @@ export async function refreshCatalog(): Promise<ActionResult<null>> {
   });
 }
 
-/** workhouse.toml may have changed on disk: its tables, also for a running workspace kernel. */
+/** iara.toml may have changed on disk: its tables, also for a running workspace kernel. */
 export async function syncCatalog(): Promise<ActionResult<TableRef[]>> {
   return attempt(async () => {
     await requireUser();

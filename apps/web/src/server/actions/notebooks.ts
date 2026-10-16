@@ -1,6 +1,6 @@
 "use server";
 
-import type { Cell, NotebookView, Variable } from "@workhouse/protocol";
+import type { Cell, NotebookView, Variable } from "@iara/protocol";
 
 import { requireUser } from "../auth/session";
 import { normalizeRelative, notebookKernel } from "../kernel/keys";

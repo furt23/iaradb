@@ -1,0 +1,180 @@
+---
+/**
+ * Grouped horizontal bars: Iara, DuckDB and Polars per row, scaled to the largest value in the set.
+ * Plain HTML and CSS, so the text keeps its size in narrow cards and on phones.
+ */
+interface Row {
+  label: string;
+  iara: number;
+  duckdb: number;
+  polars: number;
+}
+
+interface Props {
+  title: string;
+  unit: string;
+  rows: Row[];
+  lowerIsBetter?: boolean;
+  /** Hide the legend when several charts sit side by side under one shared legend. */
+  legend?: boolean;
+}
+
+const { title, unit, rows, lowerIsBetter = true, legend = true } = Astro.props;
+
+const max = Math.max(1, ...rows.flatMap((r) => [r.iara, r.duckdb, r.polars]));
+const pct = (v: number) => `${((v / max) * 100).toFixed(2)}%`;
+const fmt = (v: number) => (unit === 'ms' ? v.toLocaleString('en-US') : v.toFixed(v < 10 ? 2 : 1));
+
+const engines = [
+  { key: 'iara', name: 'Iara' },
+  { key: 'duckdb', name: 'DuckDB' },
+  { key: 'polars', name: 'Polars' },
+] as const;
+---
+
+<figure class="bb" aria-label={title}>
+  {
+    legend && (
+      <figcaption class="bb__legend">
+        {engines.map((e) => (
+          <span class="bb__key">
+            <span class={`bb__swatch bb__swatch--${e.key}`} />
+            {e.name}
+          </span>
+        ))}
+        <span class="bb__note">{lowerIsBetter ? 'Lower is better' : 'Higher is better'}</span>
+      </figcaption>
+    )
+  }
+  <div class="bb__rows">
+    {
+      rows.map((r) => {
+        const best = Math.min(r.iara, r.duckdb, r.polars);
+        return (
+          <div class="bb__row">
+            <div class="bb__label">{r.label}</div>
+            <div class="bb__bars">
+              {engines.map((e) => (
+                <div class="bb__line">
+                  <span class={`bb__bar bb__bar--${e.key}`} style={`width: ${pct(r[e.key])}`} />
+                  <span class={`bb__value ${e.key === 'iara' ? 'bb__value--iara' : ''} ${r[e.key] === best ? 'bb__value--best' : ''}`}>
+                    {fmt(r[e.key])} {unit}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })
+    }
+  </div>
+</figure>
+
+<style>
+  .bb {
+    margin: 0;
+  }
+
+  .bb__legend {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 16px;
+    margin-bottom: 18px;
+    font-size: 0.85rem;
+    color: var(--ink-2);
+  }
+
+  .bb__key {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .bb__swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+  }
+
+  .bb__note {
+    margin-left: auto;
+    color: var(--ink-3);
+  }
+
+  .bb__rows {
+    display: grid;
+    gap: 14px;
+  }
+
+  .bb__row {
+    display: grid;
+    grid-template-columns: 56px minmax(0, 1fr);
+    gap: 12px;
+    align-items: center;
+  }
+
+  .bb__label {
+    font-size: 0.85rem;
+    color: var(--ink-2);
+  }
+
+  .bb__bars {
+    display: grid;
+    gap: 3px;
+  }
+
+  .bb__line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .bb__bar {
+    height: 12px;
+    border-radius: 0 4px 4px 0;
+    flex: 0 0 auto;
+    max-width: calc(100% - 92px);
+  }
+
+  .bb__bar--iara,
+  .bb__swatch--iara {
+    background: var(--engine-iara);
+  }
+
+  .bb__bar--duckdb,
+  .bb__swatch--duckdb {
+    background: var(--engine-duckdb);
+  }
+
+  .bb__bar--polars,
+  .bb__swatch--polars {
+    background: var(--engine-polars);
+  }
+
+  .bb__value {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--ink-2);
+    white-space: nowrap;
+  }
+
+  .bb__value--iara {
+    color: var(--cobalt);
+  }
+
+  .bb__value--best {
+    font-weight: 700;
+  }
+
+  /* single-row charts (the summary cards): the label goes above the bars */
+  .bb__rows:has(> .bb__row:only-child) .bb__row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .bb__rows:has(> .bb__row:only-child) .bb__bar {
+    height: 18px;
+  }
+</style>

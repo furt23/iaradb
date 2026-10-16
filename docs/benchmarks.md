@@ -1,67 +1,85 @@
 # Benchmarks
 
-All 22 TPC-H queries on Workhouse, DuckDB 1.5.6 and Polars 1.44.2. The engines read the same Parquet files (ZSTD, double-precision numerics). Each figure is the median wall-clock time after a warm-up run, and results are checked against DuckDB.
+TPC-H (all 22 queries) and ClickBench on Iara, DuckDB 1.5.6 and Polars 2.0.0. The engines read the same Parquet files. TPC-H data comes from `tpchgen-cli` (ZSTD, `DECIMAL(15,2)` prices); ClickBench uses the single-file `hits.parquet`. Each figure is the median wall-clock time after a warm-up run, and TPC-H results are checked against DuckDB.
 
-Machine: AMD Ryzen 5 5600G (6 cores, 12 threads), 16 GB RAM, Windows 11, Python 3.12.
+Machine: AWS m7i.4xlarge (16 vCPUs, Xeon 8488C, 64 GB RAM), Amazon Linux 2023, Python 3.12, engine built with `-C target-cpu=native`.
 
-## Totals
+## TPC-H totals
 
-| Scale factor | Workhouse | DuckDB | Polars |
+| Scale factor | Iara | DuckDB | Polars |
 |---|---:|---:|---:|
-| SF1, sum of 22 queries | **1.02 s** | 1.50 s | 1.99 s |
-| SF1, geometric mean | **40.3 ms** | 59.1 ms | 60.5 ms |
-| SF10, sum of 22 queries | **9.87 s** | 13.94 s | 21.54 s |
-| SF10, geometric mean | **359 ms** | 530 ms | 597 ms |
+| SF10, sum of 22 queries | **5.88 s** | 7.69 s | 8.11 s |
+| SF10, geometric mean | **224 ms** | 293 ms | 248 ms |
+| SF100, sum of 22 queries | **60.6 s** | 82.1 s | 90.0 s |
+| SF100, geometric mean | **2.20 s** | 3.07 s | 2.51 s |
 
-## SF10 per query (ms)
+## TPC-H SF100 per query (ms)
 
 The fastest time per query is in bold.
 
-| Query | Workhouse | DuckDB | Polars | Query | Workhouse | DuckDB | Polars |
+| Query | Iara | DuckDB | Polars | Query | Iara | DuckDB | Polars |
 |:---:|---:|---:|---:|:---:|---:|---:|---:|
-| Q1 | **469** | 635 | 1972 | Q12 | **205** | 359 | 453 |
-| Q2 | **159** | 200 | 164 | Q13 | **704** | 924 | 1289 |
-| Q3 | **444** | 558 | 475 | Q14 | **284** | 472 | 301 |
-| Q4 | **230** | 324 | 630 | Q15 | **282** | 457 | 302 |
-| Q5 | **593** | 662 | 693 | Q16 | 168 | 300 | **139** |
-| Q6 | **151** | 277 | 308 | Q17 | 426 | 631 | **399** |
-| Q7 | **461** | 687 | 540 | Q18 | **862** | 1030 | 2423 |
-| Q8 | **553** | 827 | 793 | Q19 | **339** | 601 | 476 |
-| Q9 | **1128** | 1514 | 2708 | Q20 | **429** | 563 | 1234 |
-| Q10 | 752 | **722** | 791 | Q21 | **1024** | 1765 | 5107 |
-| Q11 | **95** | 132 | 179 | Q22 | **110** | 305 | 163 |
+| Q1 | 3730 | **3542** | 4766 | Q12 | **1109** | 2243 | 1278 |
+| Q2 | 735 | 912 | **368** | Q13 | **3250** | 4387 | 4499 |
+| Q3 | **2410** | 3350 | 2849 | Q14 | **2032** | 2813 | 2041 |
+| Q4 | **1137** | 1998 | 1464 | Q15 | **1995** | 2859 | 2097 |
+| Q5 | **3250** | 4148 | 3288 | Q16 | 807 | 1156 | **785** |
+| Q6 | **1248** | 1759 | 1270 | Q17 | 3244 | 4495 | **1865** |
+| Q7 | **3310** | 4432 | 6857 | Q18 | 5731 | 5585 | **4459** |
+| Q8 | 3880 | 5492 | **3848** | Q19 | 2960 | 3789 | **2733** |
+| Q9 | **6173** | 8382 | 6617 | Q20 | **2747** | 3747 | 4200 |
+| Q10 | **3403** | 3870 | 3771 | Q21 | **6152** | 10885 | 29426 |
+| Q11 | **615** | 892 | 733 | Q22 | **637** | 1334 | 779 |
+
+Polars runs its own DataFrame versions of the queries (`benchmarks/tpch_polars.py`); for Q2, Q17 and Q18 they read `partsupp` or `lineitem` once where the SQL plans read them twice.
+
+## ClickBench
+
+Over the 32 queries all three engines ran (the others fail in every engine on this file's integer `EventTime` / `EventDate` columns, or are not supported by Polars):
+
+| | Iara | DuckDB | Polars |
+|---|---:|---:|---:|
+| Sum | **17.6 s** | 18.0 s | 20.3 s |
+| Geometric mean | **229 ms** | 338 ms | 259 ms |
+
+Per-query times are printed by `bench_clickbench.py`. Iara is slowest on `GROUP BY URL` (Q33, Q34: about 2.1-2.4 s against DuckDB's 1.8 s) and on grouped `COUNT(DISTINCT ...)` (Q8, Q9).
 
 ## Reproducing
 
 The scripts are in `benchmarks/`. They need `duckdb` and `polars` (`uv pip install -e ".[dev]"`) and a release build of the engine (see [development.md](development.md)).
 
-Generate the data:
+Generate the data (with `tpchgen-cli` when it is installed, else DuckDB's dbgen):
 
 ```bash
-python benchmarks/gen_tpch.py 1 benchmarks/data/sf1
 python benchmarks/gen_tpch.py 10 benchmarks/data/sf10
-python benchmarks/gen_tpch.py 1 benchmarks/data/sf1_decimal --decimal   # keep DECIMAL(15,2)
+python benchmarks/gen_tpch.py 100 benchmarks/data/sf100
 ```
 
-Check Workhouse's results against DuckDB:
+Check Iara's results against DuckDB:
 
 ```bash
-python benchmarks/check_tpch.py benchmarks/data/sf1
+python benchmarks/check_tpch.py benchmarks/data/sf10
 ```
 
 Run the benchmark:
 
 ```bash
 python benchmarks/bench_tpch.py benchmarks/data/sf10 --runs 3 --validate
-python benchmarks/bench_tpch.py benchmarks/data/sf10 --engines workhouse,duckdb --queries 1,3,6
+python benchmarks/bench_tpch.py benchmarks/data/sf10 --engines iara,duckdb --queries 1,3,6
 ```
 
-Options: `--runs` (default 5), `--engines` (default `workhouse,duckdb,polars`), `--queries` (default all), `--json FILE` to save the timings, `--validate` to compare every engine with DuckDB.
+Options: `--runs` (default 5), `--engines` (default `iara,duckdb,polars`), `--queries` (default all), `--json FILE` to save the timings, `--validate` to compare every engine with DuckDB.
 
-Profile one query (here Q10 at SF10, 3 runs) with `WORKHOUSE_PROFILE=1`:
+ClickBench, with [hits.parquet](https://datasets.clickhouse.com/hits_compatible/hits.parquet) (14 GB):
 
 ```bash
-WORKHOUSE_PROFILE=1 python benchmarks/profile_query.py benchmarks/data/sf10 10 3
+python benchmarks/bench_clickbench.py hits.parquet --runs 2 --engines iara,duckdb,polars
+```
+
+Profile one query (here Q10 at SF10, 3 runs) with `IARA_PROFILE=1`:
+
+```bash
+IARA_PROFILE=1 python benchmarks/profile_query.py benchmarks/data/sf10 10 3
 ```
 
 For the fastest build, use `maturin develop --profile dist`.

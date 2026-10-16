@@ -13,8 +13,8 @@ DataFrame.shape -> tuple[int, int]
 
 #### Example
 ```python
->>> import workhouse as wh
->>> df = wh.from_dict({"x": [1, 2], "y": [3, 4], "z": [5, 6]})
+>>> import iara
+>>> df = iara.from_dict({"x": [1, 2], "y": [3, 4], "z": [5, 6]})
 >>> df.shape
 (2, 3)
 ```

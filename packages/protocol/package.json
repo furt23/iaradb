@@ -1,8 +1,8 @@
 {
-  "name": "@workhouse/protocol",
+  "name": "@iara/protocol",
   "version": "0.1.0",
   "private": true,
-  "description": "Types of the Workhouse kernel protocol (mirrors python/workhouse/kernel)",
+  "description": "Types of the Iara kernel protocol (mirrors python/iara/kernel)",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",

@@ -8,18 +8,18 @@ import decimal
 import pyarrow as pa
 import pytest
 
-import workhouse as wh
-from workhouse.workspaces import Workspace
+import iara as ia
+from iara.workspaces import Workspace
 
 T = pa.table({"id": [1, 2, 3, 4], "name": ["a:b", "bob", "carol", "dave"]})
 
 
 def one(query: str, params=None, **tables):
-    return wh.sql(query, params, **tables).collect().to_arrow().to_pylist()[0]
+    return ia.sql(query, params, **tables).collect().to_arrow().to_pylist()[0]
 
 
 def ids(query: str, params=None):
-    return [r["id"] for r in wh.sql(query, params, t=T).collect().to_arrow().to_pylist()]
+    return [r["id"] for r in ia.sql(query, params, t=T).collect().to_arrow().to_pylist()]
 
 
 def test_positional_styles():
@@ -38,7 +38,7 @@ def test_params_is_reserved_and_optional():
     assert one("select 1 as x") == {"x": 1}
     assert one("select count(*) as n from t where id > :k", {"k": 2}, t=T) == {"n": 2}
     # the keyword form works too
-    assert wh.sql("select $1 as x", params=[5]).collect().to_arrow().to_pylist() == [{"x": 5}]
+    assert ia.sql("select $1 as x", params=[5]).collect().to_arrow().to_pylist() == [{"x": 5}]
 
 
 @pytest.mark.parametrize(
@@ -68,8 +68,8 @@ def test_aware_datetime_is_utc():
 
 def test_typed_comparisons():
     t = pa.table({"d": [dt.date(2024, 1, 1), dt.date(2024, 6, 1)], "p": [decimal.Decimal("1.50"), decimal.Decimal("9.99")]})
-    assert wh.sql("select count(*) as n from t where d >= :d", {"d": dt.date(2024, 3, 1)}, t=t).collect().to_arrow().to_pylist() == [{"n": 1}]
-    assert wh.sql("select count(*) as n from t where p > $1", [decimal.Decimal("2")], t=t).collect().to_arrow().to_pylist() == [{"n": 1}]
+    assert ia.sql("select count(*) as n from t where d >= :d", {"d": dt.date(2024, 3, 1)}, t=t).collect().to_arrow().to_pylist() == [{"n": 1}]
+    assert ia.sql("select count(*) as n from t where p > $1", [decimal.Decimal("2")], t=t).collect().to_arrow().to_pylist() == [{"n": 1}]
 
 
 def test_text_is_a_value_not_sql():
@@ -86,38 +86,38 @@ def test_literals_comments_and_casts_untouched():
 
 def test_missing_parameters_error():
     with pytest.raises(Exception, match=r"\$2.*\$3|\$3.*\$2"):
-        wh.sql("select ? + ? + ?", [1])
+        ia.sql("select ? + ? + ?", [1])
     with pytest.raises(Exception, match=":a"):
-        wh.sql("select :a + :b", {"b": 1})
+        ia.sql("select :a + :b", {"b": 1})
     with pytest.raises(Exception, match=r"\$1"):
-        wh.sql("select $1")
+        ia.sql("select $1")
 
 
 def test_mixing_styles_error():
     with pytest.raises(Exception, match="mix"):
-        wh.sql("select ? + $2", [1, 2])
+        ia.sql("select ? + $2", [1, 2])
     with pytest.raises(Exception, match="mix"):
-        wh.sql("select $1 + :a", [1, 2])
+        ia.sql("select $1 + :a", [1, 2])
     with pytest.raises(Exception, match="named"):
-        wh.sql("select :a", [1])
+        ia.sql("select :a", [1])
     with pytest.raises(Exception, match="positional"):
-        wh.sql("select $1", {"a": 1})
+        ia.sql("select $1", {"a": 1})
 
 
 def test_bad_parameter_values():
     with pytest.raises(TypeError, match="parameter 1"):
-        wh.sql("select $1", [object()])
+        ia.sql("select $1", [object()])
     with pytest.raises(TypeError, match="list, tuple or dict"):
-        wh.sql("select $1", "abc")
+        ia.sql("select $1", "abc")
     with pytest.raises(TypeError, match="string keys"):
-        wh.sql("select :a", {1: 2})
+        ia.sql("select :a", {1: 2})
 
 
 def test_session_and_frame_sql():
-    ctx = wh.SessionContext()
+    ctx = ia.SessionContext()
     ctx.register("t", T)
     assert ctx.sql("select count(*) as n from t where id > ?", [2]).collect().to_arrow().to_pylist() == [{"n": 2}]
-    df = wh.from_arrow(T)
+    df = ia.from_arrow(T)
     assert df.sql("select count(*) as n from self where id > :k", params={"k": 3}).to_arrow().to_pylist() == [{"n": 1}]
 
 
