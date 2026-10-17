@@ -204,7 +204,7 @@ fn partition_pruning_skips_the_footers_of_pruned_files() {
     init();
     let ctx = SessionContext::new();
     let (schema, batch) = sales_batch();
-    ctx.register_batches("sales", schema, vec![batch]);
+    ctx.register_batches("sales", schema, vec![batch]).unwrap();
     let out = "memory://reqs-part/sales/";
     ctx.sql(&format!("COPY (select * from sales) TO '{out}' (FORMAT parquet, PARTITION_BY (year, region))")).unwrap().collect().unwrap();
 
@@ -248,7 +248,7 @@ fn inserts_into_a_warehouse_on_an_object_store_are_seen_at_once() {
     init();
     let ctx = SessionContext::new();
     let (schema, batch) = sales_batch();
-    ctx.register_batches("sales", schema, vec![batch]);
+    ctx.register_batches("sales", schema, vec![batch]).unwrap();
     ctx.set_warehouse(Some("memory://reqs-wh/wh"), &Default::default());
     let run = |sql: &str| ctx.sql(sql).unwrap().collect().unwrap();
     let count = |year: i64| int(&ctx, &format!("select count(*) from recent where year = {year}"));

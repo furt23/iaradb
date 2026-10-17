@@ -9,14 +9,18 @@
 //! INSERT OVERWRITE [TABLE] sales_2024 select ...
 //! TRUNCATE TABLE sales_2024
 //! CREATE [OR REPLACE] [TEMP] VIEW v AS select ...      DROP VIEW [IF EXISTS] v
-//! SHOW TABLES [IN schema]    SHOW SCHEMAS    SHOW COLUMNS FROM t    DESCRIBE [TABLE] t
+//! SHOW TABLES [IN [catalog.]schema]    SHOW SCHEMAS [IN catalog]    SHOW CATALOGS
+//! SHOW COLUMNS FROM t    DESCRIBE [TABLE] t
 //! DROP TABLE [IF EXISTS] sales_2024
-//! CREATE SCHEMA [IF NOT EXISTS] tpch
-//! DROP SCHEMA [IF EXISTS] tpch [CASCADE | RESTRICT]
-//! USE tpch
+//! CREATE CATALOG [IF NOT EXISTS] lake
+//! DROP CATALOG [IF EXISTS] lake [CASCADE | RESTRICT]
+//! USE CATALOG lake
+//! CREATE SCHEMA [IF NOT EXISTS] [lake.]tpch
+//! DROP SCHEMA [IF EXISTS] [lake.]tpch [CASCADE | RESTRICT]
+//! USE [lake.]tpch
 //! ```
 //!
-//! Table names may be qualified: `tpch.lineitem`, `"tpch"."lineitem"`.
+//! Table names may be qualified: `tpch.lineitem`, `"tpch"."lineitem"`, `lake.tpch.lineitem`.
 
 use super::ddl::{ColumnSpec, parse_columns};
 use crate::error::{Result, WhError};
@@ -49,13 +53,21 @@ pub enum Command {
     Truncate { name: String },
     CreateView { name: String, replace: bool, if_not_exists: bool, temp: bool, query: String },
     DropView { name: String, if_exists: bool },
+    /// `SHOW TABLES [IN [catalog.]schema]`: the schema as written
     ShowTables { schema: Option<String> },
-    ShowSchemas,
+    ShowCatalogs,
+    /// `SHOW SCHEMAS [IN catalog]`
+    ShowSchemas { catalog: Option<String> },
     /// `SHOW COLUMNS FROM t`, `DESCRIBE t`
     Describe { name: String },
     DropTable { name: String, if_exists: bool },
+    CreateCatalog { name: String, if_not_exists: bool },
+    DropCatalog { name: String, if_exists: bool, cascade: bool },
+    UseCatalog { name: String },
+    /// the schema as written: `s` or `c.s`
     CreateSchema { name: String, if_not_exists: bool },
     DropSchema { name: String, if_exists: bool, cascade: bool },
+    /// `USE s` or `USE c.s`
     Use { schema: String },
     /// `DELETE`, `UPDATE` or `MERGE` on a Delta table: the whole text (its parts are planned in `super::dml`)
     Dml { sql: String },
@@ -523,6 +535,12 @@ pub fn parse_command(sql: &str) -> Result<Command> {
         return Ok(Command::Copy { query, path, options });
     }
     if c.keyword("create") {
+        if c.keyword("catalog") {
+            let if_not_exists = c.keywords(&["if", "not", "exists"]);
+            let name = c.name()?;
+            c.done()?;
+            return Ok(Command::CreateCatalog { name, if_not_exists });
+        }
         if c.keyword("schema") {
             let if_not_exists = c.keywords(&["if", "not", "exists"]);
             let name = c.name()?;
@@ -589,6 +607,16 @@ pub fn parse_command(sql: &str) -> Result<Command> {
         return Ok(Command::Insert { name, columns, overwrite, query: c.rest()? });
     }
     if c.keyword("drop") {
+        if c.keyword("catalog") {
+            let if_exists = c.keywords(&["if", "exists"]);
+            let name = c.name()?;
+            let cascade = c.keyword("cascade");
+            if !cascade {
+                c.keyword("restrict");
+            }
+            c.done()?;
+            return Ok(Command::DropCatalog { name, if_exists, cascade });
+        }
         if c.keyword("schema") {
             let if_exists = c.keywords(&["if", "exists"]);
             let name = c.name()?;
@@ -623,9 +651,14 @@ pub fn parse_command(sql: &str) -> Result<Command> {
             c.done()?;
             return Ok(Command::ShowTables { schema });
         }
-        if c.keyword("schemas") || c.keyword("databases") {
+        if c.keyword("catalogs") {
             c.done()?;
-            return Ok(Command::ShowSchemas);
+            return Ok(Command::ShowCatalogs);
+        }
+        if c.keyword("schemas") || c.keyword("databases") {
+            let catalog = if c.keyword("in") || c.keyword("from") { Some(c.name()?) } else { None };
+            c.done()?;
+            return Ok(Command::ShowSchemas { catalog });
         }
         if c.keyword("columns") {
             if !c.keyword("from") {
@@ -635,7 +668,7 @@ pub fn parse_command(sql: &str) -> Result<Command> {
             c.done()?;
             return Ok(Command::Describe { name });
         }
-        return Err(c.error("expected TABLES, SCHEMAS or COLUMNS after SHOW"));
+        return Err(c.error("expected TABLES, SCHEMAS, CATALOGS or COLUMNS after SHOW"));
     }
     if matches!(c.peek(), Some(Tok::Word(w)) if ["delete", "update", "merge"].iter().any(|k| w.eq_ignore_ascii_case(k))) {
         return Ok(Command::Dml { sql: sql.trim().trim_end_matches(';').trim().to_string() });
@@ -654,6 +687,15 @@ pub fn parse_command(sql: &str) -> Result<Command> {
         return Ok(Command::Describe { name });
     }
     if c.keyword("use") {
+        // `USE CATALOG c`; a schema called `catalog` is `USE catalog` alone
+        let names_catalog = matches!(c.peek(), Some(Tok::Word(w)) if w.eq_ignore_ascii_case("catalog"))
+            && matches!(c.toks.get(c.at + 1), Some((_, Tok::Word(_) | Tok::Quoted(_))));
+        if names_catalog {
+            c.at += 1;
+            let name = c.name()?;
+            c.done()?;
+            return Ok(Command::UseCatalog { name });
+        }
         let schema = c.name()?;
         c.done()?;
         return Ok(Command::Use { schema });
@@ -774,5 +816,91 @@ mod tests {
         assert!(parse_command("use").unwrap_err().to_string().contains("expected a name"));
         // still a query
         assert_eq!(parse_command("select 1 as use").unwrap(), Command::Query);
+    }
+
+    #[test]
+    fn schema_statements_take_a_catalog() {
+        assert_eq!(parse_command("create schema lake.tpch").unwrap(), Command::CreateSchema { name: "lake.tpch".into(), if_not_exists: false });
+        assert_eq!(
+            parse_command("create schema if not exists \"lake\".\"Tpch\";").unwrap(),
+            Command::CreateSchema { name: "lake.Tpch".into(), if_not_exists: true }
+        );
+        assert_eq!(
+            parse_command("drop schema if exists lake.tpch cascade").unwrap(),
+            Command::DropSchema { name: "lake.tpch".into(), if_exists: true, cascade: true }
+        );
+        assert_eq!(parse_command("use lake.tpch").unwrap(), Command::Use { schema: "lake.tpch".into() });
+        assert_eq!(parse_command("USE \"lake\".main;").unwrap(), Command::Use { schema: "lake.main".into() });
+        assert_eq!(
+            parse_command("show tables in lake.tpch").unwrap(),
+            Command::ShowTables { schema: Some("lake.tpch".into()) }
+        );
+        assert_eq!(parse_command("show tables from tpch;").unwrap(), Command::ShowTables { schema: Some("tpch".into()) });
+        assert_eq!(parse_command("show tables").unwrap(), Command::ShowTables { schema: None });
+    }
+
+    #[test]
+    fn catalog_statements() {
+        assert_eq!(parse_command("create catalog lake").unwrap(), Command::CreateCatalog { name: "lake".into(), if_not_exists: false });
+        assert_eq!(
+            parse_command("CREATE CATALOG IF NOT EXISTS \"Lake\";").unwrap(),
+            Command::CreateCatalog { name: "Lake".into(), if_not_exists: true }
+        );
+        assert_eq!(
+            parse_command("drop catalog lake").unwrap(),
+            Command::DropCatalog { name: "lake".into(), if_exists: false, cascade: false }
+        );
+        assert_eq!(
+            parse_command("drop catalog if exists lake cascade;").unwrap(),
+            Command::DropCatalog { name: "lake".into(), if_exists: true, cascade: true }
+        );
+        assert_eq!(
+            parse_command("drop catalog lake restrict").unwrap(),
+            Command::DropCatalog { name: "lake".into(), if_exists: false, cascade: false }
+        );
+        assert_eq!(parse_command("use catalog lake").unwrap(), Command::UseCatalog { name: "lake".into() });
+        assert_eq!(parse_command("USE CATALOG \"lake\";").unwrap(), Command::UseCatalog { name: "lake".into() });
+        assert_eq!(parse_command("show catalogs").unwrap(), Command::ShowCatalogs);
+        assert_eq!(parse_command("SHOW CATALOGS;").unwrap(), Command::ShowCatalogs);
+        assert_eq!(parse_command("show schemas").unwrap(), Command::ShowSchemas { catalog: None });
+        assert_eq!(parse_command("show schemas in lake").unwrap(), Command::ShowSchemas { catalog: Some("lake".into()) });
+        assert_eq!(parse_command("show databases from lake;").unwrap(), Command::ShowSchemas { catalog: Some("lake".into()) });
+
+        // a schema called `catalog` is still a schema
+        assert_eq!(parse_command("use catalog").unwrap(), Command::Use { schema: "catalog".into() });
+        assert_eq!(parse_command("use catalog;").unwrap(), Command::Use { schema: "catalog".into() });
+        assert_eq!(parse_command("use catalog.s").unwrap(), Command::Use { schema: "catalog.s".into() });
+        assert_eq!(parse_command("use catalog catalog").unwrap(), Command::UseCatalog { name: "catalog".into() });
+        assert_eq!(parse_command("create schema catalog").unwrap(), Command::CreateSchema { name: "catalog".into(), if_not_exists: false });
+
+        assert!(parse_command("create catalog").unwrap_err().to_string().contains("expected a name"));
+        assert!(parse_command("create catalog a b").unwrap_err().to_string().contains("unexpected text"));
+        assert!(parse_command("drop catalog a cascade restrict").unwrap_err().to_string().contains("unexpected text"));
+        assert!(parse_command("use catalog a b").unwrap_err().to_string().contains("unexpected text"));
+        assert!(parse_command("show schemas in").unwrap_err().to_string().contains("expected a name"));
+        assert!(parse_command("show nothing").unwrap_err().to_string().contains("CATALOGS"));
+    }
+
+    #[test]
+    fn three_part_names_are_one_name() {
+        assert_eq!(
+            parse_command("create table lake.s.t as select 1").unwrap(),
+            Command::CreateTableAs { name: "lake.s.t".into(), replace: false, if_not_exists: false, partition_by: vec![], using: None, query: "select 1".into() }
+        );
+        assert_eq!(
+            parse_command("insert into \"lake\".\"s\".\"t\" (a) select 1").unwrap(),
+            Command::Insert { name: "lake.s.t".into(), columns: vec!["a".into()], overwrite: false, query: "select 1".into() }
+        );
+        assert_eq!(parse_command("drop table lake.s.\"t\"").unwrap(), Command::DropTable { name: "lake.s.t".into(), if_exists: false });
+        assert_eq!(parse_command("truncate table lake.s.t").unwrap(), Command::Truncate { name: "lake.s.t".into() });
+        assert_eq!(parse_command("describe lake.s.t").unwrap(), Command::Describe { name: "lake.s.t".into() });
+        assert_eq!(
+            parse_command("optimize lake.s.t").unwrap(),
+            Command::Maintenance(Maintenance::Optimize { name: "lake.s.t".into(), predicate: None })
+        );
+        assert_eq!(
+            parse_command("comment on table lake.s.t is 'x'").unwrap(),
+            Command::Maintenance(Maintenance::Comment { name: "lake.s.t".into(), comment: Some("x".into()) })
+        );
     }
 }

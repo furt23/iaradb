@@ -30,9 +30,23 @@
     [storage."s3://my-bucket"]            # options for every URL under a prefix
     region = "us-east-1"
 
+    [catalogs.archive]                     # another catalog: tables are archive.<schema>.<table>
+    description = "Closed years"
+
+    [catalogs.archive.schemas.raw]         # a schema of the catalog (description, location)
+    [catalogs.archive.tables.orders]       # a table in archive.main
+    path = "archive/orders"
+    [catalogs.archive.tables.raw.events]   # a table in archive.raw
+    path = "archive/events"
+
 A schema with a ``location`` has a table for each of its first-level folders
 holding data files (named after the folder; explicit ``[tables]`` win), and
 ``CREATE TABLE`` in it writes a new folder there. These tables are not written to ``iara.toml``.
+
+The workspace's own tables, schemas and ``[tables]`` / ``[schemas]`` sections belong to
+its *default catalog*, named after ``[workspace] name`` (lowercase, other characters
+as ``_``; the folder's name without one). Names are ``table`` and ``schema.table`` in
+it, and ``catalog.schema.table`` in any other catalog.
 
 Credentials never go in ``iara.toml`` (it is meant to be committed):
 they come from the environment or the machine's instance profile.
@@ -79,37 +93,60 @@ def check_schema(name: str) -> str:
     return name.lower()
 
 
-def split_name(name: str) -> tuple[str, str]:
-    """``(schema, table)`` of a table name (``orders`` is ``main.orders``);
-    ValueError unless each part is one identifier."""
+def check_catalog(name: str) -> str:
+    """A catalog name in lowercase; ValueError unless it is one identifier."""
+    if not _PART_RE.fullmatch(name):
+        raise ValueError(f"invalid catalog name {name!r} in {CONFIG_NAME}")
+    return name.lower()
+
+
+def normalize_catalog_name(name: str) -> str:
+    """The default catalog's name for a workspace name: lowercase, every character
+    outside ``[a-z0-9_]`` as ``_`` (two for one outside the BMP, as the Studio counts
+    them), ``_`` before a leading digit, ``main`` when empty."""
+    ident = re.sub(r"[^a-z0-9_]", lambda m: "_" * (2 if ord(m.group()) > 0xFFFF else 1), name.lower())
+    if not ident:
+        return MAIN
+    return f"_{ident}" if ident[0].isdigit() else ident
+
+
+def split_name(name: str, default: str) -> tuple[str, str, str]:
+    """``(catalog, schema, table)`` of a table name relative to the ``default`` catalog:
+    ``orders`` is ``default.main.orders`` and ``s.orders`` is ``default.s.orders``.
+    ValueError unless it has one to three parts, each one identifier."""
     parts = name.split(".")
-    if len(parts) == 1:
-        parts.insert(0, MAIN)
-    if len(parts) != 2 or not all(_PART_RE.fullmatch(p) for p in parts):
+    if not 1 <= len(parts) <= 3 or not all(_PART_RE.fullmatch(p) for p in parts):
         raise ValueError(f"invalid table name {name!r} in {CONFIG_NAME}")
-    return parts[0].lower(), parts[1].lower()
+    catalog, schema, table = [default, MAIN][: 3 - len(parts)] + parts
+    return catalog.lower(), schema.lower(), table.lower()
 
 
-def display_name(name: str) -> str:
-    """The name a table is listed under: bare in ``main``, ``schema.table`` elsewhere."""
-    schema, table = split_name(name)
+def display_name(name: str, default: str) -> str:
+    """The name a table is listed under. In the ``default`` catalog: bare in ``main``,
+    ``schema.table`` elsewhere. In any other catalog: ``catalog.schema.table``."""
+    catalog, schema, table = split_name(name, default)
+    if catalog != default:
+        return f"{catalog}.{schema}.{table}"
     return table if schema == MAIN else f"{schema}.{table}"
 
 
-def schema_of(name: str) -> str:
-    return split_name(name)[0]
+def schema_of(table: str) -> str:
+    """The schema a table (as listed) is in, as schemas are listed: ``main`` for
+    ``orders``, ``tpch`` for ``tpch.lineitem``, ``sales.raw`` for ``sales.raw.events``."""
+    return table.rpartition(".")[0] or MAIN
 
 
-def _key(name: str) -> str:
-    """Identity of a table name: case-insensitive, and ``main.x`` is ``x``."""
-    return name.lower().removeprefix(f"{MAIN}.")
+def catalog_of_schema(schema: str) -> str | None:
+    """The catalog a schema (as listed: ``tpch`` or ``sales.raw``) is in; None for the default catalog."""
+    return schema.partition(".")[0] if "." in schema else None
 
 
 @dataclass(frozen=True)
 class TableSpec:
     """A catalog entry: a named Parquet, CSV or JSON (NDJSON) dataset (local path or URL).
 
-    ``name`` is the display name: ``orders``, or ``tpch.lineitem`` in a schema."""
+    ``name`` is the display name: ``orders``, ``tpch.lineitem`` in a schema, or
+    ``sales.raw.events`` in another catalog."""
 
     name: str
     path: str
@@ -117,9 +154,15 @@ class TableSpec:
     has_header: bool = True
     separator: str = ","
 
+    @property
+    def catalog(self) -> str | None:
+        """The catalog it is in; None for the default catalog."""
+        parts = self.name.split(".")
+        return parts[0] if len(parts) == 3 else None
+
     @staticmethod
-    def from_config(name: str, cfg: dict[str, Any], root: Path) -> TableSpec:
-        name = display_name(name)
+    def from_config(name: str, cfg: dict[str, Any], root: Path, default: str) -> TableSpec:
+        name = display_name(name, default)
         if "path" not in cfg:
             raise ValueError(f"table {name!r} in {CONFIG_NAME} has no 'path'")
         path = resolve_path(str(cfg["path"]), root)
@@ -163,7 +206,7 @@ def resolve_path(path: str, root: Path) -> str:
 
 @dataclass
 class Workspace:
-    """A workspace root and its table catalog."""
+    """A workspace root and its table catalogs: the default one and the others."""
 
     root: Path
     name: str
@@ -173,14 +216,17 @@ class Workspace:
     #: where ``CREATE TABLE ... AS`` writes tables: a folder (relative to the
     #: root) or an ``s3://`` prefix; ``warehouse/`` in the root by default
     warehouse: str | None = None
-    #: schemas declared in the catalog, besides ``main``: name -> description ("" if none)
+    #: schemas declared in the catalogs, besides ``main``, as they are listed
+    #: (``s``, or ``c.s`` in another catalog): name -> description ("" if none)
     declared_schemas: dict[str, str] = field(default_factory=dict)
-    #: schemas with a ``location``: name -> folder or URL (resolved)
+    #: schemas with a ``location`` (``s`` or ``c.s``): name -> folder or URL (resolved)
     schema_locations: dict[str, str] = field(default_factory=dict)
     #: tables found under the schema locations (not in ``tables``, never in ``iara.toml``)
     discovered: list[TableSpec] = field(default_factory=list)
+    #: the catalogs besides the default one: name -> description ("" if none)
+    catalogs: dict[str, str] = field(default_factory=dict)
     #: told of every catalog change a statement made: ``{name, entry, kind}`` with
-    #: the new ``iara.toml`` section (None: removed); kind is "table" or "schema"
+    #: the new ``iara.toml`` section (None: removed); kind is "table", "schema" or "catalog"
     on_catalog_change: Callable[[dict[str, Any]], None] | None = field(default=None, repr=False, compare=False)
     _session: Any = field(default=None, repr=False, compare=False)
 
@@ -189,9 +235,26 @@ class Workspace:
         return self.root / CONFIG_NAME
 
     @property
+    def default_catalog(self) -> str:
+        """The catalog of ``[tables]`` and ``[schemas]``: the workspace's name, as an identifier."""
+        return normalize_catalog_name(self.name)
+
+    @property
+    def catalog_names(self) -> list[str]:
+        """Every catalog, the default one first and the others sorted."""
+        return [self.default_catalog, *sorted(self.catalogs)]
+
+    @property
     def schemas(self) -> list[str]:
-        """Every schema, ``main`` first: the declared ones and those tables use."""
-        names = set(self.declared_schemas) | {schema_of(t.name) for t in self.tables + self.discovered}
+        """Every schema of the default catalog, ``main`` first: the declared ones and those tables use."""
+        return self.schemas_of()
+
+    def schemas_of(self, catalog: str | None = None) -> list[str]:
+        """The schemas of a catalog (None or the default one: the default catalog),
+        ``main`` first: the declared ones and those its tables use."""
+        catalog = None if catalog == self.default_catalog else catalog
+        listed = set(self.declared_schemas) | {schema_of(t.name) for t in self.tables + self.discovered}
+        names = {s.rpartition(".")[2] for s in listed if catalog_of_schema(s) == catalog}
         return [MAIN, *sorted(names - {MAIN})]
 
     @property
@@ -202,8 +265,10 @@ class Workspace:
 
             for prefix, options in self.storage.items():
                 set_storage_options(prefix, options)
-            ctx = SessionContext()
+            ctx = SessionContext(self.default_catalog)
             ctx.set_warehouse(self.warehouse_path)
+            for catalog in self.catalogs:
+                ctx.sql(f"create catalog if not exists {catalog}").collect()
             for schema in self.declared_schemas:
                 ctx.sql(f"create schema if not exists {schema}").collect()
             for t in self.tables:
@@ -217,21 +282,21 @@ class Workspace:
     def _scan(self) -> None:
         """Register the folders under each schema location as tables, except those
         an explicit table names; ``discovered`` becomes what was found."""
-        explicit = {_key(t.name) for t in self.tables}
+        explicit = {t.name for t in self.tables}
         found: list[TableSpec] = []
         for schema, location in self.schema_locations.items():
             for table, path, fmt in discover_tables(location):
-                name = f"{schema}.{table}"
-                if _key(name) not in explicit:
+                name = display_name(f"{schema}.{table}", self.default_catalog)
+                if name not in explicit:
                     found.append(TableSpec(name, path, fmt))
         ctx = self._session
-        keep = {_key(t.name) for t in found}
+        keep = {t.name for t in found}
         for old in self.discovered:
-            if _key(old.name) not in keep:
+            if old.name not in keep:
                 ctx.deregister(old.name)
-        known = {_key(t.name): t for t in self.discovered}
+        known = {t.name: t for t in self.discovered}
         for t in found:
-            if known.get(_key(t.name)) != t:
+            if known.get(t.name) != t:
                 t.register(ctx)
         self.discovered = found
 
@@ -264,18 +329,21 @@ class Workspace:
         return self._scratch(extra).sql(query, params)
 
     def _scratch(self, extra: dict[str, Any]) -> Any:
-        """The session, or a fork of it holding the given frames."""
+        """The session, or a fork of it holding the given frames. Bare names are
+        looked up in the current catalog, so the frames go to its ``main``."""
         if not extra:
             return self.session
         ctx = self.session.fork()
+        home = ctx.current_catalog()
+        prefix = "" if home == self.default_catalog else f"{home}.{MAIN}."
         for name, obj in extra.items():
-            ctx.register(name, obj)
+            ctx.register(prefix + name, obj)
         return ctx
 
     def _write(self, query: str, extra: dict[str, Any], params: Any = None) -> LazyFrame:
-        """Run a statement that writes or changes schemas; the tables and schemas
-        it creates or drops join or leave the catalog (and the main session, when
-        it ran on a fork)."""
+        """Run a statement that writes or changes schemas and catalogs; the tables,
+        schemas and catalogs it creates or drops join or leave the catalog (and the
+        main session, when it ran on a fork)."""
         self._refuse_drop(query)
         ctx = self.session if is_schema_statement(query) else self._scratch(extra)
         frame = ctx.sql(query, params).collect()
@@ -283,29 +351,57 @@ class Workspace:
         return frame.lazy()
 
     def _refuse_drop(self, query: str) -> None:
-        """A discovered table is a folder: dropping it (or its schema) is refused."""
+        """A discovered table is a folder: dropping it (or its schema or catalog) is refused."""
         target = drop_target(query)
         if target is None:
             return
         kind, name = target
+        listed = self._listed(kind, name)
+        if listed is None:  # not a valid name: the engine says so
+            return
         if kind == "table":
-            spec = self._discovered_spec(name)
+            spec = next((t for t in self.discovered if t.name == listed), None)
             if spec is not None:
                 raise ValueError(
                     f"{spec.name} is the folder {spec.path} under schema {schema_of(spec.name)}'s location: "
                     "delete the folder to remove the table"
                 )
-        else:
-            schema = name.lower()
-            if schema in self.schema_locations and any(schema_of(t.name) == schema for t in self.discovered):
+        elif kind == "schema":
+            if listed in self.schema_locations and any(schema_of(t.name) == listed for t in self.discovered):
                 raise ValueError(
-                    f"schema {schema} has a location and its tables are folders under "
-                    f"{self.schema_locations[schema]}: delete the folders to remove them"
+                    f"schema {listed} has a location and its tables are folders under "
+                    f"{self.schema_locations[listed]}: delete the folders to remove them"
+                )
+        else:
+            located = {s for s in self.schema_locations if catalog_of_schema(s) == listed}
+            if any(schema_of(t.name) in located for t in self.discovered):
+                raise ValueError(
+                    f"catalog {listed} has schemas with a location and their tables are folders: "
+                    "delete the folders to remove them"
                 )
 
-    def _discovered_spec(self, name: str) -> TableSpec | None:
-        key = _key(name)
-        return next((t for t in self.discovered if _key(t.name) == key), None)
+    def _listed(self, kind: str, name: str) -> str | None:
+        """The name a ``DROP`` target has as it is listed (None if it is not a valid
+        name); what the name leaves out is the session's current catalog and schema."""
+        parts = name.lower().split(".")
+        if kind == "catalog":
+            return parts[0] if len(parts) == 1 else None
+        ctx = self.session
+        width = 3 if kind == "table" else 2
+        full = ".".join([ctx.current_catalog(), ctx.current_schema()][: max(0, width - len(parts))] + parts)
+        try:
+            return display_name(full, self.default_catalog) if kind == "table" else self._schema_name(full)
+        except ValueError:
+            return None
+
+    def _schema_name(self, name: str) -> str:
+        """A schema name as schemas are listed: lowercase, ``s`` in the default
+        catalog and ``c.s`` in another; ValueError unless it is a schema name."""
+        catalog, _, schema = name.rpartition(".")
+        schema = check_schema(schema)
+        if not catalog or check_catalog(catalog) == self.default_catalog:
+            return schema
+        return f"{catalog.lower()}.{schema}"
 
     def _register_main(self, table: str, path: str, fmt: str | None) -> None:
         """Register a table a statement made or changed on a fork in the main session."""
@@ -337,14 +433,18 @@ class Workspace:
             self._schema_set(done.table)
         elif op == "drop schema" and done.table:
             self._schema_drop(done.table)
+        elif op == "create catalog" and done.table:
+            self._new_catalog(done.table)
+        elif op == "drop catalog" and done.table:
+            self._drop_catalog(done.table)
 
     def _created_in_location(self, table: str, path: str | None, forked: bool, fmt: str | None = None) -> None:
         """A table made in a location schema is discovered, not declared."""
         if path:
             if forked:
                 self._register_main(table, path, fmt)
-            spec = TableSpec(display_name(table), path, "delta" if fmt == "delta" else "parquet")
-            self.discovered = [t for t in self.discovered if _key(t.name) != _key(spec.name)] + [spec]
+            spec = TableSpec(table, path, "delta" if fmt == "delta" else "parquet")
+            self.discovered = [t for t in self.discovered if t.name != table] + [spec]
         self._emit(schema_of(table), None, "refresh")
 
     def _relative(self, path: str) -> str:
@@ -357,38 +457,64 @@ class Workspace:
 
     def _catalog_set(self, name: str, path: str, fmt: str | None = None) -> None:
         """A table a statement created: Delta ones are written with ``format = "delta"``."""
-        name, rel = display_name(name), self._relative(path)
+        name, rel = display_name(name, self.default_catalog), self._relative(path)
         fmt = "delta" if fmt == "delta" else None
         self.tables = [t for t in self.tables if t.name != name]
-        self.tables.append(TableSpec.from_config(name, {"path": rel, "format": fmt}, self.root))
+        self.tables.append(TableSpec.from_config(name, {"path": rel, "format": fmt}, self.root, self.default_catalog))
         self._emit(name, table_entry(name, rel, fmt))
 
     def _catalog_drop(self, name: str) -> None:
-        name = display_name(name)
+        name = display_name(name, self.default_catalog)
         before = len(self.tables)
         self.tables = [t for t in self.tables if t.name != name]
         if len(self.tables) != before:
             self._emit(name, None)
 
     def _schema_set(self, name: str) -> None:
-        """A schema created by a statement: declared unless it is main or already declared."""
-        schema = check_schema(name)
-        if schema == MAIN or schema in self.declared_schemas:
+        """A schema created by a statement: declared unless it is a main or already declared."""
+        schema = self._schema_name(name)
+        if schema.rpartition(".")[2] == MAIN or schema in self.declared_schemas:
             return
         self.declared_schemas[schema] = ""
         self._emit(schema, schema_entry(schema), "schema")
 
     def _schema_drop(self, name: str) -> None:
         """A schema dropped with its tables (CASCADE): a drop per table, then the schema."""
-        schema = check_schema(name)
-        if schema == MAIN:
+        schema = self._schema_name(name)
+        if schema.rpartition(".")[2] == MAIN:
             return
         members = [t.name for t in self.tables if schema_of(t.name) == schema]
         for table in members:
             self._catalog_drop(table)
         declared = self.declared_schemas.pop(schema, None) is not None
+        self.schema_locations.pop(schema, None)
         if declared or members:
             self._emit(schema, None, "schema")
+
+    def _new_catalog(self, name: str) -> None:
+        """A catalog created by a statement: declared unless it is the default one or already declared."""
+        catalog = check_catalog(name)
+        if catalog == self.default_catalog or catalog in self.catalogs:
+            return
+        self.catalogs[catalog] = ""
+        self._emit(catalog, catalog_entry(catalog), "catalog")
+
+    def _drop_catalog(self, name: str) -> None:
+        """A catalog dropped with its contents (CASCADE): a drop per table, per
+        declared schema, then the catalog."""
+        catalog = check_catalog(name)
+        if catalog == self.default_catalog:
+            return
+        members = [t.name for t in self.tables if t.catalog == catalog]
+        for table in members:
+            self._catalog_drop(table)
+        for schema in [s for s in self.declared_schemas if catalog_of_schema(s) == catalog]:
+            del self.declared_schemas[schema]
+            self.schema_locations.pop(schema, None)
+            self._emit(schema, None, "schema")
+        self.discovered = [t for t in self.discovered if t.catalog != catalog]
+        if self.catalogs.pop(catalog, None) is not None or members:
+            self._emit(catalog, None, "catalog")
 
     def _emit(self, name: str, entry: str | None, kind: str = "table") -> None:
         if self.on_catalog_change:
@@ -398,8 +524,12 @@ class Workspace:
         return self.session.table(name)
 
     def spec(self, name: str) -> TableSpec | None:
-        key = _key(name)
-        return next((t for t in self.tables + self.discovered if _key(t.name) == key), None)
+        """The table a name refers to (``t``, ``s.t`` or ``c.s.t``, relative to the default catalog)."""
+        try:
+            listed = display_name(name, self.default_catalog)
+        except ValueError:
+            return None
+        return next((t for t in self.tables + self.discovered if t.name == listed), None)
 
 
 def _is_pandas(obj: Any) -> bool:
@@ -456,19 +586,20 @@ def _storage_sections(cfg: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {p.rstrip("/"): dict(o) for p, o in sections.items()}
 
 
-def _split_tables(tables: dict[str, Any]) -> tuple[list[tuple[str, dict[str, Any]]], list[str]]:
-    """The ``(name, section)`` of every table in ``[tables]``, and the empty
-    sections among them (schemas declared by name alone). ``[tables.x]`` is table
-    ``x`` of main; ``[tables.s.x]`` (or ``[tables."s.x"]``) is table ``x`` of ``s``,
-    and a section without ``path`` holds the tables of a schema."""
+def _split_tables(tables: dict[str, Any], where: str = "tables") -> tuple[list[tuple[str, dict[str, Any]]], list[str]]:
+    """The ``(name, section)`` of every table in ``[tables]`` (``where`` names the
+    section in errors), and the empty sections among them (schemas declared by name
+    alone). ``[tables.x]`` is table ``x`` of main; ``[tables.s.x]`` (or
+    ``[tables."s.x"]``) is table ``x`` of ``s``, and a section without ``path``
+    holds the tables of a schema. A name has at most those two parts."""
     found: list[tuple[str, dict[str, Any]]] = []
     declared: list[str] = []
     for key, section in tables.items():
         if not isinstance(section, dict):
-            raise ValueError(f"tables.{key} in {CONFIG_NAME}: expected a section")
+            raise ValueError(f"{where}.{key} in {CONFIG_NAME}: expected a section")
         if "path" in section:
             if any(isinstance(v, dict) for v in section.values()):
-                raise ValueError(f"tables.{key} is both a table and a schema in {CONFIG_NAME}")
+                raise ValueError(f"{where}.{key} is both a table and a schema in {CONFIG_NAME}")
             found.append((key, section))
         elif all(isinstance(v, dict) for v in section.values()):
             if not section:
@@ -476,22 +607,40 @@ def _split_tables(tables: dict[str, Any]) -> tuple[list[tuple[str, dict[str, Any
             found.extend((f"{key}.{sub}", cfg) for sub, cfg in section.items())
         else:
             raise ValueError(f"table {key!r} in {CONFIG_NAME} has no 'path'")
+    for name, _ in found:
+        if name.count(".") > 1:
+            raise ValueError(f"invalid table name {name!r} in {CONFIG_NAME}: expected table or schema.table")
     return found, declared
 
 
-def _locations(sections: dict[str, Any], root: Path) -> dict[str, str]:
-    """Schema -> resolved ``location`` from ``[schemas.<s>]``."""
+def _qualify(catalog: str | None, name: str) -> str:
+    """``name`` inside a catalog (None: the default one, so as it is)."""
+    return name if catalog is None else f"{catalog}.{name}"
+
+
+def _table_in(catalog: str, name: str) -> str:
+    """A table of ``[catalogs.<c>.tables]`` (``t`` or ``s.t``) by its full name."""
+    return f"{catalog}.{name}" if "." in name else f"{catalog}.{MAIN}.{name}"
+
+
+def _schemas_where(catalog: str | None) -> str:
+    return "schemas" if catalog is None else f"catalogs.{catalog}.schemas"
+
+
+def _locations(sections: dict[str, Any], root: Path, catalog: str | None = None) -> dict[str, str]:
+    """Schema (``s``, or ``c.s`` in catalog ``c``) -> resolved ``location`` from ``[schemas.<s>]``."""
     out: dict[str, str] = {}
+    where = _schemas_where(catalog)
     for name, section in sections.items():
         loc = section.get("location") if isinstance(section, dict) else None
         if not loc:
             continue
         schema = check_schema(name)
         if schema == MAIN:
-            raise ValueError(f"schemas.{name} in {CONFIG_NAME}: main cannot have a location")
+            raise ValueError(f"{where}.{name} in {CONFIG_NAME}: main cannot have a location")
         if not isinstance(loc, str):
-            raise ValueError(f"schemas.{name}.location in {CONFIG_NAME}: expected a folder or URL")
-        out[schema] = resolve_path(loc, root)
+            raise ValueError(f"{where}.{name}.location in {CONFIG_NAME}: expected a folder or URL")
+        out[_qualify(catalog, schema)] = resolve_path(loc, root)
     return out
 
 
@@ -536,26 +685,49 @@ def discover_tables(location: str) -> list[tuple[str, str, str]]:
 
 _LEAD_RE = re.compile(r"(?:\s|--[^\n]*(?:\n|$)|/\*.*?\*/)*", re.DOTALL)
 _NAME = r'(?:"[^"]+"|\w+)'
-_DROP_RE = re.compile(rf"drop\s+(table|schema)\s+(?:if\s+exists\s+)?({_NAME}(?:\s*\.\s*{_NAME})?)", re.IGNORECASE)
+_DROP_RE = re.compile(
+    rf"drop\s+(table|schema|catalog)\s+(?:if\s+exists\s+)?({_NAME}(?:\s*\.\s*{_NAME}){{0,2}})", re.IGNORECASE
+)
 
 
 def drop_target(query: str) -> tuple[str, str] | None:
-    """``("table" | "schema", name)`` of a ``DROP`` statement, else None."""
+    """``("table" | "schema" | "catalog", name)`` of a ``DROP`` statement, else None."""
     m = _DROP_RE.match(query, _LEAD_RE.match(query).end())
     if m is None:
         return None
     return m.group(1).lower(), re.sub(r'\s|"', "", m.group(2))
 
 
-def _declared(empty: list[str], sections: dict[str, Any]) -> dict[str, str]:
-    """Schemas by name -> description: from ``[schemas.<s>]`` and from empty table sections."""
-    declared = {name: "" for name in empty}
+def _declared(empty: list[str], sections: dict[str, Any], catalog: str | None = None) -> dict[str, str]:
+    """Schemas by name (``s``, or ``c.s`` in catalog ``c``) -> description: from
+    ``[schemas.<s>]`` and from empty table sections."""
+    declared = {_qualify(catalog, name): "" for name in empty}
+    where = _schemas_where(catalog)
     for name, section in sections.items():
         if not isinstance(section, dict):
-            raise ValueError(f"schemas.{name} in {CONFIG_NAME}: expected a section")
-        declared[check_schema(name)] = str(section.get("description", ""))
-    declared.pop(MAIN, None)
+            raise ValueError(f"{where}.{name} in {CONFIG_NAME}: expected a section")
+        declared[_qualify(catalog, check_schema(name))] = str(section.get("description", ""))
+    declared.pop(_qualify(catalog, MAIN), None)
     return declared
+
+
+def _catalog_sections(cfg: dict[str, Any], default: str) -> dict[str, dict[str, Any]]:
+    """The ``[catalogs.<c>]`` sections by catalog name (lowercase); the default
+    catalog's name and a name used twice are errors."""
+    sections = cfg.get("catalogs") or {}
+    if not isinstance(sections, dict):
+        raise ValueError(f"catalogs in {CONFIG_NAME}: expected sections")
+    out: dict[str, dict[str, Any]] = {}
+    for key, section in sections.items():
+        name = check_catalog(key)
+        if not isinstance(section, dict):
+            raise ValueError(f"catalogs.{key} in {CONFIG_NAME}: expected a section")
+        if name == default:
+            raise ValueError(f"catalogs.{key} in {CONFIG_NAME} has the name of the default catalog: name it another way")
+        if name in out:
+            raise ValueError(f"catalog {name!r} is defined twice in {CONFIG_NAME}")
+        out[name] = section
+    return out
 
 
 def _check_unique(tables: list[TableSpec]) -> None:
@@ -571,12 +743,20 @@ def parse_config(text: str, root: Path) -> Workspace:
     cfg = tomllib.loads(text)
     section = cfg.get("workspace", {})
     name = str(section.get("name") or root.name)
+    default = normalize_catalog_name(name)
     found, empty = _split_tables(cfg.get("tables") or {})
-    tables = [TableSpec.from_config(n, c, root) for n, c in found]
-    _check_unique(tables)
-    warehouse = section.get("warehouse")
+    tables = [TableSpec.from_config(n, c, root, default) for n, c in found]
     declared = _declared(empty, cfg.get("schemas") or {})
     locations = _locations(cfg.get("schemas") or {}, root)
+    catalogs: dict[str, str] = {}
+    for catalog, body in _catalog_sections(cfg, default).items():
+        catalogs[catalog] = str(body.get("description", ""))
+        found, empty = _split_tables(body.get("tables") or {}, f"catalogs.{catalog}.tables")
+        tables += [TableSpec.from_config(_table_in(catalog, n), c, root, default) for n, c in found]
+        declared |= _declared(empty, body.get("schemas") or {}, catalog)
+        locations |= _locations(body.get("schemas") or {}, root, catalog)
+    _check_unique(tables)
+    warehouse = section.get("warehouse")
     return Workspace(
         root,
         name,
@@ -585,6 +765,7 @@ def parse_config(text: str, root: Path) -> Workspace:
         str(warehouse) if warehouse else None,
         declared_schemas=declared,
         schema_locations=locations,
+        catalogs=catalogs,
     )
 
 
@@ -618,28 +799,44 @@ def _toml_str(s: str) -> str:
 
 
 def table_entry(name: str, path: str, format: str | None = None) -> str:
-    """The ``[tables.<name>]`` section of a table (``[tables.tpch.lineitem]`` in a schema)."""
-    lines = [f"\n[tables.{display_name(name)}]", f"path = {_toml_str(path)}"]
+    """The section of a table, named as it is listed: ``[tables.tpch.lineitem]`` in
+    a schema, ``[catalogs.sales.tables.raw.events]`` in another catalog (a table
+    of ``main`` has no schema in its section: ``[catalogs.sales.tables.orders]``)."""
+    catalog, schema, table = split_name(name, "")  # the catalog is empty unless the name has three parts
+    section = f"tables.{table if schema == MAIN else f'{schema}.{table}'}"
+    lines = [f"\n[{f'catalogs.{catalog}.{section}' if catalog else section}]", f"path = {_toml_str(path)}"]
     if format:
         lines.append(f"format = {_toml_str(format)}")
     return "\n".join(lines) + "\n"
 
 
 def schema_entry(name: str) -> str:
-    """The ``[schemas.<name>]`` section declaring a schema."""
-    return f"\n[schemas.{check_schema(name)}]\n"
+    """The section declaring a schema, named as it is listed: ``[schemas.<s>]``,
+    or ``[catalogs.<c>.schemas.<s>]`` for ``c.s``."""
+    catalog, _, schema = name.rpartition(".")
+    section = f"schemas.{check_schema(schema)}"
+    return f"\n[catalogs.{check_catalog(catalog)}.{section}]\n" if catalog else f"\n[{section}]\n"
+
+
+def catalog_entry(name: str, description: str = "") -> str:
+    """The ``[catalogs.<name>]`` section declaring a catalog."""
+    desc = f"description = {_toml_str(description)}\n" if description else ""
+    return f"\n[catalogs.{check_catalog(name)}]\n{desc}"
 
 
 def add_table(ws: Workspace, name: str, path: str, format: str | None = None, persist: bool = True) -> tuple[TableSpec, str]:
-    """Add a table to the catalog; ``(spec, toml entry)``. With ``persist``
-    the entry is appended to ``iara.toml`` (created if missing)."""
+    """Add a table to the catalog (``name``: ``t``, ``s.t`` or ``c.s.t``); ``(spec,
+    toml entry)``. With ``persist`` the entry is appended to ``iara.toml`` (created
+    if missing)."""
     if ws.spec(name) is not None:
         raise ValueError(f"table {name!r} already exists")
     if is_remote(path):
         rel = path
     else:
         rel = Path(os.path.relpath(path, ws.root) if Path(path).is_absolute() else path).as_posix()
-    spec = TableSpec.from_config(name, {"path": rel, "format": format}, ws.root)
+    spec = TableSpec.from_config(name, {"path": rel, "format": format}, ws.root, ws.default_catalog)
+    if spec.catalog is not None and spec.catalog not in ws.catalogs:
+        raise ValueError(f"catalog {spec.catalog!r} does not exist")
     entry = table_entry(spec.name, rel, format)
     if persist:
         exists = ws.config_path.is_file()

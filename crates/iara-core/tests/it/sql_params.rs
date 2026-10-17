@@ -22,7 +22,7 @@ fn ctx() -> SessionContext {
         ],
     )
     .unwrap();
-    ctx.register_batches("t", schema, vec![batch]);
+    ctx.register_batches("t", schema, vec![batch]).unwrap();
     ctx
 }
 

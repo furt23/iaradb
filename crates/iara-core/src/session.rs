@@ -1,13 +1,13 @@
 //! Session context (catalog) and the lazy DataFrame API.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use parking_lot::RwLock;
 
-use crate::catalog_names::{MAIN, TableName, TableRef, parse_schema, unknown_schema};
+use crate::catalog_names::{DEFAULT_CATALOG, MAIN, Missing, SchemaName, SchemaSpec, TableName, TableRef, parse_catalog, unknown_catalog};
 use crate::error::{Result, WhError};
 use crate::exec::query::{QueryStats, with_query};
 use crate::expr::{Expr, SortExpr};
@@ -76,47 +76,90 @@ enum Slot {
     Deferred(Arc<DeferredTable>),
 }
 
-/// The tables by `schema.table` key, the schemas that exist (`main` always)
-/// and the current one.
+/// The tables by name, the catalogs with their schemas (`main` always), the
+/// default catalog (named when the session is created) and the current
+/// catalog and schema.
 #[derive(Clone)]
 struct Catalog {
-    tables: HashMap<String, Slot>,
-    schemas: BTreeSet<String>,
-    current: String,
+    tables: HashMap<TableName, Slot>,
+    /// each catalog's schemas
+    catalogs: BTreeMap<String, BTreeSet<String>>,
+    default: String,
+    current_catalog: String,
+    current_schema: String,
 }
 
 impl Default for Catalog {
     fn default() -> Self {
-        Self { tables: HashMap::new(), schemas: BTreeSet::from([MAIN.to_string()]), current: MAIN.to_string() }
+        Self::new(DEFAULT_CATALOG)
     }
 }
 
 impl Catalog {
-    fn insert(&mut self, name: &TableName, slot: Slot) {
-        self.schemas.insert(name.schema.clone());
-        self.tables.insert(name.key(), slot);
+    fn new(default: &str) -> Self {
+        Self {
+            tables: HashMap::new(),
+            catalogs: BTreeMap::from([(default.to_string(), BTreeSet::from([MAIN.to_string()]))]),
+            default: default.to_string(),
+            current_catalog: default.to_string(),
+            current_schema: MAIN.to_string(),
+        }
     }
 
-    /// Where a table name resolves: its schema if written, else the current
-    /// schema, then `main`.
+    /// Register under `name`, creating its schema; its catalog must exist.
+    fn insert(&mut self, name: &TableName, slot: Slot) -> Result<()> {
+        let schemas = self.catalogs.get_mut(&name.catalog).ok_or_else(|| unknown_catalog(&name.catalog))?;
+        schemas.insert(name.schema.clone());
+        self.tables.insert(name.clone(), slot);
+        Ok(())
+    }
+
+    /// Where a table name written in a query resolves: `c.s.t` exactly; `s.t`
+    /// in schema `s` of the current catalog; `t` in the current catalog, in
+    /// the current schema and then in `main`.
     fn resolve(&self, r: &TableRef) -> Option<TableName> {
+        let catalog = r.catalog.as_deref().unwrap_or(&self.current_catalog);
         let schemas = match &r.schema {
             Some(s) => vec![s.as_str()],
-            None => vec![self.current.as_str(), MAIN],
+            None => vec![self.current_schema.as_str(), MAIN],
         };
-        schemas.into_iter().map(|s| TableName::new(s, &r.table)).find(|t| self.tables.contains_key(&t.key()))
+        schemas.into_iter().map(|s| TableName::new(catalog, s, &r.table)).find(|t| self.tables.contains_key(t))
     }
 
-    fn tables_in(&self, schema: &str) -> Vec<TableName> {
-        let mut v: Vec<TableName> = self.tables.keys().map(|k| TableName::from_key(k)).filter(|t| t.schema == schema).collect();
+    /// Why a schema cannot hold tables: its catalog or it does not exist.
+    fn missing_schema(&self, schema: &SchemaName) -> Option<Missing> {
+        let Some(schemas) = self.catalogs.get(&schema.catalog) else { return Some(Missing::Catalog(schema.catalog.clone())) };
+        (!schemas.contains(&schema.schema)).then(|| Missing::Schema(schema.display(&self.default)))
+    }
+
+    /// What a table name written in a query refers to that does not exist (a
+    /// bare name has no schema to miss).
+    fn missing_parent(&self, r: &TableRef) -> Option<Missing> {
+        let catalog = r.catalog.as_deref().unwrap_or(&self.current_catalog);
+        self.missing_schema(&SchemaName::new(catalog, r.schema.as_deref().unwrap_or(MAIN)))
+    }
+
+    fn tables_in(&self, schema: &SchemaName) -> Vec<TableName> {
+        let mut v: Vec<TableName> = self.tables.keys().filter(|t| t.catalog == schema.catalog && t.schema == schema.schema).cloned().collect();
         v.sort_by(|a, b| a.table.cmp(&b.table));
         v
     }
-}
 
-/// A table name given to the registry: `main`'s when bare.
-fn exact(name: &str) -> TableName {
-    TableRef::lenient(name).in_schema(MAIN)
+    fn tables_of(&self, catalog: &str) -> Vec<TableName> {
+        let mut v: Vec<TableName> = self.tables.keys().filter(|t| t.catalog == catalog).cloned().collect();
+        v.sort_by(|a, b| (&a.schema, &a.table).cmp(&(&b.schema, &b.table)));
+        v
+    }
+
+    /// The schemas of a catalog: `main` first, then the others sorted.
+    fn schemas_of(&self, catalog: &str) -> Option<Vec<String>> {
+        let schemas = self.catalogs.get(catalog)?;
+        Some(std::iter::once(MAIN.to_string()).chain(schemas.iter().filter(|s| *s != MAIN).cloned()).collect())
+    }
+
+    fn display(&self, tables: &[TableName]) -> Vec<String> {
+        tables.iter().map(|t| t.display(&self.default)).collect()
+    }
 }
 
 #[derive(Default)]
@@ -124,8 +167,8 @@ pub struct SessionState {
     catalog: RwLock<Catalog>,
     /// where `CREATE TABLE ... AS` writes tables (none: they stay in memory)
     warehouse: RwLock<Option<(String, StorageOptions)>>,
-    /// per-schema folders (lowercase schema name): tables created in the schema are written under them
-    schema_locations: RwLock<HashMap<String, (String, StorageOptions)>>,
+    /// per-schema folders: tables created in the schema are written under them
+    schema_locations: RwLock<HashMap<SchemaName, (String, StorageOptions)>>,
 }
 
 #[derive(Clone, Default)]
@@ -134,13 +177,22 @@ pub struct SessionContext {
 }
 
 impl SessionContext {
+    /// A context whose default catalog is called `main`.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// A new context starting with this one's tables, schemas and current
-    /// schema (providers are shared, so cached metadata and statistics are
-    /// reused); later registrations on either side are independent.
+    /// A context whose default catalog has this name (the catalog that names
+    /// given to the registry belong to, and the one the session starts in).
+    pub fn with_default_catalog(name: &str) -> Result<Self> {
+        let name = parse_catalog(name)?;
+        Ok(Self { state: Arc::new(SessionState { catalog: RwLock::new(Catalog::new(&name)), ..Default::default() }) })
+    }
+
+    /// A new context starting with this one's tables, catalogs, schemas and
+    /// current catalog and schema (providers are shared, so cached metadata
+    /// and statistics are reused); later registrations on either side are
+    /// independent.
     pub fn fork(&self) -> Self {
         let catalog = self.state.catalog.read().clone();
         let warehouse = self.state.warehouse.read().clone();
@@ -164,61 +216,141 @@ impl SessionContext {
         self.state.warehouse.read().clone()
     }
 
+    /// A schema named for the registry: `s` (in the default catalog) or `c.s`.
+    fn registry_schema(&self, schema: &str) -> Result<SchemaName> {
+        Ok(SchemaSpec::parse(schema)?.in_catalog(&self.default_catalog()))
+    }
+
     /// The folder (or object prefix) where `CREATE TABLE schema.name AS ...`
-    /// writes `name/`, instead of the warehouse; `None` removes it.
-    pub fn set_schema_location(&self, schema: &str, path: Option<&str>, storage: &StorageOptions) {
-        let key = schema.to_lowercase();
+    /// writes `name/`, instead of the warehouse; `None` removes it. The schema
+    /// is `s` (of the default catalog) or `c.s`.
+    pub fn set_schema_location(&self, schema: &str, path: Option<&str>, storage: &StorageOptions) -> Result<()> {
+        let key = self.registry_schema(schema)?;
         let mut map = self.state.schema_locations.write();
         match path {
             Some(p) => map.insert(key, (p.to_string(), storage.clone())),
             None => map.remove(&key),
         };
+        Ok(())
     }
 
+    /// The location of a schema named like in [`Self::set_schema_location`].
     pub fn schema_location(&self, schema: &str) -> Option<(String, StorageOptions)> {
-        self.state.schema_locations.read().get(&schema.to_lowercase()).cloned()
+        self.schema_location_of(&self.registry_schema(schema).ok()?)
+    }
+
+    pub(crate) fn schema_location_of(&self, schema: &SchemaName) -> Option<(String, StorageOptions)> {
+        self.state.schema_locations.read().get(schema).cloned()
+    }
+
+    /// A table name given to the registry: relative to the default catalog
+    /// (`main`'s schema when bare), whatever the current catalog and schema are.
+    fn exact(&self, name: &str) -> TableName {
+        TableRef::lenient(name).with_defaults(&self.default_catalog(), MAIN)
     }
 
     /// Whether a table or view of that name is registered (without loading
-    /// it). Like every call taking a table name but `table` and `sql`, a
-    /// bare name means `main`'s, whatever the current schema is.
+    /// it). Like every call taking a table name but `sql`, a name is relative
+    /// to the default catalog (bare: its `main` schema), whatever `USE` says.
     pub fn contains(&self, name: &str) -> bool {
-        self.table_exists(&exact(name))
+        self.table_exists(&self.exact(name))
     }
 
     pub fn table_exists(&self, name: &TableName) -> bool {
-        self.state.catalog.read().tables.contains_key(&name.key())
+        self.state.catalog.read().tables.contains_key(name)
     }
 
-    /// Where a name written in a query resolves to: its schema if it has
-    /// one, else the current schema, then `main`.
+    /// Where a name written in a query resolves to: `c.s.t` exactly, `s.t` in
+    /// the current catalog, `t` in the current catalog's current schema and
+    /// then its `main`.
     pub fn resolve_table(&self, r: &TableRef) -> Option<TableName> {
         self.state.catalog.read().resolve(r)
     }
 
-    /// A name registers in its schema; a bare one, in `main`.
-    fn insert(&self, name: &str, slot: Slot) {
-        let name = exact(name);
+    /// What a name written in a query refers to that does not exist (its
+    /// catalog or its schema), if that is why it resolves to nothing.
+    pub fn unknown_parent(&self, r: &TableRef) -> Option<Missing> {
+        self.state.catalog.read().missing_parent(r)
+    }
+
+    /// Where a statement that creates a table puts the name it was given:
+    /// `c.s.t` there, `s.t` in the current catalog, `t` in the current
+    /// catalog and schema. The catalog and the schema must exist.
+    pub fn creation_target(&self, r: &TableRef) -> Result<TableName> {
+        let catalog = self.state.catalog.read();
+        let target = r.with_defaults(&catalog.current_catalog, &catalog.current_schema);
+        match catalog.missing_schema(&target.schema_name()) {
+            Some(missing) => Err(missing.error()),
+            None => Ok(target),
+        }
+    }
+
+    /// The name people see for a table (see [`TableName::display`]).
+    pub fn display_name(&self, name: &TableName) -> String {
+        name.display(&self.default_catalog())
+    }
+
+    /// The name people see for a schema (see [`SchemaName::display`]).
+    pub fn display_schema(&self, schema: &SchemaName) -> String {
+        schema.display(&self.default_catalog())
+    }
+
+    /// A name registers in its catalog and schema, the catalog existing; a
+    /// schema that does not exist yet is created.
+    fn put(&self, name: &TableName, slot: Slot) -> Result<()> {
         let mut catalog = self.state.catalog.write();
         // a Delta table replaced by its newer self: plans on the old one follow
-        if let (Some(Slot::Entry(TableEntry::Table(old))), Slot::Entry(TableEntry::Table(new))) = (catalog.tables.get(&name.key()), &slot) {
+        if let (Some(Slot::Entry(TableEntry::Table(old))), Slot::Entry(TableEntry::Table(new))) = (catalog.tables.get(name), &slot) {
             if let Some(d) = old.as_delta() {
                 d.set_successor(new.clone());
             }
-        } else if let (Some(Slot::Deferred(old)), Slot::Entry(TableEntry::Table(new))) = (catalog.tables.get(&name.key()), &slot) {
+        } else if let (Some(Slot::Deferred(old)), Slot::Entry(TableEntry::Table(new))) = (catalog.tables.get(name), &slot) {
             if let Some(old) = old.loaded.lock().as_ref().and_then(|o| o.as_delta().map(|_| o.clone())) {
                 old.as_delta().expect("delta").set_successor(new.clone());
             }
         }
-        catalog.insert(&name, slot);
+        catalog.insert(name, slot)
     }
 
-    pub fn register_table(&self, name: &str, provider: Arc<dyn TableProvider>) {
-        self.insert(name, Slot::Entry(TableEntry::Table(provider)));
+    /// Fail now if the catalog of `name` does not exist (before any loading).
+    fn require_catalog(&self, name: &TableName) -> Result<()> {
+        if self.has_catalog(&name.catalog) { Ok(()) } else { Err(unknown_catalog(&name.catalog)) }
     }
 
-    pub fn register_view(&self, name: &str, plan: Arc<LogicalPlan>) {
-        self.insert(name, Slot::Entry(TableEntry::View(plan)));
+    pub(crate) fn put_table(&self, name: &TableName, provider: Arc<dyn TableProvider>) -> Result<()> {
+        self.put(name, Slot::Entry(TableEntry::Table(provider)))
+    }
+
+    pub(crate) fn put_view(&self, name: &TableName, plan: Arc<LogicalPlan>) -> Result<()> {
+        self.put(name, Slot::Entry(TableEntry::View(plan)))
+    }
+
+    pub(crate) fn put_batches(&self, name: &TableName, schema: SchemaRef, batches: Vec<RecordBatch>) -> Result<()> {
+        self.put_table(name, Arc::new(MemTable::new(schema, batches)))
+    }
+
+    /// A Delta table at its newest version, opened now.
+    pub(crate) fn put_delta(&self, name: &TableName, path: &str, storage: &StorageOptions) -> Result<()> {
+        self.put_table(name, Arc::new(crate::delta::DeltaTable::open(path, storage, None)?))
+    }
+
+    /// The Parquet files at `path`, listed now.
+    pub(crate) fn put_parquet(&self, name: &TableName, path: &str, storage: &StorageOptions) -> Result<()> {
+        self.put_table(name, Arc::new(ParquetTable::try_new_with(path, storage)?))
+    }
+
+    pub(crate) fn remove_table(&self, name: &TableName) -> bool {
+        self.state.catalog.write().tables.remove(name).is_some()
+    }
+
+    /// Register a table: relative to the default catalog, which must exist
+    /// when the name is `c.s.t`.
+    pub fn register_table(&self, name: &str, provider: Arc<dyn TableProvider>) -> Result<()> {
+        self.put_table(&self.exact(name), provider)
+    }
+
+    pub fn register_view(&self, name: &str, plan: Arc<LogicalPlan>) -> Result<()> {
+        self.put_view(&self.exact(name), plan)
     }
 
     /// Register a table built by `load`: now, or on first use when `lazy`.
@@ -228,16 +360,17 @@ impl SessionContext {
         lazy: bool,
         load: impl Fn() -> Result<Arc<dyn TableProvider>> + Send + Sync + 'static,
     ) -> Result<()> {
+        let name = self.exact(name);
+        self.require_catalog(&name)?;
         if lazy {
-            self.insert(name, Slot::Deferred(Arc::new(DeferredTable::new(load))));
+            self.put(&name, Slot::Deferred(Arc::new(DeferredTable::new(load))))
         } else {
-            self.register_table(name, load()?);
+            self.put_table(&name, load()?)
         }
-        Ok(())
     }
 
     pub fn deregister(&self, name: &str) -> bool {
-        self.state.catalog.write().tables.remove(&exact(name).key()).is_some()
+        self.remove_table(&self.exact(name))
     }
 
     pub fn register_parquet(&self, name: &str, path: &str) -> Result<()> {
@@ -258,86 +391,200 @@ impl SessionContext {
         self.register_loader(name, lazy, move || Ok(Arc::new(CsvTable::try_new_with(&path, options.clone(), &storage)?)))
     }
 
-    pub fn register_batches(&self, name: &str, schema: SchemaRef, batches: Vec<RecordBatch>) {
-        self.register_table(name, Arc::new(MemTable::new(schema, batches)));
+    pub fn register_batches(&self, name: &str, schema: SchemaRef, batches: Vec<RecordBatch>) -> Result<()> {
+        self.register_table(name, Arc::new(MemTable::new(schema, batches)))
     }
 
-    /// The tables' display names, sorted: bare in `main`, `schema.table` elsewhere.
+    /// The display names of all the tables, sorted (see [`TableName::display`]).
     pub fn table_names(&self) -> Vec<String> {
-        let mut v: Vec<String> = self.state.catalog.read().tables.keys().map(|k| TableName::from_key(k).display()).collect();
+        let catalog = self.state.catalog.read();
+        let mut v = catalog.display(&catalog.tables.keys().cloned().collect::<Vec<_>>());
         v.sort();
         v
     }
 
-    /// The schemas: `main` first, then the others sorted.
-    pub fn schemas(&self) -> Vec<String> {
+    /// The name of the default catalog.
+    pub fn default_catalog(&self) -> String {
+        self.state.catalog.read().default.clone()
+    }
+
+    /// The catalog that names written in a query are looked in (`USE`).
+    pub fn current_catalog(&self) -> String {
+        self.state.catalog.read().current_catalog.clone()
+    }
+
+    /// The catalogs: the default one first, then the others sorted.
+    pub fn catalogs(&self) -> Vec<String> {
         let catalog = self.state.catalog.read();
-        let others = catalog.schemas.iter().filter(|s| *s != MAIN).cloned();
-        std::iter::once(MAIN.to_string()).chain(others).collect()
+        let others = catalog.catalogs.keys().filter(|c| **c != catalog.default).cloned();
+        std::iter::once(catalog.default.clone()).chain(others).collect()
     }
 
-    pub fn has_schema(&self, name: &str) -> bool {
-        self.state.catalog.read().schemas.contains(&name.to_ascii_lowercase())
+    pub fn has_catalog(&self, name: &str) -> bool {
+        self.state.catalog.read().catalogs.contains_key(&name.to_ascii_lowercase())
     }
 
-    /// The schema a bare table name in a query is looked up in first (`USE`).
-    pub fn current_schema(&self) -> String {
-        self.state.catalog.read().current.clone()
-    }
-
-    pub fn use_schema(&self, name: &str) -> Result<()> {
-        let name = parse_schema(name)?;
+    pub fn create_catalog(&self, name: &str, if_not_exists: bool) -> Result<()> {
+        let name = parse_catalog(name)?;
         let mut catalog = self.state.catalog.write();
-        if !catalog.schemas.contains(&name) {
-            return Err(unknown_schema(&name));
+        if catalog.catalogs.contains_key(&name) {
+            return if if_not_exists { Ok(()) } else { Err(WhError::Plan(format!("catalog '{name}' already exists"))) };
         }
-        catalog.current = name;
+        catalog.catalogs.insert(name, BTreeSet::from([MAIN.to_string()]));
         Ok(())
     }
 
-    pub fn create_schema(&self, name: &str, if_not_exists: bool) -> Result<()> {
-        let name = parse_schema(name)?;
-        let mut catalog = self.state.catalog.write();
-        if catalog.schemas.contains(&name) {
-            return if if_not_exists { Ok(()) } else { Err(WhError::Plan(format!("schema '{name}' already exists"))) };
-        }
-        catalog.schemas.insert(name);
-        Ok(())
-    }
-
-    /// Drop a schema; with `cascade` its tables leave the session too (their
-    /// files stay), otherwise it must be empty. Returns the display names of
+    /// Drop a catalog; with `cascade` its schemas and tables leave the session
+    /// too (their files stay), otherwise it must hold no table and no schema
+    /// but `main`. The default catalog cannot be dropped; dropping the
+    /// current one makes the default current. Returns the display names of
     /// the tables dropped.
-    pub fn drop_schema(&self, name: &str, if_exists: bool, cascade: bool) -> Result<Vec<String>> {
-        let name = parse_schema(name)?;
-        if name == MAIN {
-            return Err(WhError::Plan("schema 'main' cannot be dropped".into()));
-        }
+    pub fn drop_catalog(&self, name: &str, if_exists: bool, cascade: bool) -> Result<Vec<String>> {
+        let name = parse_catalog(name)?;
         let mut catalog = self.state.catalog.write();
-        if !catalog.schemas.contains(&name) {
-            return if if_exists { Ok(vec![]) } else { Err(WhError::Plan(format!("schema '{name}' does not exist"))) };
+        if name == catalog.default {
+            return Err(WhError::Plan(format!("catalog '{name}' is the default catalog and cannot be dropped")));
         }
-        let tables = catalog.tables_in(&name);
-        if !tables.is_empty() && !cascade {
+        let Some(schemas) = catalog.catalogs.get(&name) else {
+            return if if_exists { Ok(vec![]) } else { Err(WhError::Plan(format!("catalog '{name}' does not exist"))) };
+        };
+        let others = schemas.iter().filter(|s| *s != MAIN).count();
+        let tables = catalog.tables_of(&name);
+        if (!tables.is_empty() || others > 0) && !cascade {
             return Err(WhError::Plan(format!(
-                "schema '{name}' is not empty ({} tables): use DROP SCHEMA {name} CASCADE",
+                "catalog '{name}' is not empty ({} tables, {others} schemas besides main): use DROP CATALOG {name} CASCADE",
                 tables.len()
             )));
         }
         for t in &tables {
-            catalog.tables.remove(&t.key());
+            catalog.tables.remove(t);
         }
-        catalog.schemas.remove(&name);
-        if catalog.current == name {
-            catalog.current = MAIN.to_string();
+        catalog.catalogs.remove(&name);
+        if catalog.current_catalog == name {
+            catalog.current_catalog = catalog.default.clone();
+            catalog.current_schema = MAIN.to_string();
         }
-        Ok(tables.iter().map(TableName::display).collect())
+        Ok(catalog.display(&tables))
     }
 
-    /// A registered table or view (loading a deferred table). A bare name is
-    /// `main`'s, like in `register_*`.
+    /// `USE CATALOG`: names are looked in this catalog from now on, starting
+    /// with its `main` schema.
+    pub fn use_catalog(&self, name: &str) -> Result<()> {
+        let name = parse_catalog(name)?;
+        let mut catalog = self.state.catalog.write();
+        if !catalog.catalogs.contains_key(&name) {
+            return Err(unknown_catalog(&name));
+        }
+        catalog.current_catalog = name;
+        catalog.current_schema = MAIN.to_string();
+        Ok(())
+    }
+
+    /// The schemas of the current catalog: `main` first, then the others sorted.
+    pub fn schemas(&self) -> Vec<String> {
+        let catalog = self.state.catalog.read();
+        catalog.schemas_of(&catalog.current_catalog).expect("the current catalog exists")
+    }
+
+    /// The schemas of a catalog: `main` first, then the others sorted.
+    pub fn schemas_of(&self, catalog: &str) -> Result<Vec<String>> {
+        let catalog = parse_catalog(catalog)?;
+        self.state.catalog.read().schemas_of(&catalog).ok_or_else(|| unknown_catalog(&catalog))
+    }
+
+    /// Whether a catalog has a schema.
+    pub fn has_schema(&self, catalog: &str, schema: &str) -> bool {
+        let name = SchemaName::new(catalog, schema);
+        self.state.catalog.read().missing_schema(&name).is_none()
+    }
+
+    /// The schema a bare table name in a query is looked up in first (`USE`),
+    /// in the current catalog.
+    pub fn current_schema(&self) -> String {
+        self.state.catalog.read().current_schema.clone()
+    }
+
+    /// A schema as SQL writes it, `s` (in the current catalog) or `c.s`; it
+    /// need not exist.
+    pub fn schema_name(&self, name: &str) -> Result<SchemaName> {
+        Ok(SchemaSpec::parse(name)?.in_catalog(&self.current_catalog()))
+    }
+
+    /// [`Self::schema_name`] for a schema that must exist; none: the current one.
+    pub fn existing_schema(&self, name: Option<&str>) -> Result<SchemaName> {
+        let catalog = self.state.catalog.read();
+        let schema = match name {
+            Some(n) => SchemaSpec::parse(n)?.in_catalog(&catalog.current_catalog),
+            None => SchemaName::new(&catalog.current_catalog, &catalog.current_schema),
+        };
+        match catalog.missing_schema(&schema) {
+            Some(missing) => Err(missing.error()),
+            None => Ok(schema),
+        }
+    }
+
+    /// `USE s` (in the current catalog) or `USE c.s`.
+    pub fn use_schema(&self, name: &str) -> Result<()> {
+        let schema = self.existing_schema(Some(name))?;
+        let mut catalog = self.state.catalog.write();
+        catalog.current_catalog = schema.catalog;
+        catalog.current_schema = schema.schema;
+        Ok(())
+    }
+
+    /// `s` (in the current catalog) or `c.s`.
+    pub fn create_schema(&self, name: &str, if_not_exists: bool) -> Result<()> {
+        let schema = self.schema_name(name)?;
+        let mut catalog = self.state.catalog.write();
+        let label = schema.display(&catalog.default);
+        let schemas = catalog.catalogs.get_mut(&schema.catalog).ok_or_else(|| unknown_catalog(&schema.catalog))?;
+        if schemas.contains(&schema.schema) {
+            return if if_not_exists { Ok(()) } else { Err(WhError::Plan(format!("schema '{label}' already exists"))) };
+        }
+        schemas.insert(schema.schema);
+        Ok(())
+    }
+
+    /// Drop a schema (`s` in the current catalog, or `c.s`); with `cascade`
+    /// its tables leave the session too (their files stay), otherwise it must
+    /// be empty. Returns the display names of the tables dropped.
+    pub fn drop_schema(&self, name: &str, if_exists: bool, cascade: bool) -> Result<Vec<String>> {
+        let schema = self.schema_name(name)?;
+        if schema.schema == MAIN {
+            return Err(WhError::Plan("schema 'main' cannot be dropped".into()));
+        }
+        let mut catalog = self.state.catalog.write();
+        let label = schema.display(&catalog.default);
+        match catalog.missing_schema(&schema) {
+            Some(Missing::Catalog(c)) => return if if_exists { Ok(vec![]) } else { Err(unknown_catalog(&c)) },
+            Some(Missing::Schema(_)) => {
+                return if if_exists { Ok(vec![]) } else { Err(WhError::Plan(format!("schema '{label}' does not exist"))) };
+            }
+            None => {}
+        }
+        let tables = catalog.tables_in(&schema);
+        if !tables.is_empty() && !cascade {
+            return Err(WhError::Plan(format!(
+                "schema '{label}' is not empty ({} tables): use DROP SCHEMA {label} CASCADE",
+                tables.len()
+            )));
+        }
+        for t in &tables {
+            catalog.tables.remove(t);
+        }
+        if let Some(schemas) = catalog.catalogs.get_mut(&schema.catalog) {
+            schemas.remove(&schema.schema);
+        }
+        if catalog.current_catalog == schema.catalog && catalog.current_schema == schema.schema {
+            catalog.current_schema = MAIN.to_string();
+        }
+        Ok(catalog.display(&tables))
+    }
+
+    /// A registered table or view (loading a deferred table). A name is
+    /// relative to the default catalog, like in `register_*`.
     pub fn lookup(&self, name: &str) -> Result<Option<TableEntry>> {
-        self.entry(&exact(name))
+        self.entry(&self.exact(name))
     }
 
     /// The table or view a name written in a query refers to (see
@@ -349,8 +596,8 @@ impl SessionContext {
         }
     }
 
-    fn entry(&self, name: &TableName) -> Result<Option<TableEntry>> {
-        let slot = self.state.catalog.read().tables.get(&name.key()).cloned();
+    pub(crate) fn entry(&self, name: &TableName) -> Result<Option<TableEntry>> {
+        let slot = self.state.catalog.read().tables.get(name).cloned();
         Ok(match slot {
             None => None,
             Some(Slot::Entry(e)) => Some(e),
@@ -361,7 +608,8 @@ impl SessionContext {
     /// Whether a registered table is loaded (`Some(false)`: deferred, not
     /// used yet); `None` if there is no such table.
     pub fn is_loaded(&self, name: &str) -> Option<bool> {
-        self.state.catalog.read().tables.get(&exact(name).key()).map(|s| match s {
+        let name = self.exact(name);
+        self.state.catalog.read().tables.get(&name).map(|s| match s {
             Slot::Entry(_) => true,
             Slot::Deferred(d) => d.is_loaded(),
         })
@@ -402,12 +650,10 @@ impl SessionContext {
         self.scan_provider("memory", Arc::new(MemTable::new(schema, batches)))
     }
 
-    /// A table as a query sees it: a bare name is looked up in the current
-    /// schema, then in `main`; `s.t` only in `s`.
-    pub fn table(&self, name: &str) -> Result<LazyFrame> {
-        // columns are qualified by the bare table name, as in a query
+    /// A table or view as a frame, its columns qualified by the bare table name (as in a query).
+    fn frame_of(&self, entry: Option<TableEntry>, name: &str) -> Result<LazyFrame> {
         let qualifier = name.rsplit('.').next().unwrap_or(name);
-        match self.lookup_ref(&TableRef::lenient(name))? {
+        match entry {
             Some(TableEntry::Table(t)) => Ok(LazyFrame::new(
                 Arc::new(LogicalPlan::scan(qualifier, Some(qualifier.to_string()), t, None, vec![], None)?),
                 self.clone(),
@@ -419,9 +665,25 @@ impl SessionContext {
         }
     }
 
+    /// A registered table, named like in `register_*`: relative to the
+    /// default catalog (bare: its `main` schema), whatever `USE` says.
+    pub fn table(&self, name: &str) -> Result<LazyFrame> {
+        self.frame_of(self.lookup(name)?, name)
+    }
+
+    /// A table named in a statement (`MERGE ... USING t`): resolved as in a
+    /// query, from the current catalog and schema.
+    pub(crate) fn query_table(&self, name: &str) -> Result<LazyFrame> {
+        let r = TableRef::lenient(name);
+        if let Some(missing) = self.unknown_parent(&r) {
+            return Err(WhError::Plan(format!("table '{name}' not found: {}", missing.reason())));
+        }
+        self.frame_of(self.lookup_ref(&r)?, name)
+    }
+
     /// A query, planned (it runs when collected or streamed); or a statement
     /// that writes (`COPY`, `CREATE TABLE ... AS`, `INSERT`, `DROP TABLE`) or
-    /// changes the catalog (`CREATE SCHEMA`, `DROP SCHEMA`, `USE`), run now,
+    /// changes the catalog (`CREATE`/`DROP CATALOG`, `CREATE`/`DROP SCHEMA`, `USE`), run now,
     /// returning what it did.
     pub fn sql(&self, query: &str) -> Result<LazyFrame> {
         self.sql_with(query, &Params::None)

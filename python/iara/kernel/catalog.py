@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from iara.storage import delta_history, delta_info, list_files
-from iara.workspaces import TableSpec, Workspace
+from iara.workspaces import TableSpec, Workspace, split_name
 
 
 def _relative(ws: Workspace, spec: TableSpec) -> str:
@@ -24,7 +24,11 @@ def _relative(ws: Workspace, spec: TableSpec) -> str:
 
 
 def spec_view(ws: Workspace, spec: TableSpec) -> dict[str, Any]:
-    return {"name": spec.name, "path": _relative(ws, spec), "format": spec.format}
+    """A table as the Studio lists it: ``catalog`` is left out for the default catalog."""
+    view = {"name": spec.name, "path": _relative(ws, spec), "format": spec.format}
+    if spec.catalog is not None:
+        view["catalog"] = spec.catalog
+    return view
 
 
 def list_tables(ws: Workspace) -> list[dict[str, Any]]:
@@ -32,8 +36,8 @@ def list_tables(ws: Workspace) -> list[dict[str, Any]]:
 
 
 def schemas(ws: Workspace) -> dict[str, list[dict[str, str]]]:
-    """Columns of every catalog table (for editor completion); unreadable
-    tables are left out."""
+    """Columns of every catalog table of every catalog, by its listed name (for
+    editor completion); unreadable tables are left out."""
     out: dict[str, list[dict[str, str]]] = {}
     for t in ws.tables + ws.discovered:
         try:
@@ -92,7 +96,9 @@ def table_info(ws: Workspace, name: str) -> dict[str, Any]:
     listed = files(spec)
     info = spec_view(ws, spec)
     info["columns"] = [{"name": n, "type": t} for n, t in types.items()]
-    info["num_rows"] = ws.sql(f"select count(*) from {spec.name}").collect().item()
+    # the full name reaches the table whatever catalog and schema the session is in
+    full = ".".join(split_name(spec.name, ws.default_catalog))
+    info["num_rows"] = ws.sql(f"select count(*) from {full}").collect().item()
     info["files"] = len(listed)
     info["bytes"] = sum(size for _, size in listed)
     if spec.format == "delta":

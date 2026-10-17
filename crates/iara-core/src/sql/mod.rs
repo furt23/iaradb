@@ -539,8 +539,9 @@ impl<'a> SqlPlanner<'a> {
     // -----------------------------------------------------------------------
 
     /// A table, view or CTE named in FROM (or, failing that, a file path).
-    /// A name with a schema resolves only as that; a CTE matches only a
-    /// bare name. Scans are named by the bare table name.
+    /// `c.s.t` resolves only as that, `s.t` only in schema `s` of the current
+    /// catalog; a CTE matches only a bare name. Scans are named by the bare
+    /// table name.
     fn plan_named_table(&mut self, parts: &[String], alias_name: Option<String>) -> Result<LogicalPlan> {
         let full = parts.join(".");
         let tname = full.rsplit('.').next().unwrap_or_default().to_string();
@@ -565,11 +566,9 @@ impl<'a> SqlPlanner<'a> {
 
     fn table_not_found(&self, full: &str, r: &TableRef) -> WhError {
         let registered = self.ctx.table_names();
-        match &r.schema {
-            Some(s) if !self.ctx.has_schema(s) => {
-                WhError::Plan(format!("table '{full}' not found: schema '{s}' does not exist (registered: {registered:?})"))
-            }
-            _ => WhError::Plan(format!("table '{full}' not found (registered: {registered:?})")),
+        match self.ctx.unknown_parent(r) {
+            Some(m) => WhError::Plan(format!("table '{full}' not found: {} (registered: {registered:?})", m.reason())),
+            None => WhError::Plan(format!("table '{full}' not found (registered: {registered:?})")),
         }
     }
 

@@ -42,7 +42,6 @@ use crate::session::{LazyFrame, SessionContext, TableEntry};
 pub(super) struct DeltaRef {
     pub name: TableName,
     pub shown: String,
-    pub key: String,
     pub provider: Arc<dyn TableProvider>,
 }
 
@@ -62,9 +61,9 @@ impl DeltaRef {
 pub(super) fn delta_table(ctx: &SessionContext, name: &str, what: &str) -> Result<DeltaRef> {
     let r = TableRef::strict(name)?;
     let target = ctx.resolve_table(&r).ok_or_else(|| missing(ctx, &r, name))?;
-    let (key, shown) = (target.key(), target.display());
-    match ctx.lookup(&key)? {
-        Some(TableEntry::Table(t)) if t.as_delta().is_some() => Ok(DeltaRef { name: target, shown, key, provider: t }),
+    let shown = ctx.display_name(&target);
+    match ctx.entry(&target)? {
+        Some(TableEntry::Table(t)) if t.as_delta().is_some() => Ok(DeltaRef { name: target, shown, provider: t }),
         Some(TableEntry::Table(t)) => Err(WhError::NotSupported(format!("{what}: '{shown}' is a {} table", t.kind()))),
         Some(TableEntry::View(_)) => Err(WhError::Plan(format!("{what}: '{shown}' is a view"))),
         None => Err(WhError::Plan(format!("table '{shown}' not found"))),
@@ -74,7 +73,7 @@ pub(super) fn delta_table(ctx: &SessionContext, name: &str, what: &str) -> Resul
 /// The registered table must see the version the statement committed.
 pub(super) fn refresh(ctx: &SessionContext, t: &DeltaRef) -> Result<()> {
     let d = t.delta();
-    ctx.register_delta(&t.key, d.root(), d.storage(), None, false)
+    ctx.put_delta(&t.name, d.root(), d.storage())
 }
 
 /// The one-row result of a statement on a Delta table: the columns every write has, then `counters`

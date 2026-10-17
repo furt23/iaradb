@@ -60,6 +60,21 @@ services:
     # Memory for the Studio and its Python kernels. Tune to the host (6g is a starting point).
     mem_limit: 6g
 
+  studio-newteam:
+    image: iara-studio:local
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    env_file:
+      - path: docker/newteam.env
+        required: false
+    volumes:
+      - studio-newteam-workspace:/workspace
+      - studio-newteam-data:/data
+    ports:
+      - "127.0.0.1:3872:3870"
+    mem_limit: 6g
+
   cloudflared:
     image: cloudflare/cloudflared:2026.9.1
     restart: unless-stopped
@@ -71,7 +86,10 @@ services:
       - site
       - docs
       - studio-default
+      - studio-newteam
 
 volumes:
   studio-default-workspace:
   studio-default-data:
+  studio-newteam-workspace:
+  studio-newteam-data:

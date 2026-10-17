@@ -4,12 +4,14 @@ import fs from "node:fs";
 import path from "node:path";
 
 /**
- * AWS access of the Studio server (it creates and terminates clusters):
- * `IARA_AWS_ACCESS_KEY_ID` / `IARA_AWS_SECRET_ACCESS_KEY` when set (then
- * `AWS_*` can hold the R2 keys the kernels read), else `AWS_ACCESS_KEY_ID` /
- * `AWS_SECRET_ACCESS_KEY` (/ `AWS_SESSION_TOKEN`), or
- * the same as `ACCESS_KEY` / `SECRET_KEY` in a dotenv file named by
- * `IARA_AWS_ENV_FILE` (in development, the repository's `.aws`).
+ * AWS access of the Studio server (it launches and terminates its team's
+ * clusters): `IARA_AWS_ACCESS_KEY_ID` / `IARA_AWS_SECRET_ACCESS_KEY` when set
+ * (then `AWS_*` can hold the R2 keys the kernels read). Hosted, these are the
+ * team's own keys from `python -m iara.cloud team-setup <team>`, which can do
+ * nothing else; never the admin keys. Otherwise `AWS_ACCESS_KEY_ID` /
+ * `AWS_SECRET_ACCESS_KEY` (/ `AWS_SESSION_TOKEN`), or the same as `ACCESS_KEY` /
+ * `SECRET_KEY` in a dotenv file named by `IARA_AWS_ENV_FILE` (in development,
+ * the repository's `.aws`, which holds the admin keys that run team-setup).
  * Values never leave the server and are never logged.
  */
 

@@ -21,7 +21,7 @@ fn ctx() -> SessionContext {
         Arc::new(Int64Array::from(vec![Some(5), None, Some(-3), Some(0), Some(5)])),
         Arc::new(Float64Array::from(vec![Some(1.5), None, Some(f64::NAN), Some(-2.0), Some(0.0)])),
     ];
-    ctx.register_batches("t", schema.clone(), vec![RecordBatch::try_new(schema, cols).unwrap()]);
+    ctx.register_batches("t", schema.clone(), vec![RecordBatch::try_new(schema, cols).unwrap()]).unwrap();
     ctx
 }
 

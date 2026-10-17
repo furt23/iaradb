@@ -33,7 +33,7 @@ const NESTED_SQL: &str = "\
 
 fn register_nested(ctx: &SessionContext, name: &str) {
     let (schema, batches) = ctx.sql(NESTED_SQL).unwrap().collect().unwrap();
-    ctx.register_batches(name, schema, batches);
+    ctx.register_batches(name, schema, batches).unwrap();
 }
 
 fn ctx() -> SessionContext {
@@ -260,7 +260,7 @@ fn field_access_on_nested_values() {
 fn table_alias_wins_over_a_struct_field() {
     // `t.s` is the column s of the table t, even if a column named t holds a struct with a field s
     let c = SessionContext::new();
-    c.register_batches("x", structs_batch(&[(1, Some((Some(1), Some("x"))))]).0, vec![structs_batch(&[(1, Some((Some(1), Some("x"))))]).1]);
+    c.register_batches("x", structs_batch(&[(1, Some((Some(1), Some("x"))))]).0, vec![structs_batch(&[(1, Some((Some(1), Some("x"))))]).1]).unwrap();
     assert_eq!(rows_in(&c, "select x.s from x"), "{a:1,b:'x'}");
     assert_eq!(rows_in(&c, "select s.a from x"), "1");
     assert_eq!(rows_in(&c, "select x.s.b from x"), "x");
@@ -354,7 +354,7 @@ fn lazy_frames_from_sql_have_struct_types() {
     let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Struct(fields), false)]));
     let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(sa)]).unwrap();
     let c = SessionContext::new();
-    c.register_batches("m", schema, vec![batch]);
+    c.register_batches("m", schema, vec![batch]).unwrap();
     let df = c.sql("select s from m").unwrap();
     assert_eq!(df.schema().to_string(), "[m.s: Struct<v: Utf8>]");
     assert_eq!(rows_in(&c, "select s.v from m"), "p|q");

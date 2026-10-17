@@ -1,5 +1,6 @@
 """Schemas: tables named ``schema.table`` in ``iara.toml``, the statements
-that create and drop schemas, and qualified names in notebook analysis.
+that create and drop schemas, and qualified names in notebook analysis
+(``catalog.schema.table`` names and catalogs: see ``test_catalogs.py``).
 
 Tests marked ``engine_schemas`` need the engine's schema support (``CREATE
 SCHEMA``, ``USE``, ``SessionContext.schemas``) and are skipped without it.
@@ -19,7 +20,7 @@ from iara.kernel.notebook.analysis import analyze, sql_identifiers
 from iara.kernel.notebook.graph import DependencyGraph
 from iara.kernel.notebook.model import Cell
 from iara.sqlwrite import is_schema_statement, is_write
-from iara.workspaces import CONFIG_NAME, add_table, parse_config, schema_entry, table_entry
+from iara.workspaces import CONFIG_NAME, add_table, display_name, parse_config, schema_entry, schema_of, split_name, table_entry
 
 engine_schemas = pytest.mark.skipif(not hasattr(ia.SessionContext, "schemas"), reason="engine without schemas")
 
@@ -85,7 +86,8 @@ def test_an_entry_cannot_be_both_table_and_schema(tmp_path: Path) -> None:
     "text",
     [
         '[tables."tpch.line-item"]\npath = "x.parquet"\n',
-        '[tables."a.b.c"]\npath = "x.parquet"\n',
+        '[tables."a.b.c"]\npath = "x.parquet"\n',  # a table of another catalog is [catalogs.a.tables.b.c]
+        '[tables."a.b.c.d"]\npath = "x.parquet"\n',
         '[tables."bad name"]\npath = "x.parquet"\n',
         '[tables.tpch."1x"]\npath = "x.parquet"\n',
         '[tables."../x"]\npath = "x.parquet"\n',
@@ -108,6 +110,25 @@ def test_writers_emit_the_contract_sections() -> None:
     assert table_entry("main.orders", "data/o.parquet") == '\n[tables.orders]\npath = "data/o.parquet"\n'
     assert table_entry("orders", "s3://b/o/", "parquet") == '\n[tables.orders]\npath = "s3://b/o/"\nformat = "parquet"\n'
     assert schema_entry("tpch") == "\n[schemas.tpch]\n"
+
+
+def test_names_have_up_to_three_parts_relative_to_the_default_catalog() -> None:
+    assert split_name("orders", "tpch") == ("tpch", "main", "orders")
+    assert split_name("Sales.Orders", "tpch") == ("tpch", "sales", "orders")
+    assert split_name("Archive.Raw.Events", "tpch") == ("archive", "raw", "events")
+    for name in ("a.b.c.d", "a..b", "", "a.1b", "a-b.c"):
+        with pytest.raises(ValueError, match="invalid table name"):
+            split_name(name, "tpch")
+    # as listed: bare in main and `schema.table` in the default catalog, always three parts in the others
+    assert [display_name(n, "tpch") for n in ("orders", "main.orders", "tpch.main.orders", "tpch.sales.orders", "sales.orders")] == [
+        "orders",
+        "orders",
+        "orders",
+        "sales.orders",
+        "sales.orders",
+    ]
+    assert display_name("archive.main.orders", "tpch") == "archive.main.orders"
+    assert [schema_of(t) for t in ("orders", "sales.orders", "archive.raw.events")] == ["main", "sales", "archive.raw"]
 
 
 def test_written_sections_read_back(tmp_path: Path) -> None:
@@ -157,23 +178,42 @@ def test_a_qualified_table_is_queried_by_its_full_name(tmp_path: Path) -> None:
         "create table tpch.t as select 1 as x",
         "insert into tpch.t select 1",
         "drop table tpch.t",
+        "create table sales.tpch.t as select 1 as x",
+        "CREATE CATALOG sales",
+        "drop catalog if exists sales cascade",
+        "USE CATALOG sales",
     ],
 )
 def test_statements_that_write_are_routed(query: str) -> None:
     assert is_write(query)
 
 
-@pytest.mark.parametrize("query", ["create schema tpch", "drop schema tpch cascade", "use tpch", "/* c */ USE tpch"])
+@pytest.mark.parametrize(
+    "query",
+    [
+        "create schema tpch",
+        "drop schema tpch cascade",
+        "use tpch",
+        "/* c */ USE tpch",
+        "create schema sales.raw",
+        "CREATE CATALOG IF NOT EXISTS sales",
+        "-- note\n drop catalog sales cascade",
+        "use catalog sales",
+        "USE sales.raw",
+    ],
+)
 def test_schema_statements_run_on_the_session(query: str) -> None:
     assert is_schema_statement(query)
 
 
-@pytest.mark.parametrize("query", ["select 1", "select * from users", "use_it as x", "create table t as select 1"])
+@pytest.mark.parametrize(
+    "query", ["select 1", "select * from users", "use_it as x", "create table t as select 1", "show catalogs", "create table catalog.s.t as select 1"]
+)
 def test_other_statements_are_not_schema_statements(query: str) -> None:
     assert not is_schema_statement(query)
 
 
-@pytest.mark.parametrize("query", ["select 1", "select * from users", "use_it as x"])
+@pytest.mark.parametrize("query", ["select 1", "select * from users", "use_it as x", "show catalogs", "show schemas in sales", "show tables"])
 def test_reads_are_not_writes(query: str) -> None:
     assert not is_write(query)
 
@@ -206,6 +246,13 @@ def test_a_qualified_reference_is_not_a_cell_reference() -> None:
     assert "tpch.lineitem" in analyze(cells[1]).sql_idents
 
 
+def test_a_three_part_reference_is_one_name_and_not_a_cell_reference() -> None:
+    ids = sql_identifiers('select * from sales.raw.events join "sales" . "main" . "orders" using (id)')
+    assert {"sales.raw.events", "sales.main.orders"} <= ids and not {"sales", "raw", "events"} & ids
+    cells = [_cell("events = [1]", cid="py"), _cell("select count(*) as n from sales.raw.events", "sql", "n", cid="q")]
+    assert DependencyGraph(cells).deps["q"].parents == frozenset()
+
+
 # -- engine with schemas ----------------------------------------------------------
 
 
@@ -225,7 +272,7 @@ def test_qualified_names_do_not_resolve_by_their_last_part(tmp_path: Path) -> No
 @engine_schemas
 def test_declared_schemas_exist_before_they_have_tables(tmp_path: Path) -> None:
     ws = parse_config('[schemas.sales]\ndescription = "Sales"\n', tmp_path)
-    assert ws.session.schemas == ["main", "sales"]
+    assert ws.session.schemas() == ["main", "sales"]
 
 
 @engine_schemas

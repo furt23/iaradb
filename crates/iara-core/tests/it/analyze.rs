@@ -28,13 +28,13 @@ fn context() -> SessionContext {
             RecordBatch::try_new(schema.clone(), cols).unwrap()
         })
         .collect();
-    ctx.register_batches("facts", schema, batches);
+    ctx.register_batches("facts", schema, batches).unwrap();
     let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false), Field::new("name", DataType::Utf8, false)]));
     let cols: Vec<ArrayRef> = vec![
         Arc::new(Int64Array::from((0..DIMS).collect::<Vec<_>>())),
         Arc::new(StringArray::from((0..DIMS).map(|i| format!("dim-{i:03}")).collect::<Vec<_>>())),
     ];
-    ctx.register_batches("dims", schema.clone(), vec![RecordBatch::try_new(schema, cols).unwrap()]);
+    ctx.register_batches("dims", schema.clone(), vec![RecordBatch::try_new(schema, cols).unwrap()]).unwrap();
     ctx
 }
 

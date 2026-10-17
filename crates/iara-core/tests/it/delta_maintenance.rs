@@ -41,7 +41,7 @@ fn frame(ids: std::ops::Range<i64>) -> (SessionContext, LazyFrame) {
         Arc::new(StringArray::from(ids.iter().map(|i| format!("s{i}")).collect::<Vec<_>>())),
     ];
     let ctx = SessionContext::new();
-    ctx.register_batches("t", schema(), vec![RecordBatch::try_new(schema(), cols).unwrap()]);
+    ctx.register_batches("t", schema(), vec![RecordBatch::try_new(schema(), cols).unwrap()]).unwrap();
     let lf = ctx.sql("select * from t").unwrap();
     (ctx, lf)
 }

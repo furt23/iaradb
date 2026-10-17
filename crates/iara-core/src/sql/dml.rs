@@ -308,7 +308,7 @@ pub(super) fn run(ctx: &SessionContext, sql: &str, params: &Params) -> Result<La
             let alias = alias.unwrap_or_else(|| t.name.table.clone());
             let (lf, default_alias) = match &source {
                 SourceText::Query(q) => (ctx.sql_with(q, params)?, "source".to_string()),
-                SourceText::Table(n) => (ctx.table(n)?, n.rsplit('.').next().unwrap_or(n).to_string()),
+                SourceText::Table(n) => (ctx.query_table(n)?, n.rsplit('.').next().unwrap_or(n).to_string()),
             };
             let source_alias = source_alias.unwrap_or(default_alias);
             if source_alias.eq_ignore_ascii_case(&alias) {

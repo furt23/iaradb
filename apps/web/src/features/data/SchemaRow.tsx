@@ -10,20 +10,23 @@ import type { MouseEvent } from "react";
 import type { SchemaGroup } from "./schemaGroups";
 import { TreeRow, type MenuAnchor } from "./TreeRow";
 
-/** A schema of the catalog: a folder that opens to its tables, and a "…" menu. */
+/** A schema of a catalog: a folder that opens to its tables, and a "…" menu. */
 export function SchemaRow({
   group,
+  indent,
   open,
   onToggle,
   onMenu,
 }: {
   group: SchemaGroup;
+  /** spacing units from the left edge */
+  indent: number;
   open: boolean;
   onToggle(): void;
   onMenu(e: MouseEvent<HTMLElement>, anchor: MenuAnchor): void;
 }) {
   return (
-    <TreeRow active={false} indent={0} menuLabel={`actions for schema ${group.schema}`} onMenu={onMenu}>
+    <TreeRow active={false} indent={indent} menuLabel={`actions for schema ${group.name}`} onMenu={onMenu}>
       <ButtonBase
         aria-expanded={open}
         onClick={onToggle}

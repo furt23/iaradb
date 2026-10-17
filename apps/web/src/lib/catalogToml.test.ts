@@ -2,16 +2,26 @@ import { parse } from "smol-toml";
 import { describe, expect, it } from "vitest";
 
 import {
+  catalogEntry,
+  catalogsOf,
+  defaultCatalogOf,
   displayName,
+  inCatalog,
   isIdentifier,
+  normalizeCatalogName,
   parseTableName,
+  removeCatalogHeader,
+  removeCatalogSections,
   removeSchemaSection,
   removeTableSection,
+  schemaDisplayName,
   schemaEntry,
   schemasOf,
   suggestTableName,
   tableEntry,
   tablesOf,
+  withCatalogNames,
+  withChange,
 } from "./catalogToml";
 
 const TOML = `# the catalog
@@ -47,22 +57,46 @@ path = "data/orders.csv"
 path = "warehouse/tpch/lineitem_sf10"
 `;
 
+/** Two other catalogs: `sales` (described, with a schema `raw` and a table in it) and `archive` (empty). */
+const CATALOGS = `[workspace]
+name = "demo"
+
+[tables.orders]
+path = "data/orders.csv"
+
+[catalogs.sales]
+description = "Sales data"
+
+[catalogs.sales.tables.orders]
+path = "sales/orders.parquet"
+
+[catalogs.sales.tables.raw.events]
+path = "sales/raw/events/"
+format = "parquet"
+
+[catalogs.sales.schemas.raw]
+description = "landing zone"
+location = "s3://bucket/raw/"
+
+[catalogs.archive]
+`;
+
 const names = (text: string) => tablesOf(parse(text)).map((t) => t.name);
 
 describe("tablesOf", () => {
   it("reads every table in main, with the format the kernel infers", () => {
     expect(tablesOf(parse(TOML))).toEqual([
-      { name: "sales", schema: "main", table: "sales", path: "data/sales.parquet", format: "parquet" },
-      { name: "regions", schema: "main", table: "regions", path: "data/regions.csv", format: "csv" },
-      { name: "events", schema: "main", table: "events", path: "s3://bucket/events/", format: "parquet" },
+      { name: "sales", catalog: "demo", schema: "main", table: "sales", path: "data/sales.parquet", format: "parquet" },
+      { name: "regions", catalog: "demo", schema: "main", table: "regions", path: "data/regions.csv", format: "csv" },
+      { name: "events", catalog: "demo", schema: "main", table: "events", path: "s3://bucket/events/", format: "parquet" },
     ]);
   });
 
   it("reads the tables of a schema, dotted or quoted", () => {
     expect(tablesOf(parse(SCHEMAS))).toEqual([
-      { name: "tpch.lineitem", schema: "tpch", table: "lineitem", path: "warehouse/tpch/lineitem", format: "parquet" },
-      { name: "tpch.lineitem_sf10", schema: "tpch", table: "lineitem_sf10", path: "warehouse/tpch/lineitem_sf10", format: "parquet" },
-      { name: "tpch.orders", schema: "tpch", table: "orders", path: "data/orders.csv", format: "csv" },
+      { name: "tpch.lineitem", catalog: "main", schema: "tpch", table: "lineitem", path: "warehouse/tpch/lineitem", format: "parquet" },
+      { name: "tpch.lineitem_sf10", catalog: "main", schema: "tpch", table: "lineitem_sf10", path: "warehouse/tpch/lineitem_sf10", format: "parquet" },
+      { name: "tpch.orders", catalog: "main", schema: "tpch", table: "orders", path: "data/orders.csv", format: "csv" },
     ]);
   });
 
@@ -117,45 +151,128 @@ describe("tablesOf", () => {
     const text = '[tables.tpch.lineitem]\npath = "a"\n[tables."tpch.lineitem"]\npath = "b"\n';
     expect(() => tablesOf(parse(text))).toThrow("table tpch.lineitem is defined twice");
   });
+
+  it("reads the tables of other catalogs as catalog.schema.table, main included", () => {
+    expect(tablesOf(parse(CATALOGS)).map((t) => [t.name, t.catalog, t.schema, t.table])).toEqual([
+      ["orders", "demo", "main", "orders"],
+      ["sales.main.orders", "sales", "main", "orders"],
+      ["sales.raw.events", "sales", "raw", "events"],
+    ]);
+  });
+
+  it("is an error for a table of a catalog that is defined twice, or that has the default's name", () => {
+    expect(() => tablesOf(parse('[workspace]\nname = "demo"\n[catalogs.demo.tables.x]\npath = "a"\n'))).toThrow(
+      "catalog demo has the name of the default catalog",
+    );
+    expect(() => tablesOf(parse('[catalogs.Sales.tables.x]\npath = "a"\n[catalogs.sales.tables.x]\npath = "b"\n'))).toThrow(
+      "catalog sales is defined twice",
+    );
+  });
+});
+
+describe("normalizeCatalogName", () => {
+  it("lowercases, turns the characters outside a-z, 0-9 and _ into _", () => {
+    expect(normalizeCatalogName("tpch_demo")).toBe("tpch_demo");
+    expect(normalizeCatalogName("Iara Team")).toBe("iara_team");
+    expect(normalizeCatalogName("sales-2024")).toBe("sales_2024");
+    expect(normalizeCatalogName("Équipe")).toBe("_quipe");
+    expect(normalizeCatalogName("   ")).toBe("___");
+  });
+
+  it("prefixes _ before a leading digit, and is main when empty", () => {
+    expect(normalizeCatalogName("2024 data")).toBe("_2024_data");
+    expect(normalizeCatalogName("")).toBe("main");
+  });
+
+  it("is the default catalog's name: the normalized [workspace] name, main without one", () => {
+    expect(defaultCatalogOf(parse('[workspace]\nname = "Iara Team"\n'))).toBe("iara_team");
+    expect(defaultCatalogOf(parse("[tables.x]\npath = \"a\"\n"))).toBe("main");
+    expect(defaultCatalogOf(null)).toBe("main");
+  });
+});
+
+describe("catalogsOf", () => {
+  it("is the default catalog alone for a catalog without declared ones", () => {
+    expect(catalogsOf("")).toEqual([{ name: "main", description: null, isDefault: true }]);
+  });
+
+  it("lists the default catalog first, then the declared ones by name, with their description", () => {
+    expect(catalogsOf(CATALOGS)).toEqual([
+      { name: "demo", description: null, isDefault: true },
+      { name: "archive", description: null, isDefault: false },
+      { name: "sales", description: "Sales data", isDefault: false },
+    ]);
+  });
+
+  it("finds a catalog that is declared only by its sections", () => {
+    expect(catalogsOf('[catalogs.sales.schemas.raw]\ndescription = "x"\n').map((c) => c.name)).toEqual(["main", "sales"]);
+  });
+
+  it("is an error for a catalog name that is not an identifier", () => {
+    expect(() => catalogsOf('[catalogs."my-cat"]\n')).toThrow("catalog names are letters, digits and underscores: my-cat");
+  });
 });
 
 describe("schemasOf", () => {
   it("is main alone for a catalog without schemas", () => {
-    expect(schemasOf("")).toEqual([{ name: "main", description: null }]);
-    expect(schemasOf(TOML)).toEqual([{ name: "main", description: null }]);
+    expect(schemasOf("")).toEqual([{ name: "main", catalog: "main", description: null }]);
+    expect(schemasOf(TOML)).toEqual([{ name: "main", catalog: "demo", description: null }]);
   });
 
   it("lists the declared schemas and those used by a table, main first, by name", () => {
     const text = `${SCHEMAS}\n[schemas.empty]\n\n[tables.sales.orders]\npath = "b.parquet"\n\n[tables.orders]\npath = "c.parquet"\n`;
     expect(schemasOf(text)).toEqual([
-      { name: "main", description: null },
-      { name: "empty", description: null },
-      { name: "sales", description: null },
-      { name: "tpch", description: "TPC-H benchmark" },
+      { name: "main", catalog: "main", description: null },
+      { name: "empty", catalog: "main", description: null },
+      { name: "sales", catalog: "main", description: null },
+      { name: "tpch", catalog: "main", description: "TPC-H benchmark" },
     ]);
   });
 
   it("takes a description for main when it is declared", () => {
-    expect(schemasOf('[schemas.main]\ndescription = "the default"\n')).toEqual([{ name: "main", description: "the default" }]);
+    expect(schemasOf('[schemas.main]\ndescription = "the default"\n')).toEqual([
+      { name: "main", catalog: "main", description: "the default" },
+    ]);
+  });
+
+  it("lists main, the declared schemas and the used ones of every catalog, the default first", () => {
+    expect(schemasOf(CATALOGS)).toEqual([
+      { name: "main", catalog: "demo", description: null },
+      { name: "main", catalog: "archive", description: null },
+      { name: "main", catalog: "sales", description: null },
+      { name: "raw", catalog: "sales", description: "landing zone", location: "s3://bucket/raw/" },
+    ]);
   });
 });
 
 describe("table names", () => {
-  it("splits a name into schema and table, lowercased", () => {
-    expect(parseTableName("orders")).toEqual({ schema: "main", table: "orders" });
-    expect(parseTableName("main.orders")).toEqual({ schema: "main", table: "orders" });
-    expect(parseTableName("TPCH.LineItem")).toEqual({ schema: "tpch", table: "lineitem" });
+  it("splits a name into catalog, schema and table, lowercased, the default catalog when none is named", () => {
+    expect(parseTableName("orders", "demo")).toEqual({ catalog: "demo", schema: "main", table: "orders" });
+    expect(parseTableName("main.orders", "demo")).toEqual({ catalog: "demo", schema: "main", table: "orders" });
+    expect(parseTableName("TPCH.LineItem", "demo")).toEqual({ catalog: "demo", schema: "tpch", table: "lineitem" });
+    expect(parseTableName("SALES.Raw.Events", "demo")).toEqual({ catalog: "sales", schema: "raw", table: "events" });
   });
 
-  it("rejects names that are not schema.table with identifier parts", () => {
-    for (const bad of ["", ".orders", "tpch.", "a.b.c", "1x", "x-y", "a b", "tpch.1x"]) {
-      expect(parseTableName(bad), bad).toBeNull();
+  it("rejects names that are not 1 to 3 parts that are identifiers", () => {
+    for (const bad of ["", ".orders", "tpch.", "a.b.c.d", "1x", "x-y", "a b", "tpch.1x", "a.b.1x"]) {
+      expect(parseTableName(bad, "demo"), bad).toBeNull();
     }
   });
 
-  it("displays a table of main by its bare name, others as schema.table", () => {
-    expect(displayName({ schema: "main", table: "orders" })).toBe("orders");
-    expect(displayName({ schema: "tpch", table: "lineitem" })).toBe("tpch.lineitem");
+  it("displays a table of the default catalog's main by its bare name, its other schemas as schema.table, another catalog as catalog.schema.table", () => {
+    expect(displayName({ catalog: "demo", schema: "main", table: "orders" }, "demo")).toBe("orders");
+    expect(displayName({ catalog: "demo", schema: "tpch", table: "lineitem" }, "demo")).toBe("tpch.lineitem");
+    expect(displayName({ catalog: "sales", schema: "main", table: "orders" }, "demo")).toBe("sales.main.orders");
+  });
+
+  it("names a table of a catalog by its catalog", () => {
+    expect(inCatalog("orders", "Sales")).toBe("sales.main.orders");
+    expect(inCatalog("raw.events", "sales")).toBe("sales.raw.events");
+  });
+
+  it("names a schema of a catalog by its catalog when it is not the default one", () => {
+    expect(schemaDisplayName({ catalog: "demo", name: "tpch" }, "demo")).toBe("tpch");
+    expect(schemaDisplayName({ catalog: "sales", name: "raw" }, "demo")).toBe("sales.raw");
   });
 
   it("checks identifiers", () => {
@@ -207,8 +324,8 @@ describe("removeTableSection", () => {
   it("keeps the declaration of its schema", () => {
     const out = removeTableSection(SCHEMAS, "tpch.orders")!;
     expect(schemasOf(out)).toEqual([
-      { name: "main", description: null },
-      { name: "tpch", description: "TPC-H benchmark" },
+      { name: "main", catalog: "main", description: null },
+      { name: "tpch", catalog: "main", description: "TPC-H benchmark" },
     ]);
   });
 
@@ -218,9 +335,17 @@ describe("removeTableSection", () => {
     expect(names(removeTableSection('[tables.Orders]\npath = "a"\n', "ORDERS")!)).toEqual([]);
   });
 
+  it("removes a table of another catalog by its catalog.schema.table name, and keeps the catalog", () => {
+    expect(names(removeTableSection(CATALOGS, "sales.main.orders")!)).toEqual(["orders", "sales.raw.events"]);
+    const out = removeTableSection(CATALOGS, "sales.raw.events")!;
+    expect(catalogsOf(out).find((c) => c.name === "sales")?.description).toBe("Sales data");
+    expect(names(out)).toEqual(["orders", "sales.main.orders"]);
+  });
+
   it("is null for tables the file does not define as a section", () => {
     expect(removeTableSection(TOML, "nope")).toBeNull();
     expect(removeTableSection(SCHEMAS, "tpch.nope")).toBeNull();
+    expect(removeTableSection(CATALOGS, "sales.main.nope")).toBeNull();
     expect(removeTableSection('tables = { inline = { path = "x" } }\n', "inline")).toBeNull();
   });
 
@@ -244,8 +369,39 @@ describe("removeSchemaSection", () => {
     expect(removeSchemaSection(text, "tpch")).toBe('[schemas.tpch2]\ndescription = "two"\n');
   });
 
+  it("removes the declaration of a schema of another catalog, named catalog.schema", () => {
+    const out = removeSchemaSection(CATALOGS, "sales.raw")!;
+    expect(schemasOf(out).find((s) => s.catalog === "sales" && s.name === "raw")).toEqual({
+      name: "raw",
+      catalog: "sales",
+      description: null,
+    });
+    expect(catalogsOf(out).find((c) => c.name === "sales")?.description).toBe("Sales data");
+  });
+
   it("is null for a schema that is not declared", () => {
     expect(removeSchemaSection(SCHEMAS, "sales")).toBeNull();
+    expect(removeSchemaSection(CATALOGS, "archive.raw")).toBeNull();
+  });
+});
+
+describe("removeCatalogSections and removeCatalogHeader", () => {
+  it("removes a catalog with everything below it, and keeps the others", () => {
+    const out = removeCatalogSections(CATALOGS, "sales")!;
+    expect(catalogsOf(out).map((c) => c.name)).toEqual(["demo", "archive"]);
+    expect(names(out)).toEqual(["orders"]);
+    expect(out).toContain('[tables.orders]\npath = "data/orders.csv"');
+  });
+
+  it("removes only the catalog's own section, and keeps its tables and schemas", () => {
+    const out = removeCatalogHeader(CATALOGS, "sales")!;
+    expect(catalogsOf(out).find((c) => c.name === "sales")?.description).toBeNull();
+    expect(names(out)).toEqual(["orders", "sales.main.orders", "sales.raw.events"]);
+  });
+
+  it("is null for a catalog the file does not declare", () => {
+    expect(removeCatalogSections(TOML, "sales")).toBeNull();
+    expect(removeCatalogHeader(TOML, "sales")).toBeNull();
   });
 });
 
@@ -261,19 +417,30 @@ describe("tableEntry", () => {
     );
   });
 
+  it("writes a table of another catalog as [catalogs.<c>.tables...], by its catalog.schema.table name or with the catalog given", () => {
+    expect(tableEntry("sales.main.orders", "a.parquet")).toBe('\n[catalogs.sales.tables.orders]\npath = "a.parquet"\n');
+    expect(tableEntry("orders", "a.parquet", undefined, "sales")).toBe(tableEntry("sales.main.orders", "a.parquet"));
+    expect(tableEntry("raw.events", "a.parquet", "parquet", "sales")).toBe(
+      '\n[catalogs.sales.tables.raw.events]\npath = "a.parquet"\nformat = "parquet"\n',
+    );
+  });
+
   it("writes text that reads back as the same table", () => {
     const entry = tableEntry("sales.orders", "data\\Daily \"Trips\".csv", "csv");
     expect(tablesOf(parse(`[workspace]\nname = "x"\n${entry}`))).toEqual([
-      { name: "sales.orders", schema: "sales", table: "orders", path: 'data\\Daily "Trips".csv', format: "csv" },
+      { name: "sales.orders", catalog: "x", schema: "sales", table: "orders", path: 'data\\Daily "Trips".csv', format: "csv" },
     ]);
+    const other = tableEntry("raw.events", "a.parquet", undefined, "sales");
+    expect(tablesOf(parse(`[workspace]\nname = "x"\n${other}`)).map((t) => t.name)).toEqual(["sales.raw.events"]);
   });
 
   it("is an error for an invalid name", () => {
-    expect(() => tableEntry("a.b.c", "x")).toThrow("invalid table name a.b.c");
+    expect(() => tableEntry("a.b.c.d", "x")).toThrow("invalid table name a.b.c.d");
+    expect(() => tableEntry("orders", "x", undefined, "bad-name")).toThrow("invalid table name orders");
   });
 });
 
-describe("schemaEntry", () => {
+describe("schemaEntry and catalogEntry", () => {
   it("writes the section of a schema", () => {
     expect(schemaEntry("tpch")).toBe("\n[schemas.tpch]\n");
     expect(schemaEntry("TPCH")).toBe("\n[schemas.tpch]\n");
@@ -282,13 +449,92 @@ describe("schemaEntry", () => {
   it("writes the description when there is one, and reads it back", () => {
     const entry = schemaEntry("tpch", 'TPC-H, "sf 1"');
     expect(schemasOf(`[workspace]\nname = "x"\n${entry}`)).toEqual([
-      { name: "main", description: null },
-      { name: "tpch", description: 'TPC-H, "sf 1"' },
+      { name: "main", catalog: "x", description: null },
+      { name: "tpch", catalog: "x", description: 'TPC-H, "sf 1"' },
     ]);
+  });
+
+  it("writes a schema of another catalog under [catalogs.<c>.schemas], with its location", () => {
+    const entry = schemaEntry("raw", "landing", "s3://bucket/raw/", "sales");
+    expect(entry).toBe('\n[catalogs.sales.schemas.raw]\ndescription = "landing"\nlocation = "s3://bucket/raw/"\n');
+    expect(schemasOf(`[workspace]\nname = "x"\n${entry}`).find((s) => s.catalog === "sales" && s.name === "raw")).toEqual({
+      name: "raw",
+      catalog: "sales",
+      description: "landing",
+      location: "s3://bucket/raw/",
+    });
   });
 
   it("is an error for a name that is not an identifier", () => {
     expect(() => schemaEntry("bad-name")).toThrow("invalid schema name bad-name");
+    expect(() => schemaEntry("raw", null, null, "bad-name")).toThrow("invalid catalog name bad-name");
+  });
+
+  it("writes a catalog's section with its description, and reads it back", () => {
+    expect(catalogEntry("Sales")).toBe("\n[catalogs.sales]\n");
+    const entry = catalogEntry("sales", 'Sales, "EU"');
+    expect(catalogsOf(`[workspace]\nname = "x"\n${entry}`)).toEqual([
+      { name: "x", description: null, isDefault: true },
+      { name: "sales", description: 'Sales, "EU"', isDefault: false },
+    ]);
+    expect(() => catalogEntry("bad-name")).toThrow("invalid catalog name bad-name");
+  });
+});
+
+describe("withCatalogNames", () => {
+  it("adds the full name of each table of the default catalog, and leaves the other names as they are", () => {
+    expect(withCatalogNames({ orders: [1], "raw.events": [2], "sales.main.x": [3] }, "tpch")).toEqual({
+      orders: [1],
+      "raw.events": [2],
+      "sales.main.x": [3],
+      "tpch.main.orders": [1],
+      "tpch.raw.events": [2],
+    });
+  });
+});
+
+describe("withChange", () => {
+  const orders = (text: string) => tablesOf(parse(text)).find((t) => t.name === "orders")?.path;
+
+  it("adds a table of another catalog under its catalog", () => {
+    const entry = tableEntry("orders", "a.parquet", undefined, "archive");
+    const out = withChange(TOML, { name: "archive.main.orders", entry });
+    expect(names(out)).toContain("archive.main.orders");
+    expect(catalogsOf(out).map((c) => c.name)).toEqual(["demo", "archive"]);
+  });
+
+  it("drops a table of another catalog, and keeps its catalog", () => {
+    const out = withChange(CATALOGS, { name: "sales.main.orders", entry: null });
+    expect(names(out)).toEqual(["orders", "sales.raw.events"]);
+    expect(catalogsOf(out).find((c) => c.name === "sales")?.description).toBe("Sales data");
+  });
+
+  it("replaces a table that is declared already", () => {
+    const out = withChange(CATALOGS, { name: "orders", entry: tableEntry("orders", "new.parquet") });
+    expect(orders(out)).toBe("new.parquet");
+    expect(names(out).filter((n) => n === "orders")).toHaveLength(1);
+  });
+
+  it("keeps a schema that is declared already (CREATE SCHEMA IF NOT EXISTS keeps its description)", () => {
+    expect(withChange(CATALOGS, { kind: "schema", name: "sales.raw", entry: schemaEntry("raw", "other", null, "sales") })).toBe(CATALOGS);
+  });
+
+  it("drops a declared schema, and keeps its tables", () => {
+    const out = withChange(CATALOGS, { kind: "schema", name: "sales.raw", entry: null });
+    expect(schemasOf(out).find((s) => s.catalog === "sales" && s.name === "raw")?.description).toBeNull();
+    expect(names(out)).toContain("sales.raw.events");
+  });
+
+  it("creates a catalog with its description, and keeps a catalog that is declared (CREATE CATALOG IF NOT EXISTS)", () => {
+    const out = withChange(TOML, { kind: "catalog", name: "archive", entry: catalogEntry("archive", "old") });
+    expect(catalogsOf(out).find((c) => c.name === "archive")?.description).toBe("old");
+    expect(withChange(CATALOGS, { kind: "catalog", name: "sales", entry: catalogEntry("sales", "other") })).toBe(CATALOGS);
+  });
+
+  it("drops a catalog with all its sections", () => {
+    const out = withChange(CATALOGS, { kind: "catalog", name: "sales", entry: null });
+    expect(catalogsOf(out).map((c) => c.name)).toEqual(["demo", "archive"]);
+    expect(names(out)).toEqual(["orders"]);
   });
 });
 

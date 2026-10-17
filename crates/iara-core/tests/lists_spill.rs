@@ -94,7 +94,7 @@ fn collect(ctx: &SessionContext, q: &str) -> RecordBatch {
 fn list_aggregations_and_payload_columns_spill_and_match() {
     let (schema, batches) = facts();
     let ctx = SessionContext::new();
-    ctx.register_batches("t", schema, batches);
+    ctx.register_batches("t", schema, batches).unwrap();
     let pool = memory::pool();
 
     pool.set_limit(usize::MAX);

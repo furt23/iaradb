@@ -2,6 +2,7 @@
 
 import Add from "@mui/icons-material/Add";
 import CreateNewFolderOutlined from "@mui/icons-material/CreateNewFolderOutlined";
+import LibraryAddOutlined from "@mui/icons-material/LibraryAddOutlined";
 import FolderSync from "@mui/icons-material/Sync";
 import Refresh from "@mui/icons-material/Refresh";
 import Search from "@mui/icons-material/Search";
@@ -18,15 +19,16 @@ import { useTranslation } from "@/i18n";
 import { useGuard } from "@/features/shell/notify";
 import { SidePanelHeader } from "@/features/shell/SidePanelHeader";
 import { unwrap } from "@/lib/action";
-import type { CatalogSchema, CatalogTable } from "@/lib/catalogToml";
+import type { CatalogInfo, CatalogSchema, CatalogTable } from "@/lib/catalogToml";
 import { refreshCatalog, syncCatalog } from "@/server/actions/catalog";
 
 import { AddTableDialog } from "./AddTableDialog";
 import { CatalogTree } from "./CatalogTree";
 import { useData } from "./DataProvider";
 import { tableFromPathname } from "./links";
+import { NewCatalogDialog } from "./NewCatalogDialog";
 import { NewSchemaDialog } from "./NewSchemaDialog";
-import { schemaGroups } from "./schemaGroups";
+import { catalogGroups } from "./schemaGroups";
 
 function matches(t: CatalogTable, filter: string): boolean {
   const f = filter.trim().toLowerCase();
@@ -34,13 +36,24 @@ function matches(t: CatalogTable, filter: string): boolean {
 }
 
 /**
- * The Data side panel: the catalog's tables by schema, a filter, and adding
- * schemas, tables or reloading. `schemas` are the declared ones; the schemas
- * of the tables are shown in any case.
+ * The Data side panel: the catalogs with their schemas and tables, a filter, and
+ * adding catalogs, schemas, tables or reloading. `catalogs` and `schemas` are the
+ * declared ones; the schemas of the tables are shown in any case.
  */
-export function CatalogPanel({ tables, schemas = [], error }: { tables: CatalogTable[]; schemas?: CatalogSchema[]; error: string | null }) {
+export function CatalogPanel({
+  tables,
+  schemas = [],
+  catalogs = [],
+  error,
+}: {
+  tables: CatalogTable[];
+  schemas?: CatalogSchema[];
+  catalogs?: CatalogInfo[];
+  error: string | null;
+}) {
   const [adding, setAdding] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [creatingCatalog, setCreatingCatalog] = useState(false);
   const [filter, setFilter] = useState("");
   const { act, invalidate } = useData();
   const guard = useGuard();
@@ -48,7 +61,7 @@ export function CatalogPanel({ tables, schemas = [], error }: { tables: CatalogT
   const active = tableFromPathname(usePathname());
   const names = tables.map((t) => t.name).join("\n");
 
-  // tables removed from iara.toml lose their tabs
+  // tables removed from the catalog lose their tabs
   useEffect(() => {
     if (!error) act({ type: "keep", names: names ? names.split("\n") : [] });
   }, [names, error, act]);
@@ -68,8 +81,11 @@ export function CatalogPanel({ tables, schemas = [], error }: { tables: CatalogT
     });
 
   const shown = tables.filter((t) => matches(t, filter));
-  // while filtering, a schema without a matching table is hidden
-  const groups = schemaGroups(schemas, shown).filter((g) => !filter.trim() || g.tables.length > 0);
+  // while filtering, a catalog or schema without a matching table is hidden
+  const filtering = filter.trim() !== "";
+  const groups = catalogGroups(catalogs, schemas, shown)
+    .map((c) => ({ ...c, schemas: c.schemas.filter((s) => !filtering || s.tables.length > 0) }))
+    .filter((c) => !filtering || c.schemas.length > 0);
   const { t } = useTranslation();
   return (
     <>
@@ -83,6 +99,11 @@ export function CatalogPanel({ tables, schemas = [], error }: { tables: CatalogT
                 <Add fontSize="small" />
               </IconButton>
             </Tooltip>
+            <Tooltip title={t("New catalog…")}>
+              <IconButton onClick={() => setCreatingCatalog(true)} aria-label={t("new catalog")}>
+                <LibraryAddOutlined fontSize="small" />
+              </IconButton>
+            </Tooltip>
             <Tooltip title={t("New schema…")}>
               <IconButton onClick={() => setCreating(true)} aria-label={t("new schema")}>
                 <CreateNewFolderOutlined fontSize="small" />
@@ -93,7 +114,7 @@ export function CatalogPanel({ tables, schemas = [], error }: { tables: CatalogT
                 <FolderSync fontSize="small" />
               </IconButton>
             </Tooltip>
-            <Tooltip title={t("Reload iara.toml")}>
+            <Tooltip title={t("Reload catalog")}>
               <IconButton onClick={reload} aria-label={t("reload catalog")}>
                 <Refresh fontSize="small" />
               </IconButton>
@@ -142,6 +163,7 @@ export function CatalogPanel({ tables, schemas = [], error }: { tables: CatalogT
       </Box>
       <AddTableDialog open={adding} onClose={() => setAdding(false)} />
       <NewSchemaDialog open={creating} onClose={() => setCreating(false)} />
+      <NewCatalogDialog open={creatingCatalog} onClose={() => setCreatingCatalog(false)} />
     </>
   );
 }

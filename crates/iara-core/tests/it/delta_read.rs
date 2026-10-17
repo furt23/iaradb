@@ -117,7 +117,7 @@ impl Table {
 
     fn context(&self, version: Option<VersionSpec>) -> SessionContext {
         let ctx = SessionContext::new();
-        ctx.register_table("t", Arc::new(self.open(version)));
+        ctx.register_table("t", Arc::new(self.open(version))).unwrap();
         ctx
     }
 }
@@ -361,7 +361,7 @@ fn a_table_on_an_object_store_reads_only_the_files_it_needs() {
 
     assert!(is_delta_table(root, &storage));
     let ctx = SessionContext::new();
-    ctx.register_table("t", Arc::new(DeltaTable::open(root, &storage, None).unwrap()));
+    ctx.register_table("t", Arc::new(DeltaTable::open(root, &storage, None).unwrap())).unwrap();
     assert_eq!(rows_in(&ctx, "select * from t order by id"), "0,a,1|1,a,null|10,b,1|11,b,null|20,c,1|21,c,null");
     assert_eq!(rows_in(&ctx, "select sum(v) from t where p = 'b' and id > 5"), "1");
     // the statistics skip the files of `a` and `c`: one file is scanned

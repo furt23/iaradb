@@ -1,11 +1,13 @@
 /**
- * Team naming of the AWS resources. Each team runs its own Studio, and the
- * Studio rewrites its machines' role policy with its own workspace buckets, so
- * Studios sharing an AWS account need separate roles and security groups.
- * `IARA_TEAM` names them; unset keeps the legacy shared names. The
- * Python CLI (`python/iara/cloud/`) uses the same names and tag.
+ * Team naming of the AWS resources. Each team runs its own Studio with its own
+ * AWS key, and `python -m iara.cloud team-setup <team>` (admin credentials)
+ * creates the team's role, instance profile, security group and key; the Studio
+ * only looks them up by these names. `IARA_TEAM` names the team and is required
+ * on a Studio that uses clusters. The Python CLI (`python/iara/cloud/`) uses the
+ * same names and tag.
  */
 
+import { ClusterError } from "../clusterError";
 import { TAG_TEAM } from "./api";
 
 export const SECURITY_GROUP_BASE = "iara-clusters";
@@ -23,17 +25,29 @@ export function teamId(env: Record<string, string | undefined> = process.env): s
   return raw;
 }
 
-/** `iara-clusters-<team>`, or the legacy `iara-clusters` without a team. */
-export function securityGroupName(team: string | null): string {
-  return team ? `${SECURITY_GROUP_BASE}-${team}` : SECURITY_GROUP_BASE;
+/** The team of this Studio; the team's AWS setup cannot be found without it. */
+export function requiredTeam(env: Record<string, string | undefined> = process.env): string {
+  const team = teamId(env);
+  if (!team) throw new ClusterError("NoTeam", "IARA_TEAM is not set: name this Studio's team, then run `python -m iara.cloud team-setup <team>` with admin credentials");
+  return team;
 }
 
-/** Role and instance profile name: `iara-cluster-<team>`, or the legacy `iara-cluster`. */
-export function roleName(team: string | null): string {
-  return team ? `${ROLE_BASE}-${team}` : ROLE_BASE;
+/** `iara-clusters-<team>` */
+export function securityGroupName(team: string): string {
+  return `${SECURITY_GROUP_BASE}-${team}`;
 }
 
-/** Tags marking a team's resources (none without a team). */
-export function teamTags(team: string | null): { Key: string; Value: string }[] {
-  return team ? [{ Key: TAG_TEAM, Value: team }] : [];
+/** Role and instance profile name: `iara-cluster-<team>`. */
+export function roleName(team: string): string {
+  return `${ROLE_BASE}-${team}`;
+}
+
+/** The tag marking a team's machines (the team's AWS key may only launch and end machines carrying it). */
+export function teamTags(team: string): { Key: string; Value: string }[] {
+  return [{ Key: TAG_TEAM, Value: team }];
+}
+
+/** What the Studio says when it finds nothing of the team's in AWS. */
+export function notSetUp(team: string): ClusterError {
+  return new ClusterError("AwsNotSetUp", `AWS is not set up for team ${team}: run \`python -m iara.cloud team-setup ${team}\` with admin credentials`);
 }

@@ -18,7 +18,7 @@ use crate::session::{LazyFrame, SessionContext, TableEntry};
 
 /// `INSERT [INTO | OVERWRITE] t [(columns)] query` into a Delta table: one
 /// atomic commit (an append, or an overwrite of every row).
-pub(super) fn insert(ctx: &SessionContext, key: &str, shown: &str, table: &DeltaTable, columns: &[String], overwrite: bool, lf: LazyFrame) -> Result<LazyFrame> {
+pub(super) fn insert(ctx: &SessionContext, target: &TableName, shown: &str, table: &DeltaTable, columns: &[String], overwrite: bool, lf: LazyFrame) -> Result<LazyFrame> {
     use crate::io::TableProvider;
     let schema = table.schema();
     let given: Vec<String> = if columns.is_empty() { schema.fields().iter().map(|f| f.name().clone()).collect() } else { columns.to_vec() };
@@ -35,7 +35,7 @@ pub(super) fn insert(ctx: &SessionContext, key: &str, shown: &str, table: &Delta
     let mode = if overwrite { WriteMode::Overwrite } else { WriteMode::Append };
     let done = write_table(&lf, table.root(), table.storage(), mode, &[], false)?;
     // the registered table must see the new version
-    ctx.register_delta(key, table.root(), table.storage(), None, false)?;
+    ctx.put_delta(target, table.root(), table.storage())?;
     let op = if overwrite { "insert overwrite" } else { "insert" };
     summary_with(ctx, op, Some(shown), Some(table.root()), done.rows as usize, Some("delta"), Some(done.version))
 }
@@ -45,8 +45,8 @@ pub(super) fn insert(ctx: &SessionContext, key: &str, shown: &str, table: &Delta
 pub(super) fn truncate(ctx: &SessionContext, name: &str) -> Result<LazyFrame> {
     let r = TableRef::strict(name)?;
     let target = ctx.resolve_table(&r).ok_or_else(|| missing(ctx, &r, name))?;
-    let (key, shown) = (target.key(), target.display());
-    let provider = match ctx.lookup(&key)? {
+    let shown = ctx.display_name(&target);
+    let provider = match ctx.entry(&target)? {
         Some(TableEntry::Table(t)) => t,
         Some(TableEntry::View(_)) => return Err(WhError::Plan(format!("'{shown}' is a view: rows are in tables"))),
         None => return Err(WhError::Plan(format!("table '{shown}' not found"))),
@@ -56,7 +56,7 @@ pub(super) fn truncate(ctx: &SessionContext, name: &str) -> Result<LazyFrame> {
     let empty = ctx.from_batches(schema.clone(), vec![])?;
     if let Some(d) = provider.as_delta() {
         let done = write_table(&empty, d.root(), d.storage(), WriteMode::Overwrite, &[], false)?;
-        ctx.register_delta(&key, d.root(), d.storage(), None, false)?;
+        ctx.put_delta(&target, d.root(), d.storage())?;
         return summary_with(ctx, "truncate", Some(&shown), Some(d.root()), before, Some("delta"), Some(done.version));
     }
     if let Some(loc) = provider.location() {
@@ -65,17 +65,17 @@ pub(super) fn truncate(ctx: &SessionContext, name: &str) -> Result<LazyFrame> {
             let dest = dataset::join(&loc.path, &new_file_name());
             empty.sink_parquet_files(&dest, &ParquetOptions::default(), &loc.storage)?;
             drop_replaced(&loc.path, &old, &loc.storage)?;
-            ctx.register_parquet_with(&key, &loc.path, &loc.storage, false)?;
+            ctx.put_parquet(&target, &loc.path, &loc.storage)?;
         } else {
             // no partition, no file: the table stays in memory, empty
-            ctx.deregister(&key);
+            ctx.remove_table(&target);
             drop_replaced(&loc.path, &old, &loc.storage)?;
-            ctx.register_batches(&key, schema, vec![]);
+            ctx.put_batches(&target, schema, vec![])?;
         }
         return summary_with(ctx, "truncate", Some(&shown), Some(&loc.path), before, Some("parquet"), None);
     }
     if provider.memory_batches().is_some() {
-        ctx.register_batches(&key, schema, vec![]);
+        ctx.put_batches(&target, schema, vec![])?;
         return summary_with(ctx, "truncate", Some(&shown), None, before, Some("memory"), None);
     }
     Err(WhError::NotSupported(format!("cannot truncate '{shown}' (a {} table)", provider.kind())))
@@ -89,7 +89,7 @@ fn same_place(a: &str, b: &str) -> bool {
 /// The folder of a managed Delta table (see the module doc).
 fn managed_folder(ctx: &SessionContext, target: &TableName) -> Option<(String, crate::io::StorageOptions)> {
     let (location, storage) = table_folder(ctx, target)?;
-    let Ok(Some(TableEntry::Table(t))) = ctx.lookup(&target.key()) else { return None };
+    let Ok(Some(TableEntry::Table(t))) = ctx.entry(target) else { return None };
     same_place(t.as_delta()?.root(), &location).then_some((location, storage))
 }
 
@@ -101,13 +101,13 @@ pub(super) fn drop_table(ctx: &SessionContext, name: &str, if_exists: bool) -> R
     match ctx.resolve_table(&r) {
         Some(target) => {
             let managed = managed_folder(ctx, &target);
-            ctx.deregister(&target.key());
+            ctx.remove_table(&target);
             let mut removed = None;
             if let Some((location, storage)) = managed {
                 dataset::remove(&location, &storage)?;
                 removed = Some(location);
             }
-            summary_with(ctx, "drop", Some(&target.display()), removed.as_deref(), 0, None, None)
+            summary_with(ctx, "drop", Some(&ctx.display_name(&target)), removed.as_deref(), 0, None, None)
         }
         None if if_exists => summary_with(ctx, "drop", Some(name), None, 0, None, None),
         None => Err(missing(ctx, &r, name)),

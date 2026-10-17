@@ -13,7 +13,7 @@ export const runtime = "nodejs";
 /**
  * Runs notebook cells or a scratch SQL query, streaming kernel events
  * (`cell.state`, `cell.stream`, `progress`, `catalog.changed`) and finally
- * `done` or `failed`. Catalog changes are written to iara.toml first.
+ * `done` or `failed`. Catalog changes are stored first.
  */
 export async function POST(req: Request): Promise<Response> {
   try {

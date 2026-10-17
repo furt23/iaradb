@@ -8,8 +8,10 @@ import type { Activity } from "../compute/clusters";
 import { instanceType, memoryLimitBytes } from "../compute/instanceTypes";
 import { cloudRegion, clusters } from "../compute/service";
 import { LOCAL_CLUSTER } from "../compute/types";
-import { SPILL_DIR, VENV } from "../compute/userData";
+import { KERNEL_HOME, KERNEL_USER, SPILL_DIR, VENV, WORKSPACE_DIR } from "../compute/userData";
 import { config, type StudioConfig } from "../config";
+import { bucketKeys, bucketProxy, proxyEnv, teamBucketOf } from "../storage/bucketProxy";
+import { catalogRegion } from "../workspace/catalogStore";
 import { exists } from "../workspace/files";
 import { readNotebookSource, writeNotebookSource } from "../workspace/sources";
 import { bootstrap } from "./bootstrap";
@@ -17,7 +19,7 @@ import { KernelClient, KernelError } from "./client";
 import { jobKernel, type KernelKey, notebookKernel, notebookPath, WORKSPACE_KERNEL } from "./keys";
 import { localLauncher } from "./launchers/local";
 import { remoteCommand } from "./launchers/remoteCommand";
-import { ssh2Transport } from "./launchers/ssh2";
+import { ssh2Transport, sshExec } from "./launchers/ssh2";
 import type { Launcher } from "./launchers/types";
 
 /** how long saves to a renamed notebook's old path follow it to the new one */
@@ -51,6 +53,12 @@ export class KernelManager {
   /** widget values by notebook: a restarted kernel opens its notebook with them (kernels forget values) */
   private readonly widgetValues = new Map<string, Record<string, WidgetValue>>();
   private chain: Promise<unknown> = Promise.resolve();
+  /** puts the team bucket's keys in the proxy of a cluster's machine (see storage/bucketProxy) */
+  private readonly ensureProxy = bucketProxy({
+    exec: (clusterId, command, stdin) => sshExec(clusters.endpoint(clusterId), command, 30_000, stdin),
+    machine: (clusterId) => clusters.get(clusterId)?.runtime.instanceId,
+    keys: () => bucketKeys(),
+  });
 
   constructor(private readonly cfg: StudioConfig) {
     setInterval(() => this.reapIdle(), 60_000).unref();
@@ -73,11 +81,22 @@ export class KernelManager {
     const c = clusters.get(clusterId);
     const endpoint = clusters.endpoint(clusterId); // throws while the cluster is not running
     const type = c && instanceType(c.instanceType);
+    // the team bucket (if any) is reached through the machine's proxy, which holds the keys; the kernel has none
+    const team = teamBucketOf(this.cfg, catalogRegion());
     // the cluster's own variables first: the system ones win
-    const env: Record<string, string> = { ...c?.env, AWS_REGION: cloudRegion() ?? "us-east-1", IARA_SPILL_DIR: SPILL_DIR };
+    const env: Record<string, string> = {
+      ...c?.env,
+      AWS_REGION: cloudRegion() ?? "us-east-1",
+      IARA_SPILL_DIR: SPILL_DIR,
+      ...(team ? proxyEnv(team.region) : {}),
+    };
     if (type) env.IARA_MEMORY_LIMIT = String(memoryLimitBytes(type));
-    const command = remoteCommand({ python: `${VENV}/bin/python`, workspace: "~/workspace", env });
-    return { name: c?.name ?? clusterId, localRoot: null, start: () => ssh2Transport(endpoint, command) };
+    const command = remoteCommand({ user: KERNEL_USER, home: KERNEL_HOME, python: `${VENV}/bin/python`, workspace: WORKSPACE_DIR, env });
+    return {
+      name: c?.name ?? clusterId,
+      localRoot: null,
+      start: () => ssh2Transport(endpoint, command, team ? this.ensureProxy(clusterId) : undefined),
+    };
   }
 
   get(key: KernelKey): KernelClient {

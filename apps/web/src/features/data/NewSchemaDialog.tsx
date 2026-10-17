@@ -5,6 +5,7 @@ import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
 import DialogTitle from "@mui/material/DialogTitle";
+import MenuItem from "@mui/material/MenuItem";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import { useRouter } from "next/navigation";
@@ -13,15 +14,17 @@ import { useTranslation } from "react-i18next";
 
 import { useGuard, useNotify } from "@/features/shell/notify";
 import { unwrap } from "@/lib/action";
-import { isIdentifier, validLocation } from "@/lib/catalogToml";
-import { createSchema } from "@/server/actions/catalog";
+import { type CatalogInfo, isIdentifier, validLocation } from "@/lib/catalogToml";
+import { createSchema, listCatalogs } from "@/server/actions/catalog";
 
-/** A new schema: a namespace for tables, declared in iara.toml. */
-export function NewSchemaDialog({ open, onClose }: { open: boolean; onClose(): void }) {
+/** A new schema: a namespace for tables, declared in a catalog (the default one unless `catalog` names another). */
+export function NewSchemaDialog({ open, onClose, catalog }: { open: boolean; onClose(): void; catalog?: string }) {
   const { t } = useTranslation();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [location, setLocation] = useState("");
+  const [target, setTarget] = useState("");
+  const [catalogs, setCatalogs] = useState<CatalogInfo[]>([]);
   const [busy, setBusy] = useState(false);
   const guard = useGuard();
   const notify = useNotify();
@@ -32,7 +35,13 @@ export function NewSchemaDialog({ open, onClose }: { open: boolean; onClose(): v
     setName("");
     setDescription("");
     setLocation("");
-  }, [open]);
+    setTarget(catalog ?? "");
+    void listCatalogs().then((r) => {
+      if (!r.ok) return;
+      setCatalogs(r.data);
+      setTarget((c) => c || r.data[0]?.name || "");
+    });
+  }, [open, catalog]);
 
   const trimmed = name.trim();
   const badName = trimmed !== "" && !isIdentifier(trimmed);
@@ -40,14 +49,16 @@ export function NewSchemaDialog({ open, onClose }: { open: boolean; onClose(): v
   const place = location.trim();
   const badLocation = place !== "" && !validLocation(place);
 
+  const inOther = catalogs.some((c) => c.name === target && !c.isDefault);
+
   const create = async () => {
     if (!trimmed || badName || badLocation || busy) return;
     setBusy(true);
-    const made = await guard(async () => unwrap(await createSchema(trimmed, description, place)));
+    const made = await guard(async () => unwrap(await createSchema(trimmed, description, place, target)));
     setBusy(false);
     if (made === undefined) return;
     onClose();
-    notify(`Created schema ${trimmed}`, "success");
+    notify(`Created schema ${inOther ? `${target}.${trimmed}` : trimmed}`, "success");
     router.refresh();
   };
 
@@ -56,6 +67,13 @@ export function NewSchemaDialog({ open, onClose }: { open: boolean; onClose(): v
       <DialogTitle>{t("New schema")}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
+          <TextField select label={t("Catalog")} value={target} onChange={(e) => setTarget(e.target.value)}>
+            {catalogs.map((c) => (
+              <MenuItem key={c.name} value={c.name}>
+                {c.isDefault ? `${c.name} (${t("default")})` : c.name}
+              </MenuItem>
+            ))}
+          </TextField>
           <TextField
             autoFocus
             label={t("Name")}
@@ -63,7 +81,13 @@ export function NewSchemaDialog({ open, onClose }: { open: boolean; onClose(): v
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && void create()}
             error={badName}
-            helperText={badName ? t("Letters, digits and underscores") : t("Its tables are named schema.table, e.g. tpch.lineitem")}
+            helperText={
+              badName
+                ? t("Letters, digits and underscores")
+                : inOther
+                  ? t("Its tables are named catalog.schema.table, e.g. sales.raw.orders")
+                  : t("Its tables are named schema.table, e.g. tpch.lineitem")
+            }
           />
           <TextField label={t("Description (optional)")} value={description} onChange={(e) => setDescription(e.target.value)} />
           <TextField
@@ -80,11 +104,10 @@ export function NewSchemaDialog({ open, onClose }: { open: boolean; onClose(): v
         <Button onClick={onClose} disabled={busy}>
           {t("Cancel")}
         </Button>
-        <Button variant="contained" onClick={() => void create()} disabled={busy || !trimmed || badName || badLocation}>
+        <Button variant="contained" onClick={() => void create()} disabled={busy || !trimmed || badName || badLocation || !target}>
           {t("Create")}
         </Button>
       </DialogActions>
     </Dialog>
   );
 }
-

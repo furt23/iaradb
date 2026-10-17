@@ -14,33 +14,32 @@ import { removeSchema } from "@/server/actions/catalog";
 
 import { ActionItem } from "./ActionItem";
 import { AddTableDialog } from "./AddTableDialog";
+import type { SchemaGroup } from "./schemaGroups";
 import type { MenuAnchor } from "./TreeRow";
 
 export interface SchemaMenuTarget {
-  schema: string;
-  /** how many tables the schema has */
-  tables: number;
+  group: SchemaGroup;
   anchor: MenuAnchor;
 }
 
 /** Actions on a schema: add a table to it, or remove it when it is empty. */
 export function SchemaMenu({ target, onClose }: { target: SchemaMenuTarget | null; onClose(): void }) {
   const { t } = useTranslation();
-  const [addingTo, setAddingTo] = useState<string | null>(null);
+  const [addingTo, setAddingTo] = useState<SchemaGroup | null>(null);
   const guard = useGuard();
   const notify = useNotify();
   const router = useRouter();
   const anchor = target?.anchor;
   const point = anchor && "x" in anchor ? anchor : null;
-  const run = (fn: (t: SchemaMenuTarget) => void | Promise<void>) => () => {
+  const run = (fn: (g: SchemaGroup) => void | Promise<void>) => () => {
     if (!target) return;
     onClose();
-    void fn(target);
+    void fn(target.group);
   };
-  const remove = (tTarget: SchemaMenuTarget) =>
+  const remove = (g: SchemaGroup) =>
     guard(async () => {
-      unwrap(await removeSchema(tTarget.schema));
-      notify(`Removed schema ${tTarget.schema}`, "success");
+      unwrap(await removeSchema(g.name));
+      notify(`Removed schema ${g.name}`, "success");
       router.refresh();
     });
   return (
@@ -51,14 +50,24 @@ export function SchemaMenu({ target, onClose }: { target: SchemaMenuTarget | nul
         anchorEl={anchor && !point ? (anchor as HTMLElement) : null}
         anchorReference={point ? "anchorPosition" : "anchorEl"}
         anchorPosition={point ? { top: point.y, left: point.x } : undefined}
-        slotProps={{ list: { dense: true, "aria-label": target ? `actions for schema ${target.schema}` : undefined } }}
+        slotProps={{ list: { dense: true, "aria-label": target ? `actions for schema ${target.group.name}` : undefined } }}
       >
-        <ActionItem icon={<Add fontSize="small" />} label={t("Add table here…")} onClick={run((tTarget) => setAddingTo(tTarget.schema))} />
+        <ActionItem icon={<Add fontSize="small" />} label={t("Add table here…")} onClick={run((g) => setAddingTo(g))} />
         <Divider />
-        <ActionItem icon={<DeleteOutline fontSize="small" />} label={t("Remove schema")} onClick={run(remove)} danger disabled={!!target && target.tables > 0} />
+        <ActionItem
+          icon={<DeleteOutline fontSize="small" />}
+          label={t("Remove schema")}
+          onClick={run(remove)}
+          danger
+          disabled={!!target && target.group.tables.length > 0}
+        />
       </Menu>
-      <AddTableDialog open={addingTo !== null} schema={addingTo ?? undefined} onClose={() => setAddingTo(null)} />
+      <AddTableDialog
+        open={addingTo !== null}
+        catalog={addingTo?.catalog}
+        schema={addingTo?.schema}
+        onClose={() => setAddingTo(null)}
+      />
     </>
   );
 }
-

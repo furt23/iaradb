@@ -14,7 +14,7 @@ use parking_lot::Mutex;
 use super::command::{Command, CopyValue};
 use super::create::{CreateSpec, Source, create_table};
 use super::{Params, ddl, delta_stmt, describe, dml, maintenance};
-use crate::catalog_names::{TableRef, parse_schema, unknown_schema};
+use crate::catalog_names::{TableRef, parse_catalog};
 use crate::error::{Result, WhError};
 use crate::io::{StorageOptions, is_remote};
 use crate::io::csv::{CsvWriteOptions, sink_csv_with};
@@ -41,8 +41,12 @@ pub fn run(ctx: &SessionContext, command: Command, params: &Params) -> Result<La
         Command::CreateView { name, replace, if_not_exists, temp, query } => ddl::create_view(ctx, &name, replace, if_not_exists, temp, &query, params),
         Command::DropView { name, if_exists } => ddl::drop_view(ctx, &name, if_exists),
         Command::ShowTables { schema } => describe::show_tables(ctx, schema.as_deref()),
-        Command::ShowSchemas => describe::show_schemas(ctx),
+        Command::ShowCatalogs => describe::show_catalogs(ctx),
+        Command::ShowSchemas { catalog } => describe::show_schemas(ctx, catalog.as_deref()),
         Command::Describe { name } => describe::describe(ctx, &name),
+        Command::CreateCatalog { name, if_not_exists } => create_catalog(ctx, &name, if_not_exists),
+        Command::DropCatalog { name, if_exists, cascade } => drop_catalog(ctx, &name, if_exists, cascade),
+        Command::UseCatalog { name } => use_catalog(ctx, &name),
         Command::CreateSchema { name, if_not_exists } => create_schema(ctx, &name, if_not_exists),
         Command::DropSchema { name, if_exists, cascade } => drop_schema(ctx, &name, if_exists, cascade),
         Command::Use { schema } => use_schema(ctx, &schema),
@@ -245,11 +249,11 @@ fn conform(batch: &RecordBatch, mapping: &[Option<usize>], table: &SchemaRef) ->
     Ok(RecordBatch::try_new_with_options(nullable(table), columns, &RecordBatchOptions::new().with_row_count(Some(n)))?)
 }
 
-/// Why a name refers to no table.
+/// Why a name refers to no table: its catalog or schema does not exist, or the table does not.
 pub(super) fn missing(ctx: &SessionContext, r: &TableRef, name: &str) -> WhError {
-    match &r.schema {
-        Some(s) if !ctx.has_schema(s) => unknown_schema(s),
-        _ => WhError::Plan(format!("table '{name}' not found")),
+    match ctx.unknown_parent(r) {
+        Some(m) => m.error(),
+        None => WhError::Plan(format!("table '{name}' not found")),
     }
 }
 
@@ -258,8 +262,8 @@ pub(super) fn missing(ctx: &SessionContext, r: &TableRef, name: &str) -> WhError
 fn insert(ctx: &SessionContext, name: &str, columns: &[String], overwrite: bool, query: &str, params: &Params) -> Result<LazyFrame> {
     let r = TableRef::strict(name)?;
     let target = ctx.resolve_table(&r).ok_or_else(|| missing(ctx, &r, name))?;
-    let (key, shown) = (target.key(), target.display());
-    let provider = match ctx.lookup(&key)? {
+    let shown = ctx.display_name(&target);
+    let provider = match ctx.entry(&target)? {
         Some(TableEntry::Table(t)) => t,
         Some(TableEntry::View(_)) => return Err(WhError::Plan(format!("'{shown}' is a view: rows go into tables"))),
         None => return Err(WhError::Plan(format!("table '{shown}' not found"))),
@@ -267,21 +271,21 @@ fn insert(ctx: &SessionContext, name: &str, columns: &[String], overwrite: bool,
     let table = provider.schema();
     let lf = ctx.sql_with(query, params)?;
     if let Some(d) = provider.as_delta() {
-        return delta_stmt::insert(ctx, &key, &shown, d, columns, overwrite, lf);
+        return delta_stmt::insert(ctx, &target, &shown, d, columns, overwrite, lf);
     }
     let op = if overwrite { "insert overwrite" } else { "insert" };
     if let Some(loc) = provider.location() {
         // an overwrite deletes what the folder held once the new files are written
         let old = if overwrite { dataset::list_files(&loc.path, &loc.storage)? } else { vec![] };
         let partitioned = !loc.partition_by.is_empty();
-        let target = if partitioned { loc.path.clone() } else { dataset::join(&loc.path, &new_file_name()) };
+        let dest = if partitioned { loc.path.clone() } else { dataset::join(&loc.path, &new_file_name()) };
         let opts = ParquetOptions { partition_by: loc.partition_by.clone(), ..Default::default() };
         let sink = Mutex::new(None::<(DatasetSink, Vec<Option<usize>>)>);
         let rows = AtomicUsize::new(0);
         lf.stream(
             &mut |schema| {
                 let mapping = column_mapping(&table, columns, schema)?;
-                *sink.lock() = Some((DatasetSink::create(&target, table.clone(), &opts, &loc.storage)?, mapping));
+                *sink.lock() = Some((DatasetSink::create(&dest, table.clone(), &opts, &loc.storage)?, mapping));
                 Ok(())
             },
             &mut |b| {
@@ -294,7 +298,7 @@ fn insert(ctx: &SessionContext, name: &str, columns: &[String], overwrite: bool,
         sink.into_inner().expect("writer").0.finish()?;
         drop_replaced(&loc.path, &old, &loc.storage)?;
         // the folder has new files: list it again
-        ctx.register_parquet_with(&key, &loc.path, &loc.storage, false)?;
+        ctx.put_parquet(&target, &loc.path, &loc.storage)?;
         return summary_with(ctx, op, Some(&shown), Some(&loc.path), rows.into_inner(), Some("parquet"), None);
     }
     if let Some(old) = provider.memory_batches() {
@@ -304,7 +308,7 @@ fn insert(ctx: &SessionContext, name: &str, columns: &[String], overwrite: bool,
         let same: Vec<Option<usize>> = (0..table.fields().len()).map(Some).collect();
         let old = old.iter().filter(|_| !overwrite).map(|b| conform(b, &same, &table));
         let new = batches.iter().map(|b| conform(b, &mapping, &table));
-        ctx.register_batches(&key, nullable(&table), old.chain(new).collect::<Result<Vec<_>>>()?);
+        ctx.put_batches(&target, nullable(&table), old.chain(new).collect::<Result<Vec<_>>>()?)?;
         return summary_with(ctx, op, Some(&shown), None, rows, Some("memory"), None);
     }
     Err(WhError::NotSupported(format!(
@@ -313,21 +317,44 @@ fn insert(ctx: &SessionContext, name: &str, columns: &[String], overwrite: bool,
     )))
 }
 
-/// `CREATE SCHEMA [IF NOT EXISTS] name`
-fn create_schema(ctx: &SessionContext, name: &str, if_not_exists: bool) -> Result<LazyFrame> {
-    ctx.create_schema(name, if_not_exists)?;
-    summary(ctx, "create schema", Some(&parse_schema(name)?), None, 0)
+
+/// `CREATE CATALOG [IF NOT EXISTS] name`
+fn create_catalog(ctx: &SessionContext, name: &str, if_not_exists: bool) -> Result<LazyFrame> {
+    ctx.create_catalog(name, if_not_exists)?;
+    summary(ctx, "create catalog", Some(&parse_catalog(name)?), None, 0)
 }
 
-/// `DROP SCHEMA [IF EXISTS] name [CASCADE | RESTRICT]`: with CASCADE its tables
+/// `DROP CATALOG [IF EXISTS] name [CASCADE | RESTRICT]`: with CASCADE its schemas
+/// and tables leave the session too (their files stay).
+fn drop_catalog(ctx: &SessionContext, name: &str, if_exists: bool, cascade: bool) -> Result<LazyFrame> {
+    ctx.drop_catalog(name, if_exists, cascade)?;
+    summary(ctx, "drop catalog", Some(&parse_catalog(name)?), None, 0)
+}
+
+/// `USE CATALOG name`: names are looked up in that catalog (in its `main` schema first).
+fn use_catalog(ctx: &SessionContext, name: &str) -> Result<LazyFrame> {
+    ctx.use_catalog(name)?;
+    summary(ctx, "use catalog", Some(&parse_catalog(name)?), None, 0)
+}
+
+/// `CREATE SCHEMA [IF NOT EXISTS] [catalog.]name`
+fn create_schema(ctx: &SessionContext, name: &str, if_not_exists: bool) -> Result<LazyFrame> {
+    let shown = ctx.display_schema(&ctx.schema_name(name)?);
+    ctx.create_schema(name, if_not_exists)?;
+    summary(ctx, "create schema", Some(&shown), None, 0)
+}
+
+/// `DROP SCHEMA [IF EXISTS] [catalog.]name [CASCADE | RESTRICT]`: with CASCADE its tables
 /// leave the session too (their files stay).
 fn drop_schema(ctx: &SessionContext, name: &str, if_exists: bool, cascade: bool) -> Result<LazyFrame> {
+    let shown = ctx.display_schema(&ctx.schema_name(name)?);
     ctx.drop_schema(name, if_exists, cascade)?;
-    summary(ctx, "drop schema", Some(&parse_schema(name)?), None, 0)
+    summary(ctx, "drop schema", Some(&shown), None, 0)
 }
 
-/// `USE name`: bare table names are looked up in that schema first.
+/// `USE [catalog.]name`: names are looked up in that schema first (`name` alone: in the current catalog).
 fn use_schema(ctx: &SessionContext, name: &str) -> Result<LazyFrame> {
+    let shown = ctx.display_schema(&ctx.schema_name(name)?);
     ctx.use_schema(name)?;
-    summary(ctx, "use", Some(&parse_schema(name)?), None, 0)
+    summary(ctx, "use", Some(&shown), None, 0)
 }

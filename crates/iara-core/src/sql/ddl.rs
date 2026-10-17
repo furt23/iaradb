@@ -65,12 +65,12 @@ pub fn parse_columns(inner: &str) -> Result<Vec<ColumnSpec>> {
 /// planned now (the query's parameters are bound now).
 pub fn create_view(ctx: &SessionContext, name: &str, replace: bool, if_not_exists: bool, temp: bool, query: &str, params: &Params) -> Result<LazyFrame> {
     let target = super::create::create_target(ctx, name)?;
-    let (key, shown) = (target.key(), target.display());
+    let shown = ctx.display_name(&target);
     if ctx.table_exists(&target) {
         if if_not_exists {
             return summary_with(ctx, "create view", Some(&shown), None, 0, Some("view"), None);
         }
-        let is_view = matches!(ctx.lookup(&key), Ok(Some(TableEntry::View(_))));
+        let is_view = matches!(ctx.entry(&target), Ok(Some(TableEntry::View(_))));
         if !replace || !is_view {
             return Err(WhError::Plan(if is_view {
                 format!("view '{shown}' already exists: use CREATE OR REPLACE VIEW")
@@ -80,7 +80,7 @@ pub fn create_view(ctx: &SessionContext, name: &str, replace: bool, if_not_exist
         }
     }
     let lf = ctx.sql_with(query, params)?;
-    ctx.register_view(&key, lf.plan.clone());
+    ctx.put_view(&target, lf.plan.clone())?;
     // not persisted yet: `format` says view (or temp view) so a workspace can decide
     summary_with(ctx, "create view", Some(&shown), None, 0, Some(if temp { "temp view" } else { "view" }), None)
 }
@@ -90,11 +90,11 @@ pub fn drop_view(ctx: &SessionContext, name: &str, if_exists: bool) -> Result<La
     let r = TableRef::strict(name)?;
     match ctx.resolve_table(&r) {
         Some(target) => {
-            if !matches!(ctx.lookup(&target.key()), Ok(Some(TableEntry::View(_)))) {
-                return Err(WhError::Plan(format!("'{}' is a table, not a view: use DROP TABLE", target.display())));
+            if !matches!(ctx.entry(&target), Ok(Some(TableEntry::View(_)))) {
+                return Err(WhError::Plan(format!("'{}' is a table, not a view: use DROP TABLE", ctx.display_name(&target))));
             }
-            ctx.deregister(&target.key());
-            summary_with(ctx, "drop view", Some(&target.display()), None, 0, Some("view"), None)
+            ctx.remove_table(&target);
+            summary_with(ctx, "drop view", Some(&ctx.display_name(&target)), None, 0, Some("view"), None)
         }
         None if if_exists => summary_with(ctx, "drop view", Some(name), None, 0, Some("view"), None),
         None => Err(missing(ctx, &r, name)),

@@ -22,7 +22,7 @@ export interface KernelMethods {
   ping: [Empty, KernelInfo];
   "workspace.info": [Empty, KernelInfo];
   "workspace.reload": [Empty, KernelInfo];
-  /** the catalog from the Studio's iara.toml text (null: none) */
+  /** the Studio's catalog as iara.toml text (null: none) */
   "workspace.configure": [{ toml: string | null }, KernelInfo];
   /**
    * `source`: the notebook's file content (else the kernel reads its own file).
@@ -62,7 +62,7 @@ export interface KernelMethods {
   "catalog.history": [{ table: string; limit?: number }, DeltaCommit[]];
   "catalog.schema": [Empty, Record<string, { name: string; type: string }[]>];
   "catalog.preview": [{ name: string; limit?: number }, CellOutput];
-  /** `entry`: the table's iara.toml section (the Studio appends it when `persist: false`) */
+  /** `entry`: the table's catalog section (the Studio appends it when `persist: false`) */
   "catalog.add": [{ name: string; path: string; format?: "parquet" | "csv" | "json"; persist?: boolean }, TableRef & { entry: string }];
   "sql.run": [{ query: string; source?: string } & QueryParams, CellOutput];
   "sql.explain": [{ query: string } & QueryParams, ExplainResult];
@@ -95,19 +95,29 @@ export interface ProgressEvent {
 }
 
 /**
- * A statement (`CREATE TABLE ... AS`, `DROP TABLE`) changed the catalog: the
- * table's new `iara.toml` section (null: it was dropped). The Studio,
- * which owns the file, applies it.
+ * A statement (`CREATE TABLE ... AS`, `DROP TABLE`, `CREATE CATALOG`, ...) changed
+ * the catalog: the new section of what it names (null: it was dropped). The
+ * Studio, which owns the file, applies it.
  */
 export interface CatalogChange {
-  /** the display name: `orders`, `tpch.lineitem`, or a schema's name */
+  /**
+   * the display name: `orders` or `tpch.lineitem` (default catalog), `sales.main.orders`
+   * (another catalog: always `catalog.schema.table`), a schema's name (`tpch`, or
+   * `sales.raw` in another catalog), or a catalog's name (`sales`)
+   */
   name: string;
+  /**
+   * the section: a table's `[tables.<name>]` (`[catalogs.<c>.tables.<name>]` in another
+   * catalog), a schema's `[schemas.<name>]` (`[catalogs.<c>.schemas.<name>]`), or a
+   * catalog's `[catalogs.<c>]` with its description. Dropping a catalog also drops
+   * every `[catalogs.<c>.…]` section.
+   */
   entry: string | null;
   /**
-   * what `name` is: a table (the default) or a schema (`[schemas.<name>]`);
-   * `refresh`: the schema's location has new data, iara.toml is unchanged
+   * what `name` is: a table (the default), a schema or a catalog;
+   * `refresh`: the schema's location has new data, the catalog is unchanged
    */
-  kind?: "table" | "schema" | "refresh";
+  kind?: "table" | "schema" | "catalog" | "refresh";
 }
 
 export interface KernelEvents {

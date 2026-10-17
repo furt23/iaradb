@@ -762,9 +762,16 @@ fn csv_options(has_header: bool, delimiter: &str, infer_rows: usize, parallel: b
 
 #[pymethods]
 impl PySessionContext {
+    /// `default_catalog`: the name of the catalog that registrations belong
+    /// to and the session starts in (`main` when not given).
     #[new]
-    fn new() -> Self {
-        Self { inner: SessionContext::new() }
+    #[pyo3(signature = (default_catalog=None))]
+    fn new(default_catalog: Option<&str>) -> PyResult<Self> {
+        let inner = match default_catalog {
+            Some(name) => SessionContext::with_default_catalog(name).py()?,
+            None => SessionContext::new(),
+        };
+        Ok(Self { inner })
     }
 
     /// Register a Parquet path, directory, glob or URL; with `lazy`, files are
@@ -865,16 +872,15 @@ impl PySessionContext {
 
     fn register_arrow(&self, name: &str, obj: &Bound<'_, PyAny>) -> PyResult<()> {
         let (schema, batches) = import_stream(obj)?;
-        self.inner.register_batches(name, schema, batches);
-        Ok(())
+        self.inner.register_batches(name, schema, batches).py()
     }
 
-    fn register_dataframe(&self, name: &str, df: PyRef<'_, PyDataFrame>) {
-        self.inner.register_batches(name, df.schema.clone(), df.batches.clone());
+    fn register_dataframe(&self, name: &str, df: PyRef<'_, PyDataFrame>) -> PyResult<()> {
+        self.inner.register_batches(name, df.schema.clone(), df.batches.clone()).py()
     }
 
-    fn register_lazy(&self, name: &str, frame: PyRef<'_, PyLazyFrame>) {
-        self.inner.register_view(name, frame.inner.plan.clone());
+    fn register_lazy(&self, name: &str, frame: PyRef<'_, PyLazyFrame>) -> PyResult<()> {
+        self.inner.register_view(name, frame.inner.plan.clone()).py()
     }
 
     fn deregister(&self, name: &str) -> bool {
@@ -897,30 +903,52 @@ impl PySessionContext {
     }
 
     /// Where `CREATE TABLE schema.t AS ...` writes `t/` (None: the warehouse).
+    /// `schema` is `s` (of the default catalog) or `c.s`.
     #[pyo3(signature = (schema, path, storage_options=None))]
     fn set_schema_location(&self, schema: &str, path: Option<&str>, storage_options: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
-        self.inner.set_schema_location(schema, path, &storage::options(storage_options)?);
-        Ok(())
+        self.inner.set_schema_location(schema, path, &storage::options(storage_options)?).py()
     }
 
     fn schema_location(&self, schema: &str) -> Option<String> {
         self.inner.schema_location(schema).map(|(p, _)| p)
     }
 
-    /// The tables' display names: bare in `main`, `schema.table` elsewhere.
+    /// The tables' display names: in the default catalog bare in `main` and
+    /// `schema.table` elsewhere; in any other catalog `catalog.schema.table`.
     fn tables(&self) -> Vec<String> {
         self.inner.table_names()
     }
 
-    /// The schemas: `main` first, then the others sorted.
-    fn schemas(&self) -> Vec<String> {
-        self.inner.schemas()
+    /// The catalogs: the default one first, then the others sorted.
+    fn catalogs(&self) -> Vec<String> {
+        self.inner.catalogs()
     }
 
+    /// The catalog `USE CATALOG` selected (the default one at first).
+    fn current_catalog(&self) -> String {
+        self.inner.current_catalog()
+    }
+
+    /// The catalog that registrations and `table()` names belong to.
+    fn default_catalog(&self) -> String {
+        self.inner.default_catalog()
+    }
+
+    /// The schemas of a catalog (None: the current one): `main` first, then the others sorted.
+    #[pyo3(signature = (catalog=None))]
+    fn schemas(&self, catalog: Option<&str>) -> PyResult<Vec<String>> {
+        match catalog {
+            Some(c) => self.inner.schemas_of(c).py(),
+            None => Ok(self.inner.schemas()),
+        }
+    }
+
+    /// The schema `USE` selected in the current catalog (`main` at first).
     fn current_schema(&self) -> String {
         self.inner.current_schema()
     }
 
+    /// A registered table, named like in `register_*` (relative to the default catalog).
     fn table(&self, py: Python<'_>, name: &str) -> PyResult<PyLazyFrame> {
         // a lazily registered table may be loaded now (remote I/O): without the GIL
         let (ctx, name) = (self.inner.clone(), name.to_string());

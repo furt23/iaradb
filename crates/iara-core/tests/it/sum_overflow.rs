@@ -34,7 +34,7 @@ fn batches(rows: i64, value: impl Fn(i64) -> i64 + Copy, key: impl Fn(i64) -> i6
 fn ctx(rows: i64, value: impl Fn(i64) -> i64 + Copy, key: impl Fn(i64) -> i64 + Copy) -> SessionContext {
     let (schema, b) = batches(rows, value, key);
     let ctx = SessionContext::new();
-    ctx.register_batches("t", schema, b);
+    ctx.register_batches("t", schema, b).unwrap();
     ctx
 }
 

@@ -9,10 +9,10 @@ test("a schema made in Data holds the tables made with SQL, and dropping it remo
   await dialog.getByLabel("Name", { exact: true }).fill("e2e_s");
   await dialog.getByRole("button", { name: "Create", exact: true }).click();
   await expect(page.getByText("Created schema e2e_s")).toBeVisible();
-  await expect.poll(() => readWorkspaceFile("iara.toml")).toContain("[schemas.e2e_s]");
+  await expect.poll(() => readWorkspaceFile(".iara", "catalog.toml")).toContain("[schemas.e2e_s]");
 
   await runSql(page, "create table e2e_s.t1 as select 1 as x");
-  await expect.poll(() => readWorkspaceFile("iara.toml")).toContain("[tables.e2e_s.t1]");
+  await expect.poll(() => readWorkspaceFile(".iara", "catalog.toml")).toContain("[tables.e2e_s.t1]");
 
   await page.goto("/data");
   const catalog = page.getByRole("list", { name: "catalog tables" });
@@ -24,7 +24,7 @@ test("a schema made in Data holds the tables made with SQL, and dropping it remo
   await expect(page.getByText("1 rows × 1 columns")).toBeVisible();
 
   await runSql(page, "drop schema e2e_s cascade");
-  await expect.poll(() => readWorkspaceFile("iara.toml")).not.toContain("e2e_s");
+  await expect.poll(() => readWorkspaceFile(".iara", "catalog.toml")).not.toContain("e2e_s");
   await page.goto("/data");
   await expect(page.getByRole("list", { name: "catalog tables" }).getByRole("button", { name: /^e2e_s\b/ })).toHaveCount(0);
 });

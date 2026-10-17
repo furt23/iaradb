@@ -28,7 +28,7 @@ fn ctx() -> SessionContext {
         Arc::new(Int64Array::from(vec![Some(3), Some(2), Some(1), None, Some(9)])),
         Arc::new(Int64Array::from(vec![Some(1), Some(1), Some(2), Some(2), Some(3)])),
     ];
-    ctx.register_batches("t", schema.clone(), vec![RecordBatch::try_new(schema, cols).unwrap()]);
+    ctx.register_batches("t", schema.clone(), vec![RecordBatch::try_new(schema, cols).unwrap()]).unwrap();
     ctx
 }
 
@@ -124,7 +124,7 @@ fn run(ctx: &SessionContext, q: &str) -> String {
 fn aggregates_match_under_a_small_memory_limit() {
     let (schema, batches) = facts(1_000_000);
     let ctx = SessionContext::new();
-    ctx.register_batches("t", schema, batches);
+    ctx.register_batches("t", schema, batches).unwrap();
     let pool = memory::pool();
     pool.set_limit(usize::MAX);
     let expected: Vec<String> = SPILL_QUERIES.iter().map(|q| run(&ctx, q)).collect();

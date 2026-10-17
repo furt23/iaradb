@@ -1,0 +1,33 @@
+[package]
+name = "iara-s3-proxy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Loopback S3 proxy that re-signs requests with keys the caller never sees"
+
+[lib]
+name = "iara_s3_proxy"
+path = "src/lib.rs"
+
+[[bin]]
+name = "iara-s3-proxy"
+path = "src/main.rs"
+
+[dependencies]
+bytes.workspace = true
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "macros", "signal", "time"] }
+hyper = { version = "1", default-features = false, features = ["http1", "server", "client"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio", "client-legacy", "http1"] }
+http-body-util = "0.1"
+# upstream TLS: rustls with the ring provider (the one object_store uses) and the bundled Mozilla roots
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "tls12", "ring", "webpki-tokio"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hmac = "0.13"
+sha2 = "0.11"
+hex = "0.4"
+
+[dev-dependencies]
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "macros", "signal", "time", "sync", "io-util"] }

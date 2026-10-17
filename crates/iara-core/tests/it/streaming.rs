@@ -75,7 +75,7 @@ const QUERIES: &[&str] = &[
 fn streams_match_collect_and_sinks_write_files() {
     let (schema, batches) = table(400_000);
     let ctx = SessionContext::new();
-    ctx.register_batches("t", schema, batches);
+    ctx.register_batches("t", schema, batches).unwrap();
 
     for q in QUERIES {
         let lf = ctx.sql(q).unwrap();

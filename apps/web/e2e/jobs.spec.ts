@@ -27,7 +27,7 @@ test("a job runs a query file by hand and keeps its log", async ({ page }) => {
   const file = path.join(workspace(), "jobs", "e2e_job.toml");
   await expect.poll(() => fs.existsSync(file) && fs.readFileSync(file, "utf8")).toContain('target = "queries/e2e_job.sql"');
 
-  await page.getByRole("button", { name: "run E2E job" }).click();
+  await page.getByRole("button", { name: "run E2E job", exact: true }).click();
   const row = page.getByRole("row", { name: "job E2E job" });
   await expect(row.getByLabel("run succeeded")).toBeVisible({ timeout: 60_000 });
 
@@ -35,7 +35,7 @@ test("a job runs a query file by hand and keeps its log", async ({ page }) => {
   await page.waitForURL("**/jobs/e2e_job");
   await expect(page.getByLabel("run log")).toContainText("statement 2/2: 1 rows × 1 columns");
   // the table the job created joined the catalog
-  await expect.poll(() => fs.readFileSync(path.join(workspace(), "iara.toml"), "utf8")).toContain("[tables.e2e_job_out]");
+  await expect.poll(() => fs.readFileSync(path.join(workspace(), ".iara", "catalog.toml"), "utf8")).toContain("[tables.e2e_job_out]");
 });
 
 test("a notebook is scheduled from its menu in the file tree", async ({ page }) => {

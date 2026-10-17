@@ -2,7 +2,6 @@ import "server-only";
 
 import {
   AuthorizeSecurityGroupIngressCommand,
-  CreateSecurityGroupCommand,
   DescribeInstancesCommand,
   DescribeSecurityGroupsCommand,
   DescribeVpcsCommand,
@@ -13,27 +12,18 @@ import {
   type IpPermission,
   type Tag,
 } from "@aws-sdk/client-ec2";
-import {
-  AddRoleToInstanceProfileCommand,
-  CreateInstanceProfileCommand,
-  CreateRoleCommand,
-  GetInstanceProfileCommand,
-  GetRoleCommand,
-  IAMClient,
-  PutRolePolicyCommand,
-} from "@aws-sdk/client-iam";
-import { CreateBucketCommand, HeadBucketCommand, ListObjectsV2Command, PutBucketTaggingCommand, PutPublicAccessBlockCommand, S3Client } from "@aws-sdk/client-s3";
+import { GetInstanceProfileCommand, IAMClient } from "@aws-sdk/client-iam";
+import { ListObjectsV2Command, S3Client } from "@aws-sdk/client-s3";
 import { GetParameterCommand, SSMClient } from "@aws-sdk/client-ssm";
 import { GetCallerIdentityCommand, STSClient } from "@aws-sdk/client-sts";
 
 import type { AwsSettings } from "../awsSettings";
 import { TAG_CLUSTER, TAG_COMPONENT, type CloudApi, type InstanceStatus, type LaunchSpec } from "./api";
-import { rolePolicy, TRUST_POLICY } from "./policies";
-import { roleName, securityGroupName, teamId, teamTags } from "./team";
+import { AMI_PARAM } from "./policies";
+import { notSetUp, requiredTeam, roleName, securityGroupName, teamTags } from "./team";
 
 /** launch errors after which a spot request is retried on-demand */
 const NO_SPOT_CAPACITY = ["InsufficientInstanceCapacity", "SpotMaxPriceTooLow", "MaxSpotInstanceCountExceeded", "InsufficientCapacity", "UnfulfillableCapacity"];
-const AMI_PARAM = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64";
 
 function errorName(e: unknown): string {
   return (e as { name?: string })?.name ?? "";
@@ -50,12 +40,13 @@ async function retry<T>(fn: () => Promise<T>, retryOn: string[], attempts = 12, 
   }
 }
 
-/** Tags of the shared resources of this Studio's team (security group, role); throws on an invalid `IARA_TEAM`. */
-function sharedTags(team: string | null): Tag[] {
-  return [{ Key: TAG_COMPONENT, Value: "clusters" }, ...teamTags(team)];
-}
-
-/** The cluster cloud on AWS (EC2, IAM, S3, SSM). */
+/**
+ * The cluster cloud on AWS (EC2, IAM, S3, SSM). It runs with the team's own key,
+ * which may launch and end the team's machines and read what a launch needs, and
+ * nothing else (see policies.ts): the team's security group, instance profile and
+ * the artifacts bucket are made by `python -m iara.cloud team-setup`, and here
+ * only looked up.
+ */
 export class AwsCloud implements CloudApi {
   readonly region: string;
   private readonly ec2: EC2Client;
@@ -75,30 +66,23 @@ export class AwsCloud implements CloudApi {
     this.sts = new STSClient(cfg);
   }
 
+  /** The name only (it holds the account id); whether the bucket exists shows when it is listed. */
   async artifactsBucket(): Promise<string> {
     if (this.bucket) return this.bucket;
     const account = (await this.sts.send(new GetCallerIdentityCommand({}))).Account;
-    const name = `iara-artifacts-${account}-${this.region}`;
-    try {
-      await this.s3.send(new HeadBucketCommand({ Bucket: name }));
-    } catch (e) {
-      if (errorName(e) !== "NotFound" && errorName(e) !== "NoSuchBucket") throw e;
-      await this.s3.send(new CreateBucketCommand({ Bucket: name, ...(this.region === "us-east-1" ? {} : { CreateBucketConfiguration: { LocationConstraint: this.region as never } }) }));
-      await this.s3.send(
-        new PutPublicAccessBlockCommand({
-          Bucket: name,
-          PublicAccessBlockConfiguration: { BlockPublicAcls: true, IgnorePublicAcls: true, BlockPublicPolicy: true, RestrictPublicBuckets: true },
-        }),
-      );
-      await this.s3.send(new PutBucketTaggingCommand({ Bucket: name, Tagging: { TagSet: [{ Key: TAG_COMPONENT, Value: "clusters" }] } }));
-    }
-    this.bucket = name;
-    return name;
+    this.bucket = `iara-artifacts-${account}-${this.region}`;
+    return this.bucket;
   }
 
   async engineWheel(version: string): Promise<string | null> {
     const bucket = await this.artifactsBucket();
-    const out = await this.s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: `engine/${version}/` }));
+    let out;
+    try {
+      out = await this.s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: `engine/${version}/` }));
+    } catch (e) {
+      if (errorName(e) === "NoSuchBucket") throw notSetUp(requiredTeam());
+      throw e;
+    }
     const wheels = (out.Contents ?? []).filter((o) => o.Key?.endsWith(".whl"));
     wheels.sort((a, b) => (b.LastModified?.getTime() ?? 0) - (a.LastModified?.getTime() ?? 0));
     return wheels[0]?.Key ? `s3://${bucket}/${wheels[0].Key}` : null;
@@ -111,26 +95,15 @@ export class AwsCloud implements CloudApi {
     return id;
   }
 
-  async ensureNetwork(cidrs: string[]): Promise<string> {
-    const team = teamId();
-    const name = securityGroupName(team);
+  async teamNetwork(cidrs: string[]): Promise<string> {
+    const team = requiredTeam();
     const vpc = await this.defaultVpc();
     const found = await this.ec2.send(
-      new DescribeSecurityGroupsCommand({ Filters: [{ Name: "group-name", Values: [name] }, { Name: "vpc-id", Values: [vpc] }] }),
+      new DescribeSecurityGroupsCommand({ Filters: [{ Name: "group-name", Values: [securityGroupName(team)] }, { Name: "vpc-id", Values: [vpc] }] }),
     );
-    let group = found.SecurityGroups?.[0];
-    if (!group) {
-      const made = await this.ec2.send(
-        new CreateSecurityGroupCommand({
-          GroupName: name,
-          Description: "Iara clusters: SSH from the Studio only",
-          VpcId: vpc,
-          TagSpecifications: [{ ResourceType: "security-group", Tags: sharedTags(team) }],
-        }),
-      );
-      group = { GroupId: made.GroupId, IpPermissions: [] };
-    }
-    const id = group.GroupId!;
+    const group = found.SecurityGroups?.[0];
+    if (!group?.GroupId) throw notSetUp(team);
+    const id = group.GroupId;
     const ssh = (group.IpPermissions ?? []).filter((p) => p.FromPort === 22 && p.ToPort === 22);
     const current = new Set(ssh.flatMap((p) => (p.IpRanges ?? []).map((r) => r.CidrIp!)));
     const wanted = new Set(cidrs);
@@ -142,40 +115,27 @@ export class AwsCloud implements CloudApi {
     return id;
   }
 
-  async ensureRole(dataBuckets: string[]): Promise<string> {
-    const team = teamId();
-    const role = roleName(team);
-    const artifacts = await this.artifactsBucket();
-    const tags = sharedTags(team).map((t) => ({ Key: t.Key!, Value: t.Value! }));
-    let created = false;
+  async instanceProfile(): Promise<string> {
+    const team = requiredTeam();
+    const name = roleName(team);
     try {
-      await this.iam.send(new GetRoleCommand({ RoleName: role }));
+      const profile = (await this.iam.send(new GetInstanceProfileCommand({ InstanceProfileName: name }))).InstanceProfile;
+      if (!profile?.Roles?.length) throw notSetUp(team);
     } catch (e) {
-      if (errorName(e) !== "NoSuchEntityException") throw e;
-      await this.iam.send(new CreateRoleCommand({ RoleName: role, Path: "/iara/", AssumeRolePolicyDocument: JSON.stringify(TRUST_POLICY), Tags: tags }));
-      created = true;
+      if (errorName(e) === "NoSuchEntityException") throw notSetUp(team);
+      throw e;
     }
-    await this.iam.send(new PutRolePolicyCommand({ RoleName: role, PolicyName: "data-access", PolicyDocument: JSON.stringify(rolePolicy(artifacts, dataBuckets)) }));
-    try {
-      await this.iam.send(new GetInstanceProfileCommand({ InstanceProfileName: role }));
-    } catch (e) {
-      if (errorName(e) !== "NoSuchEntityException") throw e;
-      await this.iam.send(new CreateInstanceProfileCommand({ InstanceProfileName: role, Path: "/iara/", Tags: tags }));
-      await this.iam.send(new AddRoleToInstanceProfileCommand({ InstanceProfileName: role, RoleName: role }));
-      created = true;
-    }
-    // IAM is eventually consistent: EC2 may not see a new profile for a few seconds
-    if (created) await new Promise((r) => setTimeout(r, 10_000));
-    return role;
+    return name;
   }
 
   async launch(spec: LaunchSpec): Promise<{ instanceId: string; spot: boolean }> {
     const ami = (await this.ssm.send(new GetParameterCommand({ Name: AMI_PARAM }))).Parameter?.Value;
+    // the team tag is what the team's key is allowed to launch (instance, volume and network interface)
     const iaraTags: Tag[] = [
       { Key: "Name", Value: `iara-${spec.clusterName}` },
       { Key: TAG_CLUSTER, Value: spec.clusterId },
       { Key: TAG_COMPONENT, Value: "cluster" },
-      ...teamTags(teamId()),
+      ...teamTags(requiredTeam()),
     ];
     const taken = new Set(iaraTags.map((t) => t.Key));
     const tags = [...iaraTags, ...Object.entries(spec.tags).filter(([k]) => !taken.has(k)).map(([Key, Value]) => ({ Key, Value }))];

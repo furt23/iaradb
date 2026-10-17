@@ -2,7 +2,7 @@
 
 import { markdown } from "@codemirror/lang-markdown";
 import { python } from "@codemirror/lang-python";
-import { sql, StandardSQL, type SQLNamespace } from "@codemirror/lang-sql";
+import { sql, StandardSQL } from "@codemirror/lang-sql";
 import { Prec, type Extension } from "@codemirror/state";
 import { keymap, tooltips } from "@codemirror/view";
 import { useColorScheme } from "@mui/material/styles";
@@ -14,6 +14,7 @@ import { kernelCompletion } from "./completion";
 import { editorTheme } from "./editorTheme";
 import { kernelLinter } from "./lint";
 import { signatureHelp } from "./signatureHelp";
+import { sqlNamespace } from "./sqlNamespace";
 
 /**
  * Completions, signatures and lint messages float over the page: inside the
@@ -35,7 +36,7 @@ export interface CodeEditorProps {
   /** Ctrl/Cmd+Enter */
   onRunInPlace?(): void;
   onSave?(): void;
-  /** table -> columns, for SQL completion */
+  /** table -> columns, for SQL completion (a table by its display name, and by its full name in the default catalog) */
   schema?: Record<string, { name: string }[]>;
   readOnly?: boolean;
   autoFocus?: boolean;
@@ -45,26 +46,6 @@ export interface CodeEditorProps {
   lineNumbers?: boolean;
   /** completions, signature help and diagnostics from the kernel */
   assist?: EditorAssist;
-}
-
-/**
- * The completion namespace of the catalog: main's tables at the top level, and
- * `schema.table` names nested as `{ schema: { table: columns } }` (lang-sql
- * completes `schema.` to the tables of the schema). A schema wins a name clash
- * with a table of main.
- */
-function sqlNamespace(tables: NonNullable<CodeEditorProps["schema"]>): SQLNamespace {
-  const top: Record<string, SQLNamespace> = {};
-  const schemas: Record<string, Record<string, string[]>> = {};
-  for (const [name, columns] of Object.entries(tables)) {
-    const names = columns.map((c) => c.name);
-    const dot = name.indexOf(".");
-    if (dot <= 0) top[name] = names;
-    else if (name.slice(0, dot) === "main") top[name.slice(dot + 1)] = names;
-    else (schemas[name.slice(0, dot)] ??= {})[name.slice(dot + 1)] = names;
-  }
-  for (const [schema, inner] of Object.entries(schemas)) top[schema] = inner;
-  return top;
 }
 
 function languageExtension(language: EditorLanguage, schema?: CodeEditorProps["schema"]): Extension {

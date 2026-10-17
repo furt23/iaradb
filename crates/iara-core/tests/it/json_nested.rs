@@ -278,7 +278,7 @@ fn to_json_encodes_any_value() {
     assert_eq!(k("select to_json([{'x': 'é\"'}]), to_json([]::INT[]), to_json({'a': NULL::INT})"), "[{\"x\":\"é\\\"\"}],[],{\"a\":null}");
     let ctx = SessionContext::new();
     let (schema, b) = ctx.sql("select 1 as id, {'a': 1, 'b': 'x'} as s union all select 2, NULL::STRUCT(a BIGINT, b VARCHAR)").unwrap().collect().unwrap();
-    ctx.register_batches("t", schema, b);
+    ctx.register_batches("t", schema, b).unwrap();
     assert_eq!(rows_in(&ctx, "select id, to_json(s), json_extract_string(to_json(s), '$.b') from t order by id"), "1,{\"a\":1,\"b\":\"x\"},x|2,null,null");
 }
 

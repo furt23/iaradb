@@ -1440,10 +1440,15 @@ def _register(ctx: PySessionContext, name: str, obj: Any) -> None:
 
 
 class SessionContext:
-    """Session state: a catalog of named tables queried with SQL or the DataFrame API."""
+    """Session state: catalogs of named tables queried with SQL or the DataFrame API.
 
-    def __init__(self) -> None:
-        self._ctx = PySessionContext()
+    Names are ``table``, ``schema.table`` or ``catalog.schema.table``. The names
+    given to ``register_*`` and ``table()`` are relative to the default catalog
+    (``default_catalog``, ``main`` when not given): ``t`` is ``default.main.t`` and
+    ``s.t`` is ``default.s.t``; only a three-part name reaches another catalog."""
+
+    def __init__(self, default_catalog: str | None = None) -> None:
+        self._ctx = PySessionContext(default_catalog)
 
     def register(self, name: str, obj: Any) -> SessionContext:
         """Register a LazyFrame, DataFrame, pyarrow/polars/pandas table or a file path."""
@@ -1523,10 +1528,11 @@ class SessionContext:
         return child
 
     def set_warehouse(self, path: str | os.PathLike[str] | None, storage_options: StorageOptions | None = None) -> SessionContext:
-        """Where ``CREATE TABLE name AS ...`` writes the table: Parquet in
-        ``<path>/name/`` (a folder or ``s3://`` prefix), or ``<path>/schema/name/``
-        for a table in a schema other than ``main``. Without a warehouse,
-        created tables stay in memory."""
+        """Where ``CREATE TABLE name AS ...`` writes the table: Delta in
+        ``<path>/name/`` (a folder or ``s3://`` prefix), ``<path>/schema/name/``
+        for a table in a schema other than ``main``, or
+        ``<path>/_catalogs/catalog/schema/name/`` for a table of another catalog.
+        Without a warehouse, created tables stay in memory."""
         self._ctx.set_warehouse(None if path is None else str(path), _storage(storage_options))
         return self
 
@@ -1537,8 +1543,9 @@ class SessionContext:
     def set_schema_location(
         self, schema: str, path: str | os.PathLike[str] | None, storage_options: StorageOptions | None = None
     ) -> SessionContext:
-        """Where ``CREATE TABLE schema.name AS ...`` writes the table: Parquet in
-        ``<path>/name/`` (a folder or ``s3://`` prefix), instead of the warehouse."""
+        """Where ``CREATE TABLE schema.name AS ...`` writes the table: in
+        ``<path>/name/`` (a folder or ``s3://`` prefix), instead of the warehouse.
+        ``schema`` is ``s`` (of the default catalog) or ``catalog.s``."""
         self._ctx.set_schema_location(schema, None if path is None else str(path), _storage(storage_options))
         return self
 
@@ -1546,22 +1553,39 @@ class SessionContext:
         return self._ctx.schema_location(schema)
 
     def tables(self) -> list[str]:
-        """Table names: bare for ``main``, ``schema.table`` for the others."""
+        """Table names: in the default catalog bare for ``main`` and ``schema.table``
+        for the others; in any other catalog always ``catalog.schema.table``."""
         return self._ctx.tables()
 
-    @property
-    def schemas(self) -> list[str]:
-        """Schema names, ``main`` first and the others sorted. ``CREATE SCHEMA``
-        adds one, and so does registering ``schema.table``."""
-        return self._ctx.schemas()
+    def catalogs(self) -> list[str]:
+        """Catalog names, the default one first and the others sorted. ``CREATE
+        CATALOG`` adds one."""
+        return self._ctx.catalogs()
 
-    @property
+    def current_catalog(self) -> str:
+        """The catalog that two-part names and ``SHOW SCHEMAS`` refer to;
+        ``USE CATALOG`` sets it (the default catalog at first)."""
+        return self._ctx.current_catalog()
+
+    def default_catalog(self) -> str:
+        """The catalog that ``register_*`` and ``table()`` names are relative to."""
+        return self._ctx.default_catalog()
+
+    def schemas(self, catalog: str | None = None) -> list[str]:
+        """Schema names of ``catalog`` (the current catalog when None), ``main``
+        first and the others sorted. ``CREATE SCHEMA`` adds one, and so does
+        registering ``schema.table``."""
+        return self._ctx.schemas(catalog)
+
     def current_schema(self) -> str:
-        """The schema a bare table name is looked up in first (then ``main``);
-        ``USE schema`` sets it."""
+        """The schema of the current catalog a bare table name is looked up in
+        first (then ``main``); ``USE schema`` sets it."""
         return self._ctx.current_schema()
 
     def table(self, name: str) -> LazyFrame:
+        """A registered table by its ``register_*`` name: ``t``, ``schema.t`` or
+        ``catalog.schema.t``, always relative to the default catalog (``USE
+        CATALOG`` does not change it)."""
         return LazyFrame(self._ctx.table(name))
 
     def sql(self, query: str, params: Any = None) -> LazyFrame:

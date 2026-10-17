@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { ListObjectsV2Command, S3Client } from "@aws-sdk/client-s3";
 
-import { type CatalogTable, displayName, isIdentifier } from "@/lib/catalogToml";
+import { type CatalogTable, defaultCatalogOf, displayName, isIdentifier } from "@/lib/catalogToml";
 
 import { config } from "../config";
 
@@ -21,8 +21,17 @@ export interface StorageConfig {
   region?: string;
 }
 
+/** The schema a location belongs to: its catalog and name. */
+interface SchemaRef {
+  catalog: string;
+  name: string;
+}
+
+/** A location's folders, or why they could not be listed (the cache keeps either for 30 s). */
+type Listing = { folders: string[] } | { error: string };
+
 const TTL_MS = 30_000;
-const cache = new Map<string, { at: number; found: Discovery }>();
+const cache = new Map<string, { at: number; listing: Listing }>();
 
 /** Forget the listing of a location (all of them without one). */
 export function invalidateDiscovery(location?: string): void {
@@ -49,13 +58,17 @@ export function storageFor(cfg: unknown, location: string): StorageConfig {
   };
 }
 
-/** The table named by a folder, or null for hidden/underscore folders and names that are not identifiers. */
-export function tableForFolder(schema: string, folder: string, base: string): CatalogTable | null {
+/**
+ * The table named by a folder of a schema's location, or null for hidden/underscore
+ * folders and names that are not identifiers.
+ */
+export function tableForFolder(schema: SchemaRef, folder: string, base: string, defaultCatalog: string): CatalogTable | null {
   if (folder.startsWith("_") || folder.startsWith(".") || !isIdentifier(folder)) return null;
   const table = folder.toLowerCase();
   const sep = base.endsWith("/") ? "" : "/";
   const tablePath = `${base}${sep}${folder}/`;
-  return { name: displayName({ schema, table }), schema, table, path: tablePath, format: "parquet", discovered: true };
+  const names = { catalog: schema.catalog, schema: schema.name, table };
+  return { name: displayName(names, defaultCatalog), ...names, path: tablePath, format: "parquet", discovered: true };
 }
 
 function localFolders(location: string): string {
@@ -101,32 +114,30 @@ async function listS3(location: string, storage: StorageConfig): Promise<string[
   }
 }
 
-function failure(location: string, e: unknown): Discovery {
+function failure(location: string, e: unknown): Listing {
   const err = e as { name?: string; code?: string; message?: string };
   const code = err.code === "ENOENT" ? "the folder does not exist" : err.message || err.name || "unknown error";
-  return { tables: [], error: `could not list ${location}: ${code}` };
+  return { error: `could not list ${location}: ${code}` };
 }
 
-/** The tables found under a schema's location (cached 30 s); a failure is returned, not thrown. */
-export async function discoverTables(schema: string, location: string, cfg: unknown): Promise<Discovery> {
-  const hit = cache.get(location);
-  const found = hit && Date.now() - hit.at < TTL_MS ? hit.found : await list(location, cfg);
-  if (found !== hit?.found) cache.set(location, { at: Date.now(), found });
-  return { ...found, tables: found.tables.map((t) => ({ ...t, ...rename(schema, t) })) };
-}
-
-/** The cache is by location, shared by schemas: names follow the asking schema. */
-function rename(schema: string, t: CatalogTable): Partial<CatalogTable> {
-  return { schema, name: displayName({ schema, table: t.table }) };
-}
-
-async function list(location: string, cfg: unknown): Promise<Discovery> {
+async function list(location: string, cfg: unknown): Promise<Listing> {
   try {
     const s3 = location.startsWith("s3://");
-    const folders = s3 ? await listS3(location, storageFor(cfg, location)) : await listLocal(location);
-    const tables = folders.flatMap((f) => tableForFolder("", f, location) ?? []);
-    return { tables };
+    return { folders: s3 ? await listS3(location, storageFor(cfg, location)) : await listLocal(location) };
   } catch (e) {
     return failure(location, e);
   }
+}
+
+/**
+ * The tables found under a schema's location (the listing is cached 30 s, shared by
+ * the schemas that use the location); a failure is returned, not thrown.
+ */
+export async function discoverTables(schema: SchemaRef, location: string, cfg: unknown): Promise<Discovery> {
+  const hit = cache.get(location);
+  const listing = hit && Date.now() - hit.at < TTL_MS ? hit.listing : await list(location, cfg);
+  if (listing !== hit?.listing) cache.set(location, { at: Date.now(), listing });
+  if ("error" in listing) return { tables: [], error: listing.error };
+  const defaultCatalog = defaultCatalogOf(cfg);
+  return { tables: listing.folders.flatMap((f) => tableForFolder(schema, f, location, defaultCatalog) ?? []) };
 }

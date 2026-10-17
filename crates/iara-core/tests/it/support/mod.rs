@@ -68,7 +68,7 @@ pub fn lists_table(ctx: &SessionContext, name: &str, data: Vec<(i64, Option<Vec<
         Field::new("l", l.data_type().clone(), true),
     ]));
     let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(g), Arc::new(l)]).unwrap();
-    ctx.register_batches(name, schema, vec![batch]);
+    ctx.register_batches(name, schema, vec![batch]).unwrap();
 }
 
 /// `s` is a struct column: id, s{a: Int64, b: Utf8}. `None` is a NULL struct.
@@ -94,5 +94,5 @@ pub fn structs_batch(data: &[StructRow]) -> (Arc<Schema>, RecordBatch) {
 
 pub fn structs_table(ctx: &SessionContext, name: &str, data: &[StructRow]) {
     let (schema, batch) = structs_batch(data);
-    ctx.register_batches(name, schema, vec![batch]);
+    ctx.register_batches(name, schema, vec![batch]).unwrap();
 }

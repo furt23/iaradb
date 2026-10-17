@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import time
 from collections.abc import Callable
 from typing import Any, TypeVar
@@ -18,6 +19,12 @@ TAG_TEAM = "iara:team"
 #: legacy (unscoped) names; a team's names append "-<team>"
 SECURITY_GROUP = "iara-clusters"
 ROLE = "iara-cluster"
+#: the IAM user a team's Studio signs in with (``iara-studio-<team>``)
+USER = "iara-studio"
+#: IAM path of every role, instance profile and user Iara creates
+IAM_PATH = "/iara/"
+#: the SSM parameter the Studio reads to find the machines' image (the team's key may read only this one)
+AMI_PARAM = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
 #: environment variable holding the team id when ``--team`` is not given
 TEAM_ENV = "IARA_TEAM"
 
@@ -43,12 +50,12 @@ def _checked_team(team: str, where: str) -> str:
     return team
 
 
-def team_id(value: str | None) -> str | None:
-    """The team of this run: ``value`` (``--team``) when given, else env ``IARA_TEAM``
+def team_id(value: str | None, where: str = "--team") -> str | None:
+    """The team of this run: ``value`` (named ``where`` in errors) when given, else env ``IARA_TEAM``
     (an empty variable counts as unset). None when neither is set: legacy names and every team.
     Raises ValueError unless the id matches ``^[a-z0-9][a-z0-9-]{0,30}$``."""
     if value is not None:
-        return _checked_team(value, "--team")
+        return _checked_team(value, where)
     env = os.environ.get(TEAM_ENV) or None
     if env is None:
         return None
@@ -65,10 +72,23 @@ def role_name(team: str | None) -> str:
     return ROLE if team is None else f"{ROLE}-{_checked_team(team, 'team')}"
 
 
+def user_name(team: str) -> str:
+    """The IAM user of a team's Studio: ``iara-studio-<team>``."""
+    return f"{USER}-{_checked_team(team, 'team')}"
+
+
+def account_id(sess: Any) -> str:
+    return sess.client("sts").get_caller_identity()["Account"]
+
+
 def artifacts_bucket(sess: Any) -> str:
     """The bucket holding engine builds (the same name the Studio computes)."""
-    account = sess.client("sts").get_caller_identity()["Account"]
-    return f"iara-artifacts-{account}-{sess.region_name}"
+    return f"iara-artifacts-{account_id(sess)}-{sess.region_name}"
+
+
+def team_tags(team: str) -> list[dict[str, str]]:
+    """Tags of the resources shared by a team's machines (security group, role, instance profile, user)."""
+    return [{"Key": TAG_COMPONENT, "Value": "clusters"}, {"Key": TAG_TEAM, "Value": team}]
 
 
 def error_code(e: Exception) -> str:
@@ -88,4 +108,5 @@ def retry(fn: Callable[[], T], codes: tuple[str, ...], attempts: int = 30, delay
 
 
 def log(msg: str) -> None:
-    print(f"[cloud] {msg}", flush=True)
+    """Progress goes to stderr, so a command's result (the keys of ``team-setup``) is alone on stdout."""
+    print(f"[cloud] {msg}", file=sys.stderr, flush=True)

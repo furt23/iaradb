@@ -4,27 +4,23 @@ import path from "node:path";
 
 import { ENGINE_VERSION } from "@iara/protocol";
 
-import { readConfigText } from "../workspace/sources";
+import { config } from "../config";
+import { teamBucketOf } from "../storage/bucketProxy";
+import { catalogRegion } from "../workspace/catalogStore";
 import { sshExec } from "../kernel/launchers/ssh2";
 import { awsSettings } from "./awsSettings";
-import { bucketsOf } from "./buckets";
 import { AwsCloud } from "./cloud/aws";
 import type { CloudApi } from "./cloud/api";
 import { ClusterService } from "./clusters";
 import { ClusterEventLog, diskEventFiles } from "./events";
+import { localComputeEnabled } from "./localCompute";
 import { dataDir, Store } from "./store";
 
 /**
  * The Studio's cluster service (one per server process). "Local" (kernels
- * on the Studio's own machine) exists in development only: hosted, the
- * Studio runs kernels on clusters.
+ * on the Studio's own machine) exists in development only, or with
+ * `IARA_LOCAL_COMPUTE=1`: hosted, the Studio runs kernels on clusters.
  */
-
-function localCompute(): boolean {
-  const flag = process.env.IARA_LOCAL_COMPUTE;
-  if (flag !== undefined) return flag !== "0" && flag.toLowerCase() !== "false";
-  return !process.env.RENDER;
-}
 
 let cloud: CloudApi | null | undefined;
 
@@ -42,8 +38,8 @@ function create(): ClusterService {
     cloud: cloudApi,
     exec: sshExec,
     engineVersion: ENGINE_VERSION,
-    dataBuckets: async () => bucketsOf(await readConfigText()),
-    localCompute: localCompute(),
+    teamBucket: () => teamBucketOf(config, catalogRegion()),
+    localCompute: localComputeEnabled(),
     events: new ClusterEventLog({ dir: path.join(dataDir(), "cluster-events"), files: diskEventFiles }),
   });
   svc.resume();

@@ -202,7 +202,7 @@ fn agg_ctx() -> SessionContext {
         Arc::new(Int64Array::from(vec![3, 2, 1, 1, 2, 9])),
         Arc::new(StringArray::from(vec![Some("b"), None, Some("a"), Some("é"), Some("é"), None])),
     ];
-    ctx.register_batches("a", schema.clone(), vec![RecordBatch::try_new(schema, cols).unwrap()]);
+    ctx.register_batches("a", schema.clone(), vec![RecordBatch::try_new(schema, cols).unwrap()]).unwrap();
     ctx
 }
 
@@ -269,7 +269,7 @@ fn array_agg_over_many_groups_uses_the_radix_path() {
             RecordBatch::try_new(schema.clone(), cols).unwrap()
         })
         .collect();
-    ctx.register_batches("big", schema, batches);
+    ctx.register_batches("big", schema, batches).unwrap();
     let sql = "select k, array_agg(i) a, array_agg(i order by i desc) d from big group by k order by k";
     let (_, out) = ctx.sql(sql).unwrap().collect().unwrap();
     let mut seen = 0;

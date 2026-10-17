@@ -26,7 +26,7 @@ iara-core (Rust)
 
 ## Workspaces
 
-A workspace is a directory with a `iara.toml` that lists its tables. `iara init [directory]` creates one. Notebooks and the SQL editor query the tables by name. A script can use the same catalog:
+A workspace is a directory. `iara init [directory]` creates one with an `iara.toml` that lists its tables, and the Python library reads that file. Studio keeps its own catalog in a hidden store instead (see [Catalog](#catalog)). Notebooks and the SQL editor query the tables by name. A script that calls `iara.workspace()` reads `iara.toml`, so it does not see the tables that Studio adds or removes after the first import:
 
 ```python
 import iara
@@ -35,7 +35,25 @@ ws = iara.workspace()      # finds iara.toml from the current directory upward
 ws.sql("select count(*) from lineitem").collect()
 ```
 
-Tables can be Parquet, CSV or JSON files, directories or globs, local or `s3://`. Schemas are declared in the same file. For the file format see the docstring of `python/iara/workspaces.py`.
+Tables can be Parquet, CSV or JSON files, directories or globs, local or `s3://`. Schemas are declared in `[schemas.<name>]` sections. Studio's catalog has the same format. For the format see the docstring of `python/iara/workspaces.py`.
+
+Other catalogs are declared with `[catalogs.<name>]` sections. A catalog has its own schemas and tables, written like the default catalog's ones with the catalog name in front:
+
+```toml
+[catalogs.sales]
+description = "Sales data"
+
+[catalogs.sales.schemas.raw]
+location = "s3://bucket/raw"
+
+[catalogs.sales.tables.orders]
+path = "data/orders.parquet"
+
+[catalogs.sales.tables.raw.events]
+path = "data/events"
+```
+
+`[catalogs.sales.tables.orders]` is the table `sales.main.orders`, and `[catalogs.sales.tables.raw.events]` is `sales.raw.events`. The default catalog is named after `[workspace] name` and keeps the top-level `[tables]` and `[schemas]` sections. A catalog cannot take the default catalog's name.
 
 ## Notebooks
 
@@ -88,11 +106,13 @@ Analyze on a query runs it with full profiling and opens a report at `/analyze`:
 
 ## Catalog
 
-The Data section lists tables by schema (`sales.orders`; the default schema is `main`). For each table it shows the location, size, columns, Parquet statistics and sample rows. You can add tables from the Data panel or from a file in the file tree, and remove them without deleting the data.
+The Data section lists catalogs at the top level, the default catalog first and then the others by name. Each catalog lists its schemas (`main` first) and their tables. A table of the default catalog is named as in SQL (`sales.orders`; the default schema is `main`), and a table of another catalog as `catalog.schema.table`. New catalog adds a catalog; a catalog with tables or schemas besides `main` cannot be removed until they are removed. New schema and Add table let you choose the catalog to put the schema or table in. SQL completion offers the `catalog.schema.table` names. For each table it shows the location, size, columns, Parquet statistics and sample rows. You can add tables from the Data panel or from a file in the file tree, and remove them without deleting the data.
 
-`CREATE TABLE ... AS SELECT` writes a Delta table to the workspace's warehouse directory (`warehouse` under `[workspace]` in `iara.toml`) and registers the table. `USING PARQUET` writes plain Parquet instead. See [delta.md](delta.md). The History tab of a Delta table lists its commits; a version can be queried or restored from there. `DROP TABLE` and `DROP SCHEMA [CASCADE]` update the catalog.
+The catalog (tables, schemas and storage settings) is kept in a hidden store, not in `iara.toml`. Locally it is `.iara/catalog.toml` in the workspace folder. With `IARA_BUCKET` set (team mode) it is `_iara/catalog.toml` in that bucket, and `IARA_STORAGE_ENDPOINT` gives the bucket's S3 endpoint (empty for AWS S3). In team mode, tables created with SQL go under `warehouse/` in the bucket. The first time Studio opens a workspace, it imports its `iara.toml` if there is one. After that it ignores that file and hides it from the file tree, so the library, which still reads `iara.toml`, does not see later changes made in Studio.
 
-A schema can have a `location` (`[schemas.<name>]`, an `s3://` URL or a workspace folder). Every subfolder of it is a table of that schema, named after the folder; folders starting with `_` or `.` and names that are not identifiers are skipped. Tables declared in `[tables]` win over discovered ones, and discovered tables are never written to `iara.toml`. Studio lists the location with the credentials and `[storage."s3://..."]` settings of the workspace and caches the listing for 30 seconds (the refresh button in the Data panel reads it again). `CREATE TABLE` in such a schema writes into the location; `DROP TABLE` is refused for these tables, delete the folder instead.
+`CREATE TABLE ... AS SELECT` writes a Delta table to the workspace's warehouse directory (`warehouse` under `[workspace]` in the catalog; in team mode, `s3://<IARA_BUCKET>/warehouse/`) and registers the table. `USING PARQUET` writes plain Parquet instead. See [delta.md](delta.md). The History tab of a Delta table lists its commits; a version can be queried or restored from there. `DROP TABLE` and `DROP SCHEMA [CASCADE]` update the catalog.
+
+A schema can have a `location` (`[schemas.<name>]`, an `s3://` URL or a workspace folder). Every subfolder of it is a table of that schema, named after the folder; folders starting with `_` or `.` and names that are not identifiers are skipped. Tables declared in `[tables]` win over discovered ones, and discovered tables are never written to the catalog. Studio lists the location with the credentials and `[storage."s3://..."]` settings of the catalog and caches the listing for 30 seconds (the refresh button in the Data panel reads it again). `CREATE TABLE` in such a schema writes into the location; `DROP TABLE` is refused for these tables, delete the folder instead.
 
 ## Jobs
 
@@ -137,7 +157,7 @@ Run with parameters… starts a run with other values for that run only; they wi
 
 ## Clusters
 
-The Compute section creates and manages AWS clusters and the Local kernels. See [storage-and-cloud.md](storage-and-cloud.md#clusters-on-aws).
+The Compute section creates and manages AWS clusters. A Local entry, which runs kernels as child processes of Studio, exists only in development or with `IARA_LOCAL_COMPUTE=1` (`iara serve` sets it); in a production build run any other way, including the Docker image, there is none, so notebooks run on clusters. Local kernels get a short list of environment variables (the basics, `AWS_*` storage keys and the engine settings), not Studio's own environment. Cluster kernels run as an unprivileged user without sudo. See [storage-and-cloud.md](storage-and-cloud.md#clusters-on-aws).
 
 ## Data Wrangler
 
@@ -160,6 +180,7 @@ The Data Wrangler builds a cleaning recipe on a table or a query result: open th
 | `IARA_WORKSPACE` | the example workspace in a checkout, else the current directory | Workspace Studio opens. |
 | `IARA_PYTHON` | | Python interpreter that runs kernels. |
 | `IARA_KERNEL_IDLE_MINUTES` | `60` | Idle time before a kernel is stopped. |
+| `IARA_LOCAL_COMPUTE` | on outside production, off in production; `iara serve` sets `1` | `1` offers the Local cluster (kernels on Studio's machine, running as Studio's user, so able to read its data folder), `0` removes it. |
 | `IARA_RESULT_MEMORY` | `128MB` | Largest result kept in memory. |
 | `IARA_STUDIO_DIR` | the checkout's `apps/web` | Where `iara serve` finds the web app. |
 | `IARA_SCHEDULER` | on | `0` turns the job scheduler off. |

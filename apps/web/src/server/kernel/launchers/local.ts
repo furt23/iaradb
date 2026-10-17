@@ -2,9 +2,10 @@ import "server-only";
 
 import type { StudioConfig } from "../../config";
 import { processTransport } from "../transport";
+import { localKernelEnv } from "./localEnv";
 import type { Launcher } from "./types";
 
-/** Kernels as child processes of the Studio, in the workspace directory. */
+/** Kernels as child processes of the Studio, in the workspace directory, with an allowlisted environment (see localKernelEnv). */
 export function localLauncher(cfg: StudioConfig): Launcher {
   return {
     name: "local",
@@ -14,7 +15,7 @@ export function localLauncher(cfg: StudioConfig): Launcher {
         command: cfg.python,
         args: ["-m", "iara.kernel", "--workspace", cfg.workspace],
         cwd: cfg.workspace,
-        env: { ...process.env, PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8" },
+        env: localKernelEnv(process.env),
       }),
   };
 }

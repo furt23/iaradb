@@ -34,7 +34,7 @@ fn source(ctx: &SessionContext) {
     let ids: Vec<i64> = (0..10).collect();
     let years: Vec<i64> = ids.iter().map(|i| 2020 + i % 2).collect();
     let b = RecordBatch::try_new(schema.clone(), vec![Arc::new(Int64Array::from(ids)), Arc::new(Int64Array::from(years))]).unwrap();
-    ctx.register_batches("src", schema, vec![b]);
+    ctx.register_batches("src", schema, vec![b]).unwrap();
 }
 
 fn warehouse() -> (TempDir, SessionContext) {

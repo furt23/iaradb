@@ -5,7 +5,11 @@
   "packageManager": "pnpm@11.13.0",
   "scripts": {
     "dev": "pnpm --filter @iara/web dev",
-    "build": "pnpm --filter @iara/web build",
+    "build": "pnpm -r build",
+    "build:engine": "uv run --no-sync python scripts/build_engine.py",
+    "build:images": "docker compose build",
+    "build:all": "pnpm build:engine && pnpm build && pnpm build:images",
+    "publish:engine": "uv run --no-sync --env-file .aws python -m iara.cloud publish",
     "start": "pnpm --filter @iara/web start",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",

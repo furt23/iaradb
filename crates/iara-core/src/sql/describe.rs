@@ -1,5 +1,5 @@
 //! Statements that answer with a table about the catalog: `SHOW TABLES`,
-//! `SHOW SCHEMAS`, `DESCRIBE t` / `SHOW COLUMNS FROM t`.
+//! `SHOW CATALOGS`, `SHOW SCHEMAS`, `DESCRIBE t` / `SHOW COLUMNS FROM t`.
 
 use std::sync::Arc;
 
@@ -8,7 +8,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 
 use super::write::missing;
-use crate::catalog_names::{TableRef, parse_schema, unknown_schema};
+use crate::catalog_names::{TableRef, parse_catalog};
 use crate::error::{Result, WhError};
 use crate::nested::type_name;
 use crate::session::{LazyFrame, SessionContext, TableEntry};
@@ -22,16 +22,12 @@ fn frame(ctx: &SessionContext, fields: Vec<Field>, columns: Vec<ArrayRef>) -> Re
     ctx.from_batches(schema.clone(), vec![RecordBatch::try_new(schema, columns)?])
 }
 
-/// `SHOW TABLES [IN schema]`: `schema, table, type, format` (the format of a
-/// table not used yet is null: listing does not load tables).
+/// `SHOW TABLES [IN [catalog.]schema]`: `schema, table, type, format` (the
+/// format of a table not used yet is null: listing does not load tables). The
+/// schema is looked in the current catalog unless the catalog is written;
+/// none: the current schema.
 pub fn show_tables(ctx: &SessionContext, schema: Option<&str>) -> Result<LazyFrame> {
-    let schema = match schema {
-        Some(s) => parse_schema(s)?,
-        None => ctx.current_schema(),
-    };
-    if !ctx.has_schema(&schema) {
-        return Err(unknown_schema(&schema));
-    }
+    let schema = ctx.existing_schema(schema)?;
     let listing = ctx.list_tables(&schema);
     let col = |f: &dyn Fn(&crate::session::TableListing) -> Option<String>| strings(listing.iter().map(f).collect());
     frame(
@@ -51,11 +47,28 @@ pub fn show_tables(ctx: &SessionContext, schema: Option<&str>) -> Result<LazyFra
     )
 }
 
-/// `SHOW SCHEMAS`: `schema, current`
-pub fn show_schemas(ctx: &SessionContext) -> Result<LazyFrame> {
-    let schemas = ctx.schemas();
-    let current = ctx.current_schema();
-    let flags: Vec<bool> = schemas.iter().map(|s| *s == current).collect();
+/// `SHOW CATALOGS`: `catalog, current`
+pub fn show_catalogs(ctx: &SessionContext) -> Result<LazyFrame> {
+    let catalogs = ctx.catalogs();
+    let current = ctx.current_catalog();
+    let flags: Vec<bool> = catalogs.iter().map(|c| *c == current).collect();
+    frame(
+        ctx,
+        vec![Field::new("catalog", DataType::Utf8, false), Field::new("current", DataType::Boolean, false)],
+        vec![strings(catalogs.into_iter().map(Some).collect()), Arc::new(BooleanArray::from(flags))],
+    )
+}
+
+/// `SHOW SCHEMAS [IN catalog]`: `schema, current` (the current catalog when none is named).
+/// `current` is true for the current schema, when its catalog is the one listed.
+pub fn show_schemas(ctx: &SessionContext, catalog: Option<&str>) -> Result<LazyFrame> {
+    let catalog = match catalog {
+        Some(c) => parse_catalog(c)?,
+        None => ctx.current_catalog(),
+    };
+    let schemas = ctx.schemas_of(&catalog)?;
+    let current = (ctx.current_catalog() == catalog).then(|| ctx.current_schema());
+    let flags: Vec<bool> = schemas.iter().map(|s| current.as_ref() == Some(s)).collect();
     frame(
         ctx,
         vec![Field::new("schema", DataType::Utf8, false), Field::new("current", DataType::Boolean, false)],
@@ -67,7 +80,7 @@ pub fn show_schemas(ctx: &SessionContext) -> Result<LazyFrame> {
 pub fn describe(ctx: &SessionContext, name: &str) -> Result<LazyFrame> {
     let r = TableRef::strict(name)?;
     let target = ctx.resolve_table(&r).ok_or_else(|| missing(ctx, &r, name))?;
-    let (schema, partitions): (Arc<Schema>, Vec<String>) = match ctx.lookup(&target.key())? {
+    let (schema, partitions): (Arc<Schema>, Vec<String>) = match ctx.entry(&target)? {
         Some(TableEntry::Table(t)) => {
             let partitions = match t.as_delta() {
                 Some(d) => d.snapshot().partition_columns.clone(),

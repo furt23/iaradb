@@ -69,7 +69,7 @@ Each query has a handle that reports finished morsels and row counts and checks 
 
 ## Catalog and schemas
 
-Tables live in named schemas (`sales.orders`), and `main` is the default. `CREATE SCHEMA`, `DROP SCHEMA [CASCADE]` and `USE` manage them. A workspace declares its tables and schemas in `iara.toml`.
+Tables live in named schemas (`sales.orders`), and `main` is the default. `CREATE SCHEMA`, `DROP SCHEMA [CASCADE]` and `USE` manage them. A workspace declares its tables and schemas in `iara.toml`, which the library reads. Studio keeps the same TOML in a hidden catalog instead (see [Studio](studio.md#catalog)).
 
 ## Settings
 

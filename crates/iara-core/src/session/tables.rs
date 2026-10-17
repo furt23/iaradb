@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use super::{Slot, SessionContext, TableEntry};
-use crate::catalog_names::TableName;
+use crate::catalog_names::{SchemaName, TableName};
 use crate::delta::{DeltaTable, is_delta_table};
 use crate::error::Result;
 use crate::io::TableProvider;
@@ -36,13 +36,13 @@ impl SessionContext {
     }
 
     /// The tables and views of a schema, sorted by name, without loading any.
-    pub fn list_tables(&self, schema: &str) -> Vec<TableListing> {
+    pub fn list_tables(&self, schema: &SchemaName) -> Vec<TableListing> {
         let catalog = self.state.catalog.read();
         catalog
             .tables_in(schema)
             .into_iter()
             .map(|name| {
-                let slot = catalog.tables.get(&name.key());
+                let slot = catalog.tables.get(&name);
                 let (is_view, kind) = match slot {
                     Some(Slot::Entry(TableEntry::View(_))) => (true, None),
                     Some(Slot::Entry(TableEntry::Table(t))) => (false, Some(t.kind())),

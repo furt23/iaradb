@@ -39,12 +39,12 @@ fn ctx() -> SessionContext {
         Arc::new(StringArray::from(seg)),
         Arc::new(Int64Array::from(nk)),
     ];
-    ctx.register_batches("cust", schema.clone(), vec![RecordBatch::try_new(schema, cols).unwrap()]);
+    ctx.register_batches("cust", schema.clone(), vec![RecordBatch::try_new(schema, cols).unwrap()]).unwrap();
 
     let schema = Arc::new(Schema::new(vec![Field::new("nk", DataType::Int64, true), Field::new("nname", DataType::Utf8, true)]));
     let cols: Vec<ArrayRef> =
         vec![Arc::new(Int64Array::from((0..5).collect::<Vec<i64>>())), Arc::new(StringArray::from(vec!["n0", "n1", "n2", "n3", "n4"]))];
-    ctx.register_batches("nat", schema.clone(), vec![RecordBatch::try_new(schema, cols).unwrap()]);
+    ctx.register_batches("nat", schema.clone(), vec![RecordBatch::try_new(schema, cols).unwrap()]).unwrap();
 
     let mut s = 42u64;
     let n = 2000;
@@ -78,7 +78,7 @@ fn ctx() -> SessionContext {
     // several batches: several partial tables to merge
     let batch = RecordBatch::try_new(schema.clone(), cols).unwrap();
     let batches = (0..n).step_by(300).map(|i| batch.slice(i, 300.min(n - i))).collect();
-    ctx.register_batches("ord", schema, batches);
+    ctx.register_batches("ord", schema, batches).unwrap();
     ctx
 }
 

@@ -33,7 +33,7 @@ fn source(ctx: &SessionContext) {
         Arc::new(Int64Array::from(ids.iter().map(|i| i % 4).collect::<Vec<_>>())),
         Arc::new(StringArray::from(text)),
     ];
-    ctx.register_batches("src", schema(), vec![RecordBatch::try_new(schema(), cols).unwrap()]);
+    ctx.register_batches("src", schema(), vec![RecordBatch::try_new(schema(), cols).unwrap()]).unwrap();
 }
 
 /// A query that runs until its last row, which cannot be cast.

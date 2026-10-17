@@ -2,7 +2,7 @@ import "server-only";
 
 import { PROTOCOL_VERSION, type KernelInfo } from "@iara/protocol";
 
-import { readConfigText } from "../workspace/sources";
+import { kernelConfigFor } from "../workspace/sources";
 import { KernelError, type KernelClient } from "./client";
 
 /** A kernel speaking another protocol version cannot be used. */
@@ -16,8 +16,8 @@ export function checkProtocol(info: KernelInfo): void {
   }
 }
 
-/** Version check, then the catalog from the Studio's iara.toml. */
+/** Version check, then the catalog the Studio keeps (with the settings generated for its team bucket). */
 export async function bootstrap(kernel: KernelClient, info: KernelInfo): Promise<KernelInfo> {
   checkProtocol(info);
-  return kernel.call("workspace.configure", { toml: await readConfigText() });
+  return kernel.call("workspace.configure", { toml: await kernelConfigFor(kernel) });
 }

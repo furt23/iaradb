@@ -1,10 +1,13 @@
 /** Workspace, catalog and history (see iara.workspaces, iara.kernel.catalog). */
 
 export interface TableRef {
+  /** the display name: `orders` (default catalog, main), `sales.orders`, or `sales.main.orders` (another catalog) */
   name: string;
   /** relative to the workspace root when inside it */
   path: string;
   format: "parquet" | "delta" | "csv" | "json";
+  /** the catalog's name (absent: the default catalog) */
+  catalog?: string;
 }
 
 export interface ColumnStats {
@@ -52,6 +55,8 @@ export interface KernelInfo {
   tables: TableRef[];
   /** `main` first (absent from older kernels) */
   schemas?: string[];
+  /** the default catalog first, then the others by name (absent from older kernels) */
+  catalogs?: string[];
 }
 
 export interface HistoryEntry {

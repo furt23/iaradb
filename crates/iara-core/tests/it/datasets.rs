@@ -26,7 +26,7 @@ fn sales(ctx: &SessionContext) {
         Arc::new(StringArray::from(ids.iter().map(|i| if i % 11 == 0 { None } else { Some(regions[(*i % 3) as usize]) }).collect::<Vec<_>>())),
         Arc::new(Float64Array::from(ids.iter().map(|i| (*i % 100) as f64).collect::<Vec<_>>())),
     ];
-    ctx.register_batches("sales", schema.clone(), vec![RecordBatch::try_new(schema, cols).unwrap()]);
+    ctx.register_batches("sales", schema.clone(), vec![RecordBatch::try_new(schema, cols).unwrap()]).unwrap();
 }
 
 fn run(ctx: &SessionContext, q: &str) -> String {

@@ -7,7 +7,7 @@ use arrow::datatypes::SchemaRef;
 use super::Params;
 use super::ddl::{ColumnSpec, schema_of};
 use super::write::{drop_replaced, summary_with};
-use crate::catalog_names::{MAIN, TableName, TableRef, unknown_schema};
+use crate::catalog_names::{MAIN, TableName, TableRef};
 use crate::delta::ops::{self, WriteArgs};
 use crate::delta::write_files::delta_schema_declared;
 use crate::delta::{LogStore, Snapshot, WriteMode, is_delta_table, write_table};
@@ -38,18 +38,23 @@ pub(super) enum Source<'a> {
     Columns(&'a [ColumnSpec]),
 }
 
-/// Where `CREATE TABLE name` puts a table: `name`'s schema, else the current one,
-/// which must exist.
+/// Where `CREATE TABLE name` puts a table: `name`'s catalog and schema, else
+/// the current ones, which must exist.
 pub(super) fn create_target(ctx: &SessionContext, name: &str) -> Result<TableName> {
-    let target = TableRef::strict(name)?.in_schema(&ctx.current_schema());
-    if !ctx.has_schema(&target.schema) {
-        return Err(unknown_schema(&target.schema));
-    }
-    Ok(target)
+    ctx.creation_target(&TableRef::strict(name)?)
 }
 
-/// A table's folder in the warehouse: `<root>/<table>` in `main`, `<root>/<schema>/<table>` elsewhere.
-fn table_location(root: &str, name: &TableName) -> String {
+/// The folder of the warehouse that holds the catalogs other than the default one (discovery skips `_` folders).
+const CATALOGS_FOLDER: &str = "_catalogs";
+
+/// A table's folder in the warehouse. The default catalog: `<root>/<table>` in
+/// `main`, `<root>/<schema>/<table>` elsewhere. Any other catalog:
+/// `<root>/_catalogs/<catalog>/<schema>/<table>`, `main` included.
+fn table_location(root: &str, name: &TableName, default_catalog: &str) -> String {
+    if name.catalog != default_catalog {
+        let catalog = dataset::join(&dataset::join(root, CATALOGS_FOLDER), &name.catalog);
+        return dataset::join(&dataset::join(&catalog, &name.schema), &name.table);
+    }
     if name.schema == MAIN {
         return dataset::join(root, &name.table);
     }
@@ -58,10 +63,11 @@ fn table_location(root: &str, name: &TableName) -> String {
 
 /// Where a created table is written: under its schema's location if it has one, else the warehouse.
 pub(super) fn table_folder(ctx: &SessionContext, name: &TableName) -> Option<(String, StorageOptions)> {
-    if let Some((root, storage)) = ctx.schema_location(&name.schema) {
+    if let Some((root, storage)) = ctx.schema_location_of(&name.schema_name()) {
         return Some((dataset::join(&root, &name.table), storage));
     }
-    ctx.warehouse().map(|(root, storage)| (table_location(&root, name), storage))
+    let default = ctx.default_catalog();
+    ctx.warehouse().map(|(root, storage)| (table_location(&root, name, &default), storage))
 }
 
 pub(super) struct CreateSpec<'a> {
@@ -76,7 +82,7 @@ pub(super) struct CreateSpec<'a> {
 pub(super) fn create_table(ctx: &SessionContext, spec: CreateSpec<'_>, source: Source<'_>, params: &Params) -> Result<LazyFrame> {
     let CreateSpec { name, replace, if_not_exists, partition_by, using, comment } = spec;
     let target = create_target(ctx, name)?;
-    let (key, shown) = (target.key(), target.display());
+    let shown = ctx.display_name(&target);
     let format = format_of(using)?;
     if ctx.table_exists(&target) && !replace {
         if if_not_exists {
@@ -100,7 +106,7 @@ pub(super) fn create_table(ctx: &SessionContext, spec: CreateSpec<'_>, source: S
         }
         let (schema, batches) = lf.collect()?;
         let rows = batches.iter().map(|b| b.num_rows()).sum();
-        ctx.register_batches(&key, schema, batches);
+        ctx.put_batches(&target, schema, batches)?;
         return summary_with(ctx, "create", Some(&shown), None, rows, Some("memory"), None);
     };
     let existing_delta = is_delta_table(&location, &storage);
@@ -110,7 +116,7 @@ pub(super) fn create_table(ctx: &SessionContext, spec: CreateSpec<'_>, source: S
     if format == Format::Parquet && comment.is_some() {
         return Err(WhError::Plan("COMMENT is supported on Delta tables".into()));
     }
-    let place = Place { ctx, key: &key, shown: &shown, location: &location, storage: &storage, replace };
+    let place = Place { ctx, target: &target, shown: &shown, location: &location, storage: &storage, replace };
     if format == Format::Delta {
         return place.delta(existing_delta, &partition_by, comment, &lf, declared);
     }
@@ -120,7 +126,7 @@ pub(super) fn create_table(ctx: &SessionContext, spec: CreateSpec<'_>, source: S
 /// A table being created at its folder.
 struct Place<'a> {
     ctx: &'a SessionContext,
-    key: &'a str,
+    target: &'a TableName,
     shown: &'a str,
     location: &'a str,
     storage: &'a StorageOptions,
@@ -156,12 +162,12 @@ impl Place<'_> {
             }
         };
         drop_replaced(location, &old, storage)?;
-        ctx.register_delta(self.key, location, storage, None, false)?;
+        ctx.put_delta(self.target, location, storage)?;
         summary_with(ctx, "create", Some(self.shown), Some(location), done.rows as usize, Some("delta"), Some(done.version))
     }
 
     fn parquet(&self, partition_by: Vec<String>, lf: &LazyFrame) -> Result<LazyFrame> {
-        let (ctx, location, storage, key) = (self.ctx, self.location, self.storage, self.key);
+        let (ctx, location, storage, target) = (self.ctx, self.location, self.storage, self.target);
         // the old files are listed now and deleted once the new ones are written: a query that fails loses nothing
         let mut old = vec![];
         if dataset::holds_data(location, storage)? {
@@ -175,15 +181,15 @@ impl Place<'_> {
         let opts = ParquetOptions { partition_by, ..Default::default() };
         let rows: usize = lf.sink_parquet_files(&dest, &opts, storage)?.iter().map(|f| f.rows as usize).sum();
         if !old.is_empty() {
-            ctx.deregister(key);
+            ctx.remove_table(target);
             drop_replaced(location, &old, storage)?;
         }
         if rows == 0 && partitioned {
             // no partition, no file: an empty table, in memory, of the right shape
             let (schema, batches) = lf.limit(0).collect()?;
-            ctx.register_batches(key, schema, batches);
+            ctx.put_batches(target, schema, batches)?;
         } else {
-            ctx.register_parquet_with(key, location, storage, false)?;
+            ctx.put_parquet(target, location, storage)?;
         }
         summary_with(ctx, "create", Some(self.shown), Some(location), rows, Some("parquet"), None)
     }

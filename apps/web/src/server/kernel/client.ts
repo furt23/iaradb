@@ -76,6 +76,11 @@ export class KernelClient {
     return this.exitError === null;
   }
 
+  /** The kernel runs on a cluster machine (not on the Studio's own). */
+  get remote(): boolean {
+    return this.localRoot === null;
+  }
+
   get pid(): number | undefined {
     return this.transport.pid;
   }

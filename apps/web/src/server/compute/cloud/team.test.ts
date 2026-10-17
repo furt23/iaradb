@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { roleName, securityGroupName, teamId, teamTags } from "./team";
+import { notSetUp, requiredTeam, roleName, securityGroupName, teamId, teamTags } from "./team";
 
 describe("teamId", () => {
   it("is null when unset or blank", () => {
@@ -21,15 +21,27 @@ describe("teamId", () => {
   });
 });
 
+describe("requiredTeam", () => {
+  it("returns the team", () => {
+    expect(requiredTeam({ IARA_TEAM: "acme" })).toBe("acme");
+  });
+  it("fails without one, saying how to set it up", () => {
+    expect(() => requiredTeam({})).toThrow(/IARA_TEAM is not set.*team-setup/);
+  });
+});
+
 describe("names and tags", () => {
   it("add the team to the names", () => {
     expect(securityGroupName("acme")).toBe("iara-clusters-acme");
     expect(roleName("acme")).toBe("iara-cluster-acme");
     expect(teamTags("acme")).toEqual([{ Key: "iara:team", Value: "acme" }]);
   });
-  it("keep the legacy names without a team", () => {
-    expect(securityGroupName(null)).toBe("iara-clusters");
-    expect(roleName(null)).toBe("iara-cluster");
-    expect(teamTags(null)).toEqual([]);
+});
+
+describe("notSetUp", () => {
+  it("names the team and the admin command", () => {
+    const e = notSetUp("acme");
+    expect(e.type).toBe("AwsNotSetUp");
+    expect(e.message).toBe("AWS is not set up for team acme: run `python -m iara.cloud team-setup acme` with admin credentials");
   });
 });

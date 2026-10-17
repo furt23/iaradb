@@ -35,7 +35,7 @@ fn context() -> SessionContext {
         })
         .collect();
     let ctx = SessionContext::new();
-    ctx.register_batches("t", schema, batches);
+    ctx.register_batches("t", schema, batches).unwrap();
     ctx
 }
 

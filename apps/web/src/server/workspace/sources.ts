@@ -1,19 +1,21 @@
 import "server-only";
 
 import fs from "node:fs/promises";
-import path from "node:path";
 
 import { parse } from "smol-toml";
 
+import { kernelConfig } from "@/lib/catalogConfig";
+import { defaultCatalogOf, normalizeCatalogName } from "@/lib/catalogToml";
+
 import { config } from "../config";
+import { writeAtomic } from "./atomic";
+import { catalogRegion, defaultWorkspaceName, readCatalogText, writeCatalogText } from "./catalogStore";
 import { resolveWorkspacePath } from "./files";
 
 /**
  * The workspace files the Studio owns and sends to kernels (protocol 2):
- * notebooks and `iara.toml`.
+ * notebooks, and the catalog (kept by catalogStore, not in the workspace).
  */
-
-export const CONFIG_NAME = "iara.toml";
 
 export async function readNotebookSource(rel: string): Promise<string> {
   try {
@@ -24,51 +26,51 @@ export async function readNotebookSource(rel: string): Promise<string> {
   }
 }
 
-/** Replace a file atomically (a crash never leaves half a notebook). */
-async function writeAtomic(file: string, text: string): Promise<void> {
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(tmp, text, "utf8");
-  try {
-    await fs.rename(tmp, file);
-  } catch (e) {
-    await fs.rm(tmp, { force: true });
-    throw e;
-  }
-}
-
 export async function writeNotebookSource(rel: string, source: string): Promise<void> {
   await writeAtomic(resolveWorkspacePath(rel), source);
 }
 
-/** The text of `iara.toml` (null when the workspace has none). */
-export async function readConfigText(): Promise<string | null> {
-  try {
-    return await fs.readFile(path.join(config.workspace, CONFIG_NAME), "utf8");
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw e;
-  }
+/** The text of the catalog (`iara.toml`'s format, as stored: no generated settings). */
+export function readConfigText(): Promise<string> {
+  return readCatalogText();
 }
 
-/** The workspace's name: `[workspace] name` of iara.toml, else its folder's name. */
+/** Who reads the catalog: the Studio and its local kernels, which reach the team bucket directly, or cluster kernels, which reach it through their machine's proxy. */
+export type KernelTarget = "local" | "cluster";
+
+/**
+ * The catalog as the kernels read it: the stored text plus the settings generated for the team bucket.
+ * Cluster kernels get no storage section for the bucket: their environment sends its requests to the
+ * machine's proxy, and the bucket's endpoint is not for their code to read.
+ */
+export async function kernelConfigText(target: KernelTarget): Promise<string> {
+  return kernelConfig(await readConfigText(), {
+    name: defaultWorkspaceName(),
+    bucket: config.bucket,
+    endpoint: target === "cluster" ? null : config.storageEndpoint,
+    region: catalogRegion(),
+  });
+}
+
+/** The catalog for `kernel`, wherever it runs. */
+export function kernelConfigFor(kernel: { remote: boolean }): Promise<string> {
+  return kernelConfigText(kernel.remote ? "cluster" : "local");
+}
+
+/** The workspace's name as SQL names its default catalog (`[workspace] name`, normalized); a broken catalog gives `IARA_TEAM` or the folder's name. */
 export async function workspaceName(): Promise<string> {
   try {
-    const cfg = parse((await readConfigText()) ?? "") as { workspace?: { name?: unknown } };
-    if (typeof cfg.workspace?.name === "string" && cfg.workspace.name) return cfg.workspace.name;
+    return defaultCatalogOf(parse(await kernelConfigText("local")));
   } catch {
-    // a broken file: the folder's name
+    return normalizeCatalogName(defaultWorkspaceName());
   }
-  return path.basename(config.workspace);
 }
 
-export async function writeConfigText(text: string): Promise<void> {
-  await writeAtomic(path.join(config.workspace, CONFIG_NAME), text);
+export function writeConfigText(text: string): Promise<void> {
+  return writeCatalogText(text);
 }
 
-/** Append a `[tables.x]` section (creating the file with a `[workspace]` header). */
+/** Append a `[tables.x]` or `[schemas.x]` section to the catalog. */
 export async function appendConfigEntry(entry: string): Promise<void> {
-  const current = await readConfigText();
-  const header = `[workspace]\nname = ${JSON.stringify(path.basename(config.workspace))}\n`;
-  await writeAtomic(path.join(config.workspace, CONFIG_NAME), (current ?? header) + entry);
+  await writeConfigText((await readConfigText()) + entry);
 }

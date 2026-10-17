@@ -14,25 +14,28 @@ import { useTranslation } from "react-i18next";
 
 import { useGuard, useNotify } from "@/features/shell/notify";
 import { unwrap } from "@/lib/action";
-import { isIdentifier, MAIN_SCHEMA, suggestTableName } from "@/lib/catalogToml";
-import { addTable, listSchemas } from "@/server/actions/catalog";
+import { type CatalogInfo, isIdentifier, MAIN_SCHEMA, suggestTableName } from "@/lib/catalogToml";
+import { addTable, listCatalogs, listSchemas } from "@/server/actions/catalog";
 
 import { useData } from "./DataProvider";
 import { tableHref } from "./links";
 
 /**
- * Name a dataset in iara.toml, in a schema (main by default); the new
- * table opens in the Data section.
+ * Name a dataset in the catalog: in a catalog and a schema (the default catalog's main
+ * by default); the new table opens in the Data section.
  */
 export function AddTableDialog({
   open,
   onClose,
   initialPath,
+  catalog,
   schema,
 }: {
   open: boolean;
   onClose(): void;
   initialPath?: string;
+  /** the catalog to add to (default: the default catalog) */
+  catalog?: string;
   /** the schema to add to (default: main) */
   schema?: string;
 }) {
@@ -41,6 +44,8 @@ export function AddTableDialog({
   const [path, setPath] = useState("");
   const [format, setFormat] = useState<"auto" | "parquet" | "csv" | "json">("auto");
   const [named, setNamed] = useState(false);
+  const [chosen, setChosen] = useState("");
+  const [catalogs, setCatalogs] = useState<CatalogInfo[]>([]);
   const [target, setTarget] = useState(MAIN_SCHEMA);
   const [schemas, setSchemas] = useState<string[]>([MAIN_SCHEMA]);
   const { invalidate } = useData();
@@ -48,24 +53,39 @@ export function AddTableDialog({
   const notify = useNotify();
   const router = useRouter();
 
-
   useEffect(() => {
     if (!open) return;
     setPath(initialPath ?? "");
     setName(initialPath ? suggestTableName(initialPath) : "");
     setNamed(false);
     setFormat("auto");
+    setChosen(catalog ?? "");
     setTarget(schema ?? MAIN_SCHEMA);
-    void listSchemas().then((r) => {
+    void listCatalogs().then((r) => {
+      if (!r.ok) return;
+      setCatalogs(r.data);
+      setChosen((c) => c || r.data[0]?.name || "");
+    });
+  }, [open, initialPath, catalog, schema]);
+
+  useEffect(() => {
+    if (!open || !chosen) return;
+    void listSchemas(chosen).then((r) => {
       if (r.ok) setSchemas(r.data.map((s) => s.name));
     });
-  }, [open, initialPath, schema]);
+  }, [open, chosen]);
+
+  // another catalog has its own schemas: main is the one to add to
+  const pickCatalog = (catalogName: string) => {
+    setChosen(catalogName);
+    setTarget(MAIN_SCHEMA);
+  };
 
   const submit = () =>
     guard(async () => {
       const qualified = target === MAIN_SCHEMA ? name : `${target}.${name}`;
-      const ref = unwrap(await addTable(qualified, path, format === "auto" ? undefined : format));
-      notify(`Added ${ref.name} to iara.toml`, "success");
+      const ref = unwrap(await addTable(qualified, path, format === "auto" ? undefined : format, chosen));
+      notify(`Added ${ref.name} to the catalog`, "success");
       invalidate();
       onClose();
       router.push(tableHref(ref.name));
@@ -102,7 +122,14 @@ export function AddTableDialog({
               helperText={badName ? t("Letters, digits and underscores") : t("How queries refer to it")}
               sx={{ flex: 1 }}
             />
-            <TextField select label={t("Schema")} value={target} onChange={(e) => setTarget(e.target.value)} sx={{ minWidth: 160 }}>
+            <TextField select label={t("Catalog")} value={chosen} onChange={(e) => pickCatalog(e.target.value)} sx={{ minWidth: 150 }}>
+              {catalogs.map((c) => (
+                <MenuItem key={c.name} value={c.name}>
+                  {c.isDefault ? `${c.name} (${t("default")})` : c.name}
+                </MenuItem>
+              ))}
+            </TextField>
+            <TextField select label={t("Schema")} value={target} onChange={(e) => setTarget(e.target.value)} sx={{ minWidth: 150 }}>
               {(schemas.includes(target) ? schemas : [...schemas, target]).map((s) => (
                 <MenuItem key={s} value={s}>
                   {s}
@@ -120,7 +147,7 @@ export function AddTableDialog({
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>{t("Cancel")}</Button>
-        <Button variant="contained" onClick={submit} disabled={!name || !path || badName}>
+        <Button variant="contained" onClick={submit} disabled={!name || !path || badName || !chosen}>
           {t("Add")}
         </Button>
       </DialogActions>

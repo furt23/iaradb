@@ -5,7 +5,7 @@ import type { ClusterEvent, ClusterEventKind, ClusterEventLog } from "./events";
 import { DEFAULT_AUTO_TERMINATE_MINUTES, DEFAULT_INSTANCE_TYPE, DEFAULT_MAX_HOURS, DEFAULT_VOLUME_GB, instanceType, MIN_AUTO_TERMINATE_MINUTES } from "./instanceTypes";
 import type { Identity, StudioState } from "./store";
 import { LOCAL_CLUSTER, MACHINE_FIELDS, type ClusterRecord, type ClusterRuntime, type ClusterView, type LibraryStatus } from "./types";
-import { BOOT_LOG, FAILED_MARKER, INIT_LOG, READY_MARKER, userData, VENV } from "./userData";
+import { BOOT_LOG, FAILED_MARKER, INIT_LOG, KERNEL_HOME, KERNEL_USER, proxyUrlOf, READY_MARKER, type TeamBucket, userData, UV, VENV } from "./userData";
 
 /**
  * On-demand compute clusters: a configuration the user creates once, and a
@@ -37,8 +37,8 @@ export interface ClusterDeps {
   cloud(): CloudApi | null;
   exec(ep: SshEndpointLike, command: string, timeoutMs?: number): Promise<{ code: number | null; stdout: string }>;
   engineVersion: string;
-  /** buckets the clusters' role must reach (the workspace's) */
-  dataBuckets(): Promise<string[]>;
+  /** the team bucket clusters reach through their machine's proxy (null: the Studio has none) */
+  teamBucket(): TeamBucket | null;
   localCompute: boolean;
   /** what happened to each cluster */
   events: ClusterEventLog;
@@ -321,7 +321,8 @@ export class ClusterService {
     this.setLibraries(id, specs, { state: "installing" });
     this.log(id, "libraries", `installing ${specs.join(", ")}`);
     const run = async (): Promise<void> => {
-      const command = `~/.local/bin/uv pip install -q --python ${VENV}/bin/python ${specs.map((s) => `'${s}'`).join(" ")} 2>&1`;
+      // as the kernel user, who owns the venv
+      const command = `sudo -n -u ${KERNEL_USER} -H env -C ${KERNEL_HOME} ${UV} pip install -q --python ${VENV}/bin/python ${specs.map((s) => `'${s}'`).join(" ")} 2>&1`;
       let error: string | null = null;
       try {
         const r = await this.d.exec(this.endpoint(id), command, INSTALL_TIMEOUT_MS);
@@ -430,12 +431,14 @@ export class ClusterService {
       throw new ClusterError("NoEngine", `the engine ${this.d.engineVersion} is not published for clusters: run \`python -m iara.cloud publish\``);
     }
     this.phase(id, "preparing network and access");
-    const group = await cloud.ensureNetwork(await cloud.studioCidrs());
-    const profile = await cloud.ensureRole(await this.d.dataBuckets());
+    const group = await cloud.teamNetwork(await cloud.studioCidrs());
+    const profile = await cloud.instanceProfile();
     this.phase(id, "launching a machine");
+    const team = this.d.teamBucket();
     const script = userData({
       authorizedKey: this.d.store.identity().publicKey,
       wheelUrl: wheel,
+      proxy: team && { url: proxyUrlOf(wheel), endpoint: team.endpoint, bucket: team.bucket, region: team.region },
       idleMinutes: c.autoTerminateMinutes + WATCHDOG_GRACE_MINUTES,
       maxMinutes: c.maxHours * 60,
       region: cloud.region,

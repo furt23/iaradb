@@ -16,7 +16,7 @@ import { removeTable } from "@/server/actions/catalog";
 
 import { useData } from "./DataProvider";
 
-/** Remove a table from iara.toml (its data stays where it is). */
+/** Remove a table from the catalog (its data stays where it is). */
 export function RemoveTableDialog({ table, onClose }: { table: TableRef | null; onClose(): void }) {
   const { t } = useTranslation();
   const { act, invalidate } = useData();
@@ -39,7 +39,7 @@ export function RemoveTableDialog({ table, onClose }: { table: TableRef | null; 
       <DialogContent>
         <DialogContentText>
           {table
-            ? t("Its section is removed from iara.toml. The data at {{path}} is not touched, but queries and notebooks that read {{name}} will stop finding it.", {
+            ? t("Its entry is removed from the catalog. The data at {{path}} is not touched, but queries and notebooks that read {{name}} will stop finding it.", {
                 path: table.path,
                 name: table.name,
               })

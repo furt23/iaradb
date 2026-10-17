@@ -29,7 +29,7 @@ fn rows(ctx: &SessionContext, name: &str, ids: std::ops::Range<i64>) {
         Arc::new(Int64Array::from(ids.iter().map(|i| (i % 7 != 6).then_some(i % 3)).collect::<Vec<_>>())),
         Arc::new(StringArray::from(ids.iter().map(|i| format!("s{i}")).collect::<Vec<_>>())),
     ];
-    ctx.register_batches(name, schema(), vec![RecordBatch::try_new(schema(), cols).unwrap()]);
+    ctx.register_batches(name, schema(), vec![RecordBatch::try_new(schema(), cols).unwrap()]).unwrap();
 }
 
 fn frame(ids: std::ops::Range<i64>) -> (SessionContext, LazyFrame) {
@@ -260,7 +260,7 @@ fn failing_source(ctx: &SessionContext) {
     let text: Vec<String> = ids.iter().map(|i| if *i == ROWS - 1 { "oops".to_string() } else { (i % 1000).to_string() }).collect();
     let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false), Field::new("s", DataType::Utf8, false)]));
     let cols: Vec<ArrayRef> = vec![Arc::new(Int64Array::from(ids)), Arc::new(StringArray::from(text))];
-    ctx.register_batches("src", schema.clone(), vec![RecordBatch::try_new(schema, cols).unwrap()]);
+    ctx.register_batches("src", schema.clone(), vec![RecordBatch::try_new(schema, cols).unwrap()]).unwrap();
 }
 
 #[test]
@@ -401,7 +401,7 @@ fn types_are_stored_as_delta_knows_them() {
         Arc::new(TimestampNanosecondArray::from(vec![1_700_000_000_123_456_789, 0])),
         Arc::new(TimestampNanosecondArray::from(vec![1_700_000_000_123_456_789, 0]).with_timezone("UTC")),
     ];
-    ctx.register_batches("t", schema.clone(), vec![RecordBatch::try_new(schema, cols).unwrap()]);
+    ctx.register_batches("t", schema.clone(), vec![RecordBatch::try_new(schema, cols).unwrap()]).unwrap();
     let lf = ctx.sql("select * from t").unwrap();
     write(&lf, &path, WriteMode::Create, &[], false).unwrap();
     let snap = snapshot(&path);

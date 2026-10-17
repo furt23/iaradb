@@ -21,13 +21,13 @@ fn ctx() -> SessionContext {
     let b = StringArray::from(vec!["x", "x", "y", "y", "z"]);
     let c = Int64Array::from(vec![10, 20, 5, 30, 1]);
     let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a), Arc::new(b), Arc::new(c)]).unwrap();
-    ctx.register_batches("small", schema, vec![batch]);
+    ctx.register_batches("small", schema, vec![batch]).unwrap();
 
     let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false), Field::new("g", DataType::Int64, false)]));
     let id = Int64Array::from_iter_values(0..10_000);
     let g = Int64Array::from_iter_values((0..10_000).map(|i| i % 10));
     let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(id), Arc::new(g)]).unwrap();
-    ctx.register_batches("big", schema, vec![batch]);
+    ctx.register_batches("big", schema, vec![batch]).unwrap();
     ctx
 }
 

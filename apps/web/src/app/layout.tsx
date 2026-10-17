@@ -25,7 +25,7 @@ import { Workbench } from "@/features/workbench/Workbench";
 import { WorkbenchProvider } from "@/features/workbench/WorkbenchProvider";
 import { authMode } from "@/server/auth/access";
 import { currentUser } from "@/server/auth/session";
-import { catalogSchemas, catalogTables } from "@/server/workspace/catalog";
+import { catalogList, catalogSchemas, catalogTables } from "@/server/workspace/catalog";
 import { listTree, type FileNode } from "@/server/workspace/files";
 import { workspaceName } from "@/server/workspace/sources";
 
@@ -66,7 +66,7 @@ export default async function RootLayout({
   };
   // read from the Studio's files: no kernel (nor cluster) is needed to draw the shell
   // (the catalog and file list are read on every render: router.refresh() updates them)
-  const [tree, name, catalog, schemas] = await Promise.all([
+  const [tree, name, catalog, schemas, catalogs] = await Promise.all([
     listTree().catch((): FileNode[] => []),
     workspaceName(),
     catalogTables().then(
@@ -74,6 +74,7 @@ export default async function RootLayout({
       (e: Error) => ({ tables: [], error: e.message }),
     ),
     catalogSchemas().catch(() => []),
+    catalogList().catch(() => []),
   ]);
   return (
     <html lang="pt" suppressHydrationWarning>
@@ -105,6 +106,7 @@ export default async function RootLayout({
                                 <CatalogPanel
                                   tables={catalog.tables}
                                   schemas={schemas}
+                                  catalogs={catalogs}
                                   error={catalog.error}
                                 />
                               ),

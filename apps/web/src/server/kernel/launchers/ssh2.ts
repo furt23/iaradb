@@ -45,8 +45,16 @@ function connectConfig(ep: SshEndpoint): ConnectConfig {
   };
 }
 
-/** Run one command; resolves with its exit code and output. */
-export function sshExec(ep: SshEndpoint, command: string, timeoutMs = 30_000): Promise<{ code: number | null; stdout: string; stderr: string }> {
+/**
+ * Run one command; resolves with its exit code and output. `stdin`, when given, is its whole input (secrets go
+ * this way: a command line or an environment would show them to other processes).
+ */
+export function sshExec(
+  ep: SshEndpoint,
+  command: string,
+  timeoutMs = 30_000,
+  stdin?: string,
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const conn = new Client();
     const timer = setTimeout(() => {
@@ -61,6 +69,7 @@ export function sshExec(ep: SshEndpoint, command: string, timeoutMs = 30_000): P
             conn.end();
             return reject(err);
           }
+          if (stdin !== undefined) ch.end(stdin);
           let stdout = "";
           let stderr = "";
           ch.on("data", (d: Buffer) => (stdout += d.toString()));
@@ -80,8 +89,12 @@ export function sshExec(ep: SshEndpoint, command: string, timeoutMs = 30_000): P
   });
 }
 
-/** A kernel on the far end of an SSH session: its stdio is the protocol pipe. */
-export function ssh2Transport(ep: SshEndpoint, command: string): Transport {
+/**
+ * A kernel on the far end of an SSH session: its stdio is the protocol pipe.
+ * `before`: something the machine needs first; the session starts when it
+ * resolves, and the kernel exits with its error when it rejects.
+ */
+export function ssh2Transport(ep: SshEndpoint, command: string, before?: Promise<void>): Transport {
   const conn = new Client();
   let channel: ClientChannel | null = null;
   const queued: string[] = [];
@@ -107,8 +120,12 @@ export function ssh2Transport(ep: SshEndpoint, command: string): Transport {
       }),
     )
     .on("error", (e) => exit(`ssh to ${ep.host}: ${e.message}`))
-    .on("close", () => exit(`ssh connection to ${ep.host} closed`))
-    .connect(connectConfig(ep));
+    .on("close", () => exit(`ssh connection to ${ep.host} closed`));
+  const connect = () => {
+    if (exited === null) conn.connect(connectConfig(ep));
+  };
+  if (before) before.then(connect, (e: Error) => exit(e.message));
+  else connect();
   return {
     pid: undefined,
     onLine: (cb) => void (onLine = cb),

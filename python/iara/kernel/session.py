@@ -72,13 +72,14 @@ class KernelSession:
             "name": self.ws.name,
             "tables": catalog.list_tables(self.ws),
             "schemas": self.ws.schemas,
+            "catalogs": self.ws.catalog_names,
         }
 
     def _adopt(self, fresh: Workspace) -> dict[str, Any]:
         """Take a new catalog (the same object stays shared by every service)."""
         self.ws.name, self.ws.tables, self.ws.storage, self.ws._session = fresh.name, fresh.tables, fresh.storage, None
         self.ws.warehouse, self.ws.declared_schemas = fresh.warehouse, fresh.declared_schemas
-        self.ws.schema_locations, self.ws.discovered = fresh.schema_locations, []
+        self.ws.schema_locations, self.ws.discovered, self.ws.catalogs = fresh.schema_locations, [], fresh.catalogs
         return self.info()
 
     def report_catalog(self, emit: Emit) -> None:

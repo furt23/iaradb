@@ -93,7 +93,7 @@ fn run(ctx: &SessionContext, q: &str) -> String {
 fn aggregations_joins_sorts_and_windows_spill_under_a_small_limit_and_match() {
     let (schema, batches) = facts(1_200_000);
     let ctx = SessionContext::new();
-    ctx.register_batches("t", schema, batches);
+    ctx.register_batches("t", schema, batches).unwrap();
     let pool = memory::pool();
 
     pool.set_limit(usize::MAX);

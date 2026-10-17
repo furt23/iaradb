@@ -57,6 +57,27 @@ def test_publish_uploads_the_engine_for_its_version(sess, tmp_path: Path) -> Non
     assert {"Key": TAG_COMPONENT, "Value": "clusters"} in tags
 
 
+def test_publish_uploads_the_proxy_next_to_the_wheel(sess, tmp_path: Path) -> None:
+    import iara
+
+    wheel = tmp_path / f"iara-{iara.__version__}-cp310-abi3-manylinux_2_28_x86_64.whl"
+    wheel.write_bytes(b"wheel")
+    proxy = tmp_path / "built-proxy"
+    proxy.write_bytes(b"proxy")
+    publish.publish(sess, wheel, proxy)
+    publish.publish(sess, wheel, proxy)
+    s3, bucket = sess.client("s3"), artifacts_bucket(sess)
+    prefix = f"engine/{iara.__version__}/"
+    # the name is the one the boot script downloads (userData.ts: proxyUrlOf), whatever the file is called here
+    assert sorted(o["Key"] for o in s3.list_objects_v2(Bucket=bucket)["Contents"]) == sorted([prefix + "iara-s3-proxy-x86_64", prefix + wheel.name])
+    assert s3.get_object(Bucket=bucket, Key=prefix + "iara-s3-proxy-x86_64")["Body"].read() == b"proxy"
+    # publishing a wheel alone leaves the proxy where it is
+    newer = tmp_path / f"iara-{iara.__version__}-cp311-abi3-manylinux_2_28_x86_64.whl"
+    newer.write_bytes(b"newer")
+    publish.publish(sess, newer)
+    assert sorted(o["Key"] for o in s3.list_objects_v2(Bucket=bucket)["Contents"]) == sorted([prefix + "iara-s3-proxy-x86_64", prefix + newer.name])
+
+
 def test_cleanup_removes_everything(sess, tmp_path: Path) -> None:
     wheel = tmp_path / "iara-0.1.0-cp310-abi3-manylinux_2_28_x86_64.whl"
     wheel.write_bytes(b"wheel")

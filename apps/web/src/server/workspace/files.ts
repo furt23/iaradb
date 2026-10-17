@@ -61,6 +61,8 @@ async function walk(rel: string, depth: number, budget: { left: number }): Promi
   for (const e of entries) {
     if (budget.left-- <= 0) break;
     if (IGNORED.has(e.name) || (e.name.startsWith(".") && e.name !== ".gitignore")) continue;
+    // the catalog's text is kept by the Studio (catalogStore): a leftover file at the root is not the workspace's
+    if (!rel && e.name === "iara.toml") continue;
     const childRel = rel ? `${rel}/${e.name}` : e.name;
     if (e.isDirectory()) {
       const children = depth < MAX_DEPTH ? await walk(childRel, depth + 1, budget) : [];

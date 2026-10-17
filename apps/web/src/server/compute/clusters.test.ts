@@ -48,19 +48,20 @@ class FakeCloud implements CloudApi {
   launched: LaunchSpec[] = [];
   published = true;
   noSpot = false;
-  roleBuckets: string[] = [];
+  /** why the team's resources cannot be found (undefined: they exist) */
+  notSetUp?: Error;
   async artifactsBucket() {
     return "artifacts";
   }
   async engineWheel(version: string) {
     return this.published ? `s3://artifacts/engine/${version}/iara.whl` : null;
   }
-  async ensureNetwork() {
+  async teamNetwork() {
+    if (this.notSetUp) throw this.notSetUp;
     return "sg-1";
   }
-  async ensureRole(buckets: string[]) {
-    this.roleBuckets = buckets;
-    return "iara-cluster";
+  async instanceProfile() {
+    return "iara-cluster-acme";
   }
   async launch(spec: LaunchSpec) {
     this.launched.push(spec);
@@ -79,7 +80,7 @@ class FakeCloud implements CloudApi {
   }
 }
 
-function setup(opts: { local?: boolean } = {}) {
+function setup(opts: { local?: boolean; team?: { bucket: string; endpoint: string; region: string } } = {}) {
   let now = 1_000_000;
   const store = new MemoryStore();
   const cloud = new FakeCloud();
@@ -98,7 +99,7 @@ function setup(opts: { local?: boolean } = {}) {
       return { code: ready ? 0 : 1, stdout: ready ? "ready\n" : "" };
     },
     engineVersion: "0.1.0",
-    dataBuckets: async () => ["sales-data"],
+    teamBucket: () => opts.team ?? null,
     localCompute: opts.local ?? true,
     events: new ClusterEventLog({ dir: "events", files: memoryFiles() }),
     now: () => now,
@@ -123,11 +124,30 @@ describe("clusters", () => {
     await svc.settled(c.id);
     const rec = store.cluster(c.id)!;
     expect(rec.runtime).toMatchObject({ state: "running", instanceId: "i-1", publicIp: "198.51.100.9", hostKey: "SHA256-host" });
-    expect(cloud.roleBuckets).toEqual(["sales-data"]);
-    expect(cloud.launched[0]).toMatchObject({ instanceType: "m7i-flex.large", securityGroupId: "sg-1", volumeGb: 40, spot: false, tags: {} });
+    expect(cloud.launched[0]).toMatchObject({ instanceType: "m7i-flex.large", securityGroupId: "sg-1", instanceProfile: "iara-cluster-acme", volumeGb: 40, spot: false, tags: {} });
     expect(cloud.launched[0].userData).toContain("s3://artifacts/engine/0.1.0/iara.whl");
     // the machine's watchdog waits a little longer than the Studio's reaper
     expect(cloud.launched[0].userData).toContain(`-ge ${20 * 60} ]`);
+  });
+
+  it("installs the team bucket's proxy on the machine when the Studio has a bucket, without keys", async () => {
+    const team = { bucket: "team-data", endpoint: "https://acc.r2.cloudflarestorage.com", region: "auto" };
+    const { svc, cloud } = setup({ team });
+    const c = svc.create({ name: "dev" });
+    svc.start(c.id);
+    await svc.settled(c.id);
+    const script = cloud.launched[0].userData;
+    expect(script).toContain("'s3://artifacts/engine/0.1.0/iara-s3-proxy-x86_64' /usr/local/bin/iara-s3-proxy");
+    expect(script).toContain("--endpoint https://acc.r2.cloudflarestorage.com --bucket team-data --region auto --keys-file /etc/iara/r2.json");
+    expect(script).toContain("User=iara-proxy");
+  });
+
+  it("installs no proxy without a team bucket", async () => {
+    const { svc, cloud } = setup();
+    const c = svc.create({ name: "dev" });
+    svc.start(c.id);
+    await svc.settled(c.id);
+    expect(cloud.launched[0].userData).not.toContain("iara-s3-proxy");
   });
 
   it("refuses to start without a published engine, and terminates nothing", async () => {
@@ -138,6 +158,17 @@ describe("clusters", () => {
     await svc.settled(c.id);
     expect(store.cluster(c.id)!.runtime).toMatchObject({ state: "error" });
     expect(store.cluster(c.id)!.runtime.error).toMatch(/iara.cloud publish/);
+    expect(cloud.launched).toHaveLength(0);
+  });
+
+  it("fails a start clearly when the team's AWS setup is missing, and launches nothing", async () => {
+    const { svc, cloud, store } = setup();
+    cloud.notSetUp = new Error("AWS is not set up for team acme: run `python -m iara.cloud team-setup acme` with admin credentials");
+    const c = svc.create({ name: "dev" });
+    svc.start(c.id);
+    await svc.settled(c.id);
+    expect(store.cluster(c.id)!.runtime).toMatchObject({ state: "error" });
+    expect(store.cluster(c.id)!.runtime.error).toMatch(/team-setup acme/);
     expect(cloud.launched).toHaveLength(0);
   });
 
@@ -339,7 +370,9 @@ describe("cluster settings", () => {
     svc.update(c.id, { libraries: ["a", "pandas[parquet]", "b>=1"] });
     expect(store.cluster(c.id)!.runtime.libraries).toMatchObject({ "pandas[parquet]": { state: "installing" } });
     await svc.settled(c.id);
-    expect(commands.at(-1)).toContain("uv pip install -q --python /home/ec2-user/venv/bin/python 'pandas[parquet]' 'b>=1'");
+    expect(commands.at(-1)).toContain(
+      "sudo -n -u iara -H env -C /home/iara /home/iara/.local/bin/uv pip install -q --python /home/iara/venv/bin/python 'pandas[parquet]' 'b>=1'",
+    );
     expect(store.cluster(c.id)!.runtime.libraries).toMatchObject({ a: { state: "installed" }, "b>=1": { state: "installed" } });
     replies.push({ match: /uv pip install/, code: 1, stdout: "no such package\n" });
     svc.update(c.id, { libraries: ["a", "nope"] });

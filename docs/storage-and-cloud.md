@@ -41,13 +41,15 @@ iara.set_storage_options(
 )
 ```
 
-The same options can go in the workspace's `iara.toml`. Put credentials in the environment, not in this file.
+The same options can go in the workspace's `iara.toml` (read by the library) or in the Studio catalog (see [Studio](studio.md#catalog)). Put credentials in the environment, not in either file.
 
 ```toml
 [storage."s3://my-bucket"]
 endpoint = "https://<account_id>.r2.cloudflarestorage.com"
 region = "auto"
 ```
+
+In team mode (`IARA_BUCKET` set), Studio gives its kernels the endpoint (`IARA_STORAGE_ENDPOINT`) and region of the team bucket itself, so the catalog needs no `[storage]` section for it.
 
 Do not set `AWS_ENDPOINT_URL` for this: it applies to every bucket.
 
@@ -84,7 +86,7 @@ result["requests"]               # the requests this query made
 
 ## Clusters on AWS
 
-Studio can start EC2 machines and run notebook kernels on them. Create a cluster in the Compute section: instance type (default `m7i-flex.large`), disk size (default 40 GB) and idle timeout (default 15 minutes). A cluster stops itself after the idle timeout. The dialog starts the cluster right after creating it unless you untick "Start the cluster now". Notebooks attach to a cluster from the toolbar or from the cluster's Notebooks tab; a Local entry runs kernels on the Studio host.
+Studio can start EC2 machines and run notebook kernels on them. Create a cluster in the Compute section: instance type (default `m7i-flex.large`), disk size (default 40 GB) and idle timeout (default 15 minutes). A cluster stops itself after the idle timeout. The dialog starts the cluster right after creating it unless you untick "Start the cluster now". Notebooks attach to a cluster from the toolbar or from the cluster's Notebooks tab; a Local entry runs kernels on the Studio host, in development, under `iara serve`, or with `IARA_LOCAL_COMPUTE=1` only (a production build run otherwise, such as the Docker image, has none).
 
 Other cluster settings:
 
@@ -94,7 +96,7 @@ Other cluster settings:
 | Spot machine | off | Launches a spot instance. If EC2 has no spot capacity, the cluster starts on-demand and the event log says so. AWS can reclaim a spot machine at any time. |
 | Libraries | none | pip requirements (`polars==1.9`, `pandas[parquet]>=2.2`) installed at boot. URLs and environment markers are not accepted. Libraries added while the cluster runs are installed right away; removed ones leave at the next start. |
 | Environment variables | none | Passed to the cluster's kernels. Names starting with `IARA_` or `AWS_` are reserved. Don't put secrets here. |
-| Init script | none | Bash run as root at boot, after the engine and libraries, with the environment variables set. Up to 8 KB. If it fails, the start fails. |
+| Init script | none | Bash run at boot, after the engine and libraries, with the environment variables set. It runs as the kernel user (`iara`), not as root: it cannot install system packages or change the system. Up to 8 KB. If it fails, the start fails. |
 | AWS tags | none | Added to the machine and its volume. Keys starting with `aws:` or `iara:` and `Name` are reserved. |
 
 Spot, init script, tags, machine and disk only change while the cluster is terminated.
@@ -103,25 +105,59 @@ The cluster page has a Logs tab: the machine's boot log, the init script output 
 
 ### Credentials
 
-Studio reads `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` (and optionally `AWS_SESSION_TOKEN`) from the environment, or from a dotenv file named by `IARA_AWS_ENV_FILE`. The region is `IARA_AWS_REGION`, then `AWS_REGION`, then `us-east-1`.
+Each team's Studio uses its own AWS keys, made by `team-setup` (below): `IARA_AWS_ACCESS_KEY_ID` and `IARA_AWS_SECRET_ACCESS_KEY`, else `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (and optionally `AWS_SESSION_TOKEN`) from the environment or from a dotenv file named by `IARA_AWS_ENV_FILE`. The region is `IARA_AWS_REGION`, then `AWS_REGION`, then `us-east-1`. Never give a Studio admin keys.
 
-### What Studio creates
+### Setting up a team
 
-- An S3 bucket for engine builds and an instance role that can read the workspace buckets.
-- A security group that allows SSH only from the Studio server (`IARA_STUDIO_CIDRS`, or the server's public IP).
-- Amazon Linux 2023 instances with an encrypted EBS volume, IMDSv2 required.
-- An SSH key pair, stored under `IARA_STUDIO_DATA` (default `~/.iara/studio`).
+An administrator runs this once per team, with admin credentials:
 
-Set `IARA_TEAM` (lowercase letters, digits and hyphens, up to 31 characters) when several Studios share one AWS account. The security group becomes `iara-clusters-<team>`, the role and instance profile `iara-cluster-<team>`, and everything created for the team is tagged `iara:team=<team>`. Each team's role can then read only that team's workspace buckets. Without it, the names have no suffix. The engine bucket is shared.
+```bash
+python -m iara.cloud team-setup <team>    # prints IARA_AWS_ACCESS_KEY_ID=... and IARA_AWS_SECRET_ACCESS_KEY=...
+```
+
+It creates, or updates when run again:
+
+- the shared engine bucket, if missing;
+- the role and instance profile `iara-cluster-<team>`, which can only read the engine builds;
+- the security group `iara-clusters-<team>`;
+- the IAM user `iara-studio-<team>` with the policy `iara-studio-<team>`, and an access key for it (only when the user has none, or with `--new-key`).
+
+Put the two printed lines in the team's env file. The user's policy allows launching machines tagged `iara:team=<team>` with that security group and Amazon images, passing only the team's role, terminating only machines with the team's tag, changing the SSH rules of the team's security group, and the few reads Studio needs. It cannot create IAM resources or buckets, or touch another team's machines.
+
+`python -m iara.cloud team-remove <team> --yes` deletes them; it refuses while the team has machines that are not terminated.
+
+### Who runs what on a cluster machine
+
+Notebook code runs as the `iara` user. It has no sudo, and the firewall refuses its connections to the instance metadata service, so the machine's instance role is not available to it. The init script runs as `iara` too. Studio logs in over SSH as `ec2-user`, which has sudo, and starts each kernel with `sudo -u iara`.
+
+### Team bucket access from clusters
+
+When `IARA_BUCKET` is set, each machine runs `iara-s3-proxy`, a small program listening on `127.0.0.1:9000` as its own user (`iara-proxy`). It forwards S3 requests for the team bucket to `IARA_STORAGE_ENDPOINT` (AWS S3 in the region of `AWS_REGION` when that is empty), signing them with the bucket's keys. Kernels are started with `AWS_ENDPOINT_URL=http://127.0.0.1:9000`, `AWS_ALLOW_HTTP=true` and placeholder credentials, so they read and write the bucket through the proxy and never hold its keys. The catalog sent to a cluster kernel has no `[storage]` section for the bucket's endpoint.
+
+The boot script installs the proxy and its systemd unit but does not start it, because the keys are not on the machine yet. Before the first kernel starts on a machine, Studio sends `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` over SSH on standard input into `/etc/iara/r2.json`, which only `iara-proxy` can read, then starts the unit. The keys are not in the user data, the environment or any command line. With `IARA_BUCKET` set and those two variables missing, kernels do not start on clusters.
+
+Consequences:
+
+- Kernels on a cluster reach the team bucket only. The proxy refuses other buckets, and with the instance role out of reach, other `s3://` URLs work only if the code passes its own credentials as storage options. Without `IARA_BUCKET` there is no proxy and no ambient S3 access.
+- If the bucket's R2 token has client IP address filtering, the proxy's requests (from the machine's address) are refused.
+- Code on a cluster can still make requests through the proxy while the machine runs, but cannot read the keys or use them after the machine is gone.
+
+Clusters install the engine wheel and the proxy binary from the engine bucket: publish them again (below) after changing the kernel or the proxy.
+
+### What Studio does in AWS
+
+Studio creates nothing in IAM or S3. It finds the team's security group and instance profile by name (and fails with "AWS is not set up for team <team>" when `team-setup` was not run), sets the security group's SSH rule to the Studio server's address (`IARA_STUDIO_CIDRS`, or the server's public IP), and launches Amazon Linux 2023 instances tagged `iara:team=<team>`, with an encrypted EBS volume and IMDSv2 required. Its SSH key pair is stored under `IARA_STUDIO_DATA` (default `~/.iara/studio`).
+
+`IARA_TEAM` is required (lowercase letters, digits and hyphens, up to 31 characters).
 
 Every signed-in member can create, clone, start and terminate clusters and run jobs on them. Only a cluster's creator or a team admin (`IARA_ADMIN_EMAILS`) can edit or delete it; clusters created before owners were recorded are admin-only.
 
 ### Publishing the engine
 
-Machines install the engine from the S3 bucket. Build a Linux wheel (x86-64-v3, cross-compiled with zig) and upload it:
+Machines install the engine from the S3 bucket. Build a Linux wheel (x86-64-v3, cross-compiled with zig) and the proxy binary (`iara-s3-proxy`, built with cargo-zigbuild), and upload both to `engine/<version>/`:
 
 ```bash
-uv pip install ziglang maturin
+uv pip install ziglang maturin cargo-zigbuild
 python -m iara.cloud publish
 ```
 
@@ -132,7 +168,7 @@ python -m iara.cloud verify            # list Iara resources left in the account
 python -m iara.cloud cleanup --yes     # terminate cluster machines and delete the resources
 ```
 
-These need AWS credentials in the environment. All three take `--region` (default `us-east-1`); `publish` also takes `--wheel PATH` to upload an existing wheel. `verify` and `cleanup` take `--team ID` (or read `IARA_TEAM`) to cover only that team's resources, never the shared engine bucket; without it they cover every team.
+These need AWS credentials in the environment. All three take `--region` (default `us-east-1`); `publish` also takes `--wheel PATH` to upload an existing wheel (nothing is built then, and the proxy already uploaded stays). `verify` and `cleanup` take `--team ID` (or read `IARA_TEAM`) to cover only that team's resources, never the shared engine bucket; without it they cover every team.
 
 ### Settings
 

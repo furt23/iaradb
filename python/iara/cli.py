@@ -63,6 +63,8 @@ def serve(workspace: Path, port: int, dev: bool, browser: bool) -> int:
         "IARA_PYTHON": sys.executable,
         "PORT": str(port),
     }
+    # a built Studio offers no Local cluster unless asked: this one is the user's own, on their machine
+    env.setdefault("IARA_LOCAL_COMPUTE", "1")
     cmd = _studio_command(app, port, dev)
     print(f"Iara Studio · workspace {root}")
     proc = subprocess.Popen(cmd, cwd=app, env=env)
