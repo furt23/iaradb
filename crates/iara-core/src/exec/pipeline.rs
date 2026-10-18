@@ -29,6 +29,12 @@ pub trait Source: Send + Sync {
     fn run_morsel(&self, morsel: usize, emit: Emit<'_>) -> Result<()>;
     fn schema(&self) -> SchemaRef;
     fn describe(&self) -> String;
+    /// The batches it emits stay in memory whatever the query does (a
+    /// table's or a data frame's): a sink that keeps them adds no memory,
+    /// and spilling them would free none.
+    fn resident(&self) -> bool {
+        false
+    }
 }
 
 pub trait Operator: Send + Sync {
@@ -49,6 +55,12 @@ pub struct Pipeline {
 impl Pipeline {
     pub fn new(source: Arc<dyn Source>) -> Self {
         Self { source, ops: vec![] }
+    }
+
+    /// What reaches the sink is the source's resident batches (no operator
+    /// makes new ones).
+    pub fn resident(&self) -> bool {
+        self.ops.is_empty() && self.source.resident()
     }
 
     pub fn with_op(mut self, op: Arc<dyn Operator>) -> Self {
@@ -176,7 +188,8 @@ fn run_pipeline_inner<S: Sink>(
                     rows_in += b.num_rows() as u64;
                     pipeline.push_from(0, b, &mut |x| {
                         check()?;
-                        rows_out += x.num_rows() as u64;
+                        let rows = crate::exec::ops::deferred_selected_rows().unwrap_or_else(|| x.num_rows());
+                        rows_out += rows as u64;
                         sink.push(&mut local, m, x)
                     })
                 });
@@ -425,6 +438,9 @@ impl Source for MemorySource {
     }
     fn describe(&self) -> String {
         format!("{}[{} morsels]", self.label, self.batches.len())
+    }
+    fn resident(&self) -> bool {
+        !self.once
     }
 }
 

@@ -70,6 +70,10 @@ impl Source for MeasuredSource {
     fn describe(&self) -> String {
         self.inner.describe()
     }
+
+    fn resident(&self) -> bool {
+        self.inner.resident()
+    }
 }
 
 /// A sink timed around what it does with its input (`push`, `morsel_done`,

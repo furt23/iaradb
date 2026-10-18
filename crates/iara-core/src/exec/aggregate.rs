@@ -33,14 +33,14 @@ use std::sync::{Arc, OnceLock};
 
 use arrow::array::*;
 use arrow::compute::{SortOptions, take};
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::{DataType, Float64Type, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use parking_lot::Mutex;
 use rayon::prelude::*;
 
 use crate::error::{Result, WhError};
 use crate::exec::acc_list::{ListAcc, ListSpec};
-use crate::exec::acc_rows::{AccInput, AccPart, AccSet};
+use crate::exec::acc_rows::{AccInput, AccPart, AccSet, DecimalMeanRow, MeanRow, RowAcc};
 use crate::exec::accumulators::{create_accumulator, create_row_accumulator};
 use crate::exec::agg_spill::{AggSpill, arrays_bytes, group_bytes};
 use crate::exec::groupby::GroupKeys;
@@ -357,7 +357,52 @@ impl AggregateSink {
     }
 
     fn new_accs(&self) -> Result<AccSet> {
-        Ok(AccSet::new(self.aggs.iter().map(|a| a.acc_part()).collect::<Result<_>>()?))
+        let same_input = |a: &AggregateExpr, b: &AggregateExpr| -> bool {
+            !a.distinct
+                && !b.distinct
+                && !a.collects()
+                && !b.collects()
+                && a.input_type == b.input_type
+                && a.args.len() == b.args.len()
+                && a.args.iter().zip(&b.args).all(|(x, y)| x.same(y))
+                && match (&a.filter, &b.filter) {
+                    (None, None) => true,
+                    (Some(x), Some(y)) => x.same(y),
+                    _ => false,
+                }
+        };
+        let can_pair_sum_mean = |a: &AggregateExpr, b: &AggregateExpr| -> bool {
+            matches!((a.func, b.func), (AggFunc::Sum, AggFunc::Mean) | (AggFunc::Mean, AggFunc::Sum))
+                && matches!(a.input_type, Some(DataType::Decimal128(_, _) | DataType::Float64))
+                && same_input(a, b)
+        };
+        let mut parts = Vec::with_capacity(self.aggs.len());
+        for (i, a) in self.aggs.iter().enumerate() {
+            if let Some(owner) = (0..i).find(|&j| {
+                (a.func == self.aggs[j].func && same_input(a, &self.aggs[j]))
+                    || can_pair_sum_mean(a, &self.aggs[j])
+            }) {
+                if let Some(finisher) = create_row_accumulator(a.func, a.input_type.as_ref(), false) {
+                    parts.push(AccPart::FollowerRow { finisher, owner });
+                    continue;
+                }
+            }
+            if a.func == AggFunc::Sum
+                && (i + 1..self.aggs.len()).any(|j| can_pair_sum_mean(a, &self.aggs[j]))
+            {
+                if let Some(finisher) = create_row_accumulator(a.func, a.input_type.as_ref(), false) {
+                    let updater: Box<dyn RowAcc> = match a.input_type {
+                        Some(DataType::Decimal128(_, scale)) => Box::new(DecimalMeanRow::new(scale)),
+                        Some(DataType::Float64) => Box::new(MeanRow::<Float64Type>::new()),
+                        _ => unreachable!(),
+                    };
+                    parts.push(AccPart::PairedRow { updater, finisher });
+                    continue;
+                }
+            }
+            parts.push(a.acc_part()?);
+        }
+        Ok(AccSet::new(parts))
     }
 
     fn output(&self, keys: Vec<ArrayRef>, accs: &mut AccSet, n: usize) -> Result<RecordBatch> {
@@ -369,16 +414,25 @@ impl AggregateSink {
     /// Evaluate group keys and aggregate inputs: `(keys, [(args, filter)])`.
     #[allow(clippy::type_complexity)]
     fn evaluate(&self, batch: &RecordBatch, seq: u64) -> Result<(Vec<ArrayRef>, Vec<AccInput>)> {
-        let keys = self.group_exprs.iter().map(|e| e.evaluate_array(batch)).collect::<Result<Vec<_>>>()?;
+        let mut cache = Vec::new();
+        let keys = self
+            .group_exprs
+            .iter()
+            .map(|e| e.evaluate_array_cached(batch, &mut cache))
+            .collect::<Result<Vec<_>>>()?;
         let mut inputs = Vec::with_capacity(self.aggs.len());
         for a in &self.aggs {
-            let mut args = a.args.iter().map(|x| x.evaluate_array(batch)).collect::<Result<Vec<_>>>()?;
+            let mut args = a
+                .args
+                .iter()
+                .map(|x| x.evaluate_array_cached(batch, &mut cache))
+                .collect::<Result<Vec<_>>>()?;
             if a.collects() {
                 let n = batch.num_rows() as u64;
                 args.push(Arc::new(UInt64Array::from_iter_values(seq..seq + n)));
             }
             let f = match &a.filter {
-                Some(f) => Some(f.evaluate_array(batch)?),
+                Some(f) => Some(f.evaluate_array_cached(batch, &mut cache)?),
                 None => None,
             };
             inputs.push((args, f));
@@ -518,6 +572,19 @@ impl AggregateSink {
         }
         self.spill_buffered(local)
     }
+    /// Whether a preceding `Filter` operator can pass its boolean mask on
+    /// high-selectivity batches without physically compacting the batch.
+    pub fn can_defer_filter(&self) -> bool {
+        !self.group_exprs.is_empty()
+            && self.group_exprs.iter().all(|e| !e.is_fallible())
+            && self.aggs.iter().all(|a| {
+                !a.collects()
+                    && !a.distinct
+                    && create_row_accumulator(a.func, a.input_type.as_ref(), false).is_some()
+                    && a.args.iter().all(|x| !x.is_fallible())
+                    && a.filter.as_ref().is_none_or(|f| !f.is_fallible())
+            })
+    }
 }
 
 impl Sink for AggregateSink {
@@ -529,15 +596,28 @@ impl Sink for AggregateSink {
     }
 
     fn push(&self, local: &mut Result<AggLocal>, morsel: usize, batch: RecordBatch) -> Result<()> {
+        let deferred = crate::exec::ops::take_deferred_mask();
         let local = match local {
             Ok(l) => l,
             Err(e) => return Err(WhError::Execution(e.to_string())),
         };
+        let (batch, mask, selected) = match deferred {
+            Some((m, _)) if local.radix || local.keys.as_ref().is_some_and(|k| k.lead().is_some()) => {
+                let b = arrow::compute::filter_record_batch(&batch, &m)?;
+                let n = b.num_rows();
+                (b, None, n)
+            }
+            Some((m, sel)) => (batch, Some(m), sel),
+            None => {
+                let n = batch.num_rows();
+                (batch, None, n)
+            }
+        };
         let n = batch.num_rows();
-        if n == 0 {
+        if n == 0 || selected == 0 {
             return Ok(());
         }
-        local.rows += n;
+        local.rows += selected;
         let (keys, inputs) = self.evaluate(&batch, local.next_seq(morsel, n))?;
         if local.keys.is_none() {
             // global aggregation
@@ -547,7 +627,10 @@ impl Sink for AggregateSink {
             return self.buffer_scatter(local, keys, inputs);
         }
         let table = local.keys.as_mut().unwrap();
-        table.intern(&keys, &mut local.gids)?;
+        match &mask {
+            Some(m) => table.intern_masked(&keys, m.values(), &mut local.gids)?,
+            None => table.intern(&keys, &mut local.gids)?,
+        }
         let ng = table.len();
         local.accs.update(&inputs, &local.gids, ng)?;
         let fits = self.account_table(local);

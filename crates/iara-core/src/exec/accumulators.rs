@@ -158,7 +158,11 @@ impl MinMaxStrAcc {
             }
         };
         if better {
-            self.vals[g] = Some(v.into());
+            match &mut self.vals[g] {
+                // a value of the same length is overwritten in place
+                Some(cur) if cur.len() == v.len() => cur.copy_from_slice(v),
+                slot => *slot = Some(v.into()),
+            }
         }
     }
     fn run<'a>(&mut self, it: impl Iterator<Item = Option<&'a str>>, gids: &[u32]) {
@@ -218,8 +222,7 @@ impl Accumulator for MinMaxStrAcc {
         self.vals.resize(num_groups, None);
         for (&s, &d) in src.iter().zip(dst) {
             if let Some(Some(v)) = o.vals.get(s as usize) {
-                let v = v.clone();
-                self.offer(d as usize, &v);
+                self.offer(d as usize, v);
             }
         }
         Ok(())
@@ -292,8 +295,7 @@ impl Accumulator for MinMaxRowAcc {
         self.vals.resize(num_groups, None);
         for (&s, &d) in src.iter().zip(dst) {
             if let Some(Some(v)) = o.vals.get(s as usize) {
-                let v = v.clone();
-                self.offer(d as usize, &v);
+                self.offer(d as usize, v);
             }
         }
         Ok(())

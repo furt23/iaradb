@@ -24,6 +24,7 @@ pub mod pipeline;
 pub mod query;
 pub mod recursive;
 pub mod sort;
+pub mod topk_bound;
 pub mod spill;
 pub mod stream;
 pub mod unnest;

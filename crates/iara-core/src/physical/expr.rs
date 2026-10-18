@@ -163,37 +163,128 @@ impl PhysExpr {
         }
     }
 
+    /// Whether evaluating this expression on an unfiltered row could error
+    /// (e.g. division by zero or a fallible string parse).
+    pub fn is_fallible(&self) -> bool {
+        match self {
+            PhysExpr::Column { .. } | PhysExpr::Literal(_) => false,
+            PhysExpr::Binary { left, op, right, .. } => {
+                matches!(op, Operator::Divide | Operator::Modulo) || left.is_fallible() || right.is_fallible()
+            }
+            PhysExpr::Not(e) | PhysExpr::Negative(e) | PhysExpr::IsNull(e) | PhysExpr::IsNotNull(e) => e.is_fallible(),
+            PhysExpr::Cast { expr, safe, .. } => {
+                (!*safe && matches!(expr.data_type(), DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View))
+                    || expr.is_fallible()
+            }
+            PhysExpr::InList { expr, .. } | PhysExpr::Like { expr, .. } => expr.is_fallible(),
+            PhysExpr::Case { when_then, otherwise, .. } => {
+                when_then.iter().any(|(w, t)| w.is_fallible() || t.is_fallible())
+                    || otherwise.as_ref().is_some_and(|o| o.is_fallible())
+            }
+            PhysExpr::Function { .. } => true,
+        }
+    }
+
+    /// Structural equality for intra-batch common subexpression elimination.
+    pub fn same(&self, other: &Self) -> bool {
+        match (self, other) {
+            (PhysExpr::Column { index: a, .. }, PhysExpr::Column { index: b, .. }) => a == b,
+            (PhysExpr::Literal(a), PhysExpr::Literal(b)) => a == b,
+            (
+                PhysExpr::Binary { left: l1, op: o1, right: r1, dt: d1 },
+                PhysExpr::Binary { left: l2, op: o2, right: r2, dt: d2 },
+            ) => o1 == o2 && d1 == d2 && l1.same(l2) && r1.same(r2),
+            (PhysExpr::Not(a), PhysExpr::Not(b))
+            | (PhysExpr::Negative(a), PhysExpr::Negative(b))
+            | (PhysExpr::IsNull(a), PhysExpr::IsNull(b))
+            | (PhysExpr::IsNotNull(a), PhysExpr::IsNotNull(b)) => a.same(b),
+            (
+                PhysExpr::Cast { expr: e1, to: t1, safe: s1 },
+                PhysExpr::Cast { expr: e2, to: t2, safe: s2 },
+            ) => s1 == s2 && t1 == t2 && e1.same(e2),
+            (
+                PhysExpr::Function { func: f1, args: a1, dt: d1 },
+                PhysExpr::Function { func: f2, args: a2, dt: d2 },
+            ) => {
+                *f1 != ScalarFunc::Random
+                    && f1 == f2
+                    && d1 == d2
+                    && a1.len() == a2.len()
+                    && a1.iter().zip(a2).all(|(x, y)| x.same(y))
+            }
+            (
+                PhysExpr::InList { expr: e1, set: s1, has_null: h1, negated: n1 },
+                PhysExpr::InList { expr: e2, set: s2, has_null: h2, negated: n2 },
+            ) => Arc::ptr_eq(s1, s2) && h1 == h2 && n1 == n2 && e1.same(e2),
+            (
+                PhysExpr::Like { expr: e1, pattern: p1, negated: n1, case_insensitive: c1, .. },
+                PhysExpr::Like { expr: e2, pattern: p2, negated: n2, case_insensitive: c2, .. },
+            ) => n1 == n2 && c1 == c2 && p1 == p2 && e1.same(e2),
+            (
+                PhysExpr::Case { when_then: w1, otherwise: o1, dt: d1 },
+                PhysExpr::Case { when_then: w2, otherwise: o2, dt: d2 },
+            ) => {
+                d1 == d2
+                    && w1.len() == w2.len()
+                    && w1.iter().zip(w2).all(|((a, b), (c, d))| a.same(c) && b.same(d))
+                    && match (o1, o2) {
+                        (Some(x), Some(y)) => x.same(y),
+                        (None, None) => true,
+                        _ => false,
+                    }
+            }
+            _ => false,
+        }
+    }
+
     pub fn evaluate_array(&self, batch: &RecordBatch) -> Result<ArrayRef> {
         self.evaluate(batch)?.into_array(batch.num_rows())
     }
 
+    pub fn evaluate_array_cached<'a>(&'a self, batch: &RecordBatch, cache: &mut ExprCache<'a>) -> Result<ArrayRef> {
+        self.evaluate_cached(batch, cache)?.into_array(batch.num_rows())
+    }
+
     pub fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        let mut cache = Vec::new();
+        self.evaluate_cached(batch, &mut cache)
+    }
+
+    pub fn evaluate_cached<'a>(&'a self, batch: &RecordBatch, cache: &mut ExprCache<'a>) -> Result<ColumnarValue> {
+        match self {
+            PhysExpr::Column { index, .. } => return Ok(ColumnarValue::Array(batch.column(*index).clone())),
+            PhysExpr::Literal(s) => return Ok(ColumnarValue::Scalar(s.clone())),
+            _ => {
+                if let Some((_, v)) = cache.iter().find(|(e, _)| e.same(self)) {
+                    return Ok(v.clone());
+                }
+            }
+        }
         let n = batch.num_rows();
-        Ok(match self {
-            PhysExpr::Column { index, .. } => ColumnarValue::Array(batch.column(*index).clone()),
-            PhysExpr::Literal(s) => ColumnarValue::Scalar(s.clone()),
-            PhysExpr::Binary { left, op, right, .. } => eval_binary(left, *op, right, batch)?,
+        let out = match self {
+            PhysExpr::Column { .. } | PhysExpr::Literal(_) => unreachable!(),
+            PhysExpr::Binary { left, op, right, .. } => eval_binary(left, *op, right, batch, cache)?,
             PhysExpr::Not(e) => {
-                let v = e.evaluate(batch)?;
+                let v = e.evaluate_cached(batch, cache)?;
                 let s = v.is_scalar();
                 let a = v.into_array(if s { 1 } else { n })?;
                 wrap(Arc::new(not(a.as_boolean())?), s)
             }
             PhysExpr::Negative(e) => {
-                let v = e.evaluate(batch)?;
+                let v = e.evaluate_cached(batch, cache)?;
                 let s = v.is_scalar();
                 let a = v.into_array(if s { 1 } else { n })?;
                 wrap(numeric::neg_wrapping(&a)?, s)
             }
             PhysExpr::IsNull(e) | PhysExpr::IsNotNull(e) => {
-                let v = e.evaluate(batch)?;
+                let v = e.evaluate_cached(batch, cache)?;
                 let s = v.is_scalar();
                 let a = v.into_array(if s { 1 } else { n })?;
                 let r = if matches!(self, PhysExpr::IsNull(_)) { is_null(&a)? } else { is_not_null(&a)? };
                 wrap(Arc::new(r), s)
             }
             PhysExpr::Cast { expr, to, safe } => {
-                let v = expr.evaluate(batch)?;
+                let v = expr.evaluate_cached(batch, cache)?;
                 let s = v.is_scalar();
                 let a = v.into_array(if s { 1 } else { n })?;
                 let opts = CastOptions { safe: *safe, ..Default::default() };
@@ -201,13 +292,13 @@ impl PhysExpr {
             }
             PhysExpr::Case { when_then, otherwise, dt } => {
                 let mut acc = match otherwise {
-                    Some(o) => o.evaluate(batch)?,
+                    Some(o) => o.evaluate_cached(batch, cache)?,
                     None => ColumnarValue::Scalar(Scalar::null_of(dt)),
                 };
                 for (w, t) in when_then.iter().rev() {
-                    let mask = w.evaluate(batch)?.into_array(n)?;
+                    let mask = w.evaluate_cached(batch, cache)?.into_array(n)?;
                     let mask = crate::physical::expr::null_as_false(mask.as_boolean());
-                    let tv = t.evaluate(batch)?;
+                    let tv = t.evaluate_cached(batch, cache)?;
                     acc = ColumnarValue::Array(zip(&mask, &tv, &acc)?);
                 }
                 if n != 1 && acc.is_scalar() {
@@ -217,16 +308,18 @@ impl PhysExpr {
                 }
             }
             PhysExpr::InList { expr, set, has_null, negated } => {
-                let v = expr.evaluate(batch)?;
+                let v = expr.evaluate_cached(batch, cache)?;
                 let s = v.is_scalar();
                 let a = v.into_array(if s { 1 } else { n })?;
                 wrap(Arc::new(eval_in_set(&a, set, *has_null, *negated)?), s)
             }
             PhysExpr::Like { expr, pattern, negated, case_insensitive, matcher } => {
-                let v = expr.evaluate(batch)?;
+                let v = expr.evaluate_cached(batch, cache)?;
                 if let (Some(m), ColumnarValue::Array(a)) = (matcher, &v) {
                     if let Some(r) = m.evaluate(a.as_ref(), *negated) {
-                        return Ok(ColumnarValue::Array(Arc::new(r)));
+                        let out = ColumnarValue::Array(Arc::new(r));
+                        cache.push((self, out.clone()));
+                        return Ok(out);
                     }
                 }
                 use arrow::compute::kernels::comparison as c;
@@ -239,16 +332,28 @@ impl PhysExpr {
                 wrap(Arc::new(r), v.is_scalar())
             }
             PhysExpr::Function { func, args, dt } => {
-                let vals = args.iter().map(|a| a.evaluate(batch)).collect::<Result<Vec<_>>>()?;
+                let vals = args.iter().map(|a| a.evaluate_cached(batch, cache)).collect::<Result<Vec<_>>>()?;
                 functions::evaluate(*func, &vals, n, dt)?
             }
-        })
+        };
+        if !matches!(self, PhysExpr::Function { func: ScalarFunc::Random, .. }) {
+            cache.push((self, out.clone()));
+        }
+        Ok(out)
     }
 }
 
-fn eval_binary(left: &PhysExpr, op: Operator, right: &PhysExpr, batch: &RecordBatch) -> Result<ColumnarValue> {
+pub type ExprCache<'a> = Vec<(&'a PhysExpr, ColumnarValue)>;
+
+fn eval_binary<'a>(
+    left: &'a PhysExpr,
+    op: Operator,
+    right: &'a PhysExpr,
+    batch: &RecordBatch,
+    cache: &mut ExprCache<'a>,
+) -> Result<ColumnarValue> {
     let n = batch.num_rows();
-    let l = left.evaluate(batch)?;
+    let l = left.evaluate_cached(batch, cache)?;
     match op {
         Operator::And | Operator::Or => {
             let la = l.into_array(n)?;
@@ -262,13 +367,13 @@ fn eval_binary(left: &PhysExpr, op: Operator, right: &PhysExpr, batch: &RecordBa
                     return Ok(ColumnarValue::Array(la));
                 }
             }
-            let ra = right.evaluate(batch)?.into_array(n)?;
+            let ra = right.evaluate_cached(batch, cache)?.into_array(n)?;
             let rb = ra.as_boolean();
             let res = if op == Operator::And { and_kleene(lb, rb)? } else { or_kleene(lb, rb)? };
             Ok(ColumnarValue::Array(Arc::new(res)))
         }
         _ => {
-            let r = right.evaluate(batch)?;
+            let r = right.evaluate_cached(batch, cache)?;
             let scalar = l.is_scalar() && r.is_scalar();
             if op.is_comparison() && crate::nested::is_nested(l.data_type()) {
                 let m = if scalar { 1 } else { n };
@@ -307,6 +412,21 @@ fn eval_binary(left: &PhysExpr, op: Operator, right: &PhysExpr, batch: &RecordBa
 
 fn eval_in_set(a: &ArrayRef, set: &InSet, has_null: bool, negated: bool) -> Result<BooleanArray> {
     let n = a.len();
+    if !has_null && a.null_count() == 0 {
+        let values: Vec<bool> = match set {
+            InSet::Int(s) => {
+                let c = cast_with_options(a, &DataType::Int64, &CastOptions::default())?;
+                c.as_primitive::<Int64Type>().values().iter().map(|v| s.contains(v) ^ negated).collect()
+            }
+            InSet::Str(s) => match a.data_type() {
+                DataType::Utf8 => a.as_string::<i32>().iter().map(|v| s.contains(v.unwrap_or("")) ^ negated).collect(),
+                DataType::LargeUtf8 => a.as_string::<i64>().iter().map(|v| s.contains(v.unwrap_or("")) ^ negated).collect(),
+                DataType::Utf8View => a.as_string_view().iter().map(|v| s.contains(v.unwrap_or("")) ^ negated).collect(),
+                dt => return Err(WhError::Execution(format!("IN list on {dt}"))),
+            },
+        };
+        return Ok(BooleanArray::new(values.into(), None));
+    }
     let mut values = Vec::with_capacity(n);
     let mut valid = Vec::with_capacity(n);
     let mut push = |is_valid: bool, found: bool| {
@@ -333,17 +453,12 @@ fn eval_in_set(a: &ArrayRef, set: &InSet, has_null: bool, negated: bool) -> Resu
                 push(v, v && s.contains(&c.value(i)));
             }
         }
-        InSet::Str(s) => {
-            let it: Box<dyn Iterator<Item = Option<&str>>> = match a.data_type() {
-                DataType::Utf8 => Box::new(a.as_string::<i32>().iter()),
-                DataType::LargeUtf8 => Box::new(a.as_string::<i64>().iter()),
-                DataType::Utf8View => Box::new(a.as_string_view().iter()),
-                dt => return Err(WhError::Execution(format!("IN list on {dt}"))),
-            };
-            for v in it {
-                push(v.is_some(), v.is_some_and(|x| s.contains(x)));
-            }
-        }
+        InSet::Str(s) => match a.data_type() {
+            DataType::Utf8 => a.as_string::<i32>().iter().for_each(|v| push(v.is_some(), v.is_some_and(|x| s.contains(x)))),
+            DataType::LargeUtf8 => a.as_string::<i64>().iter().for_each(|v| push(v.is_some(), v.is_some_and(|x| s.contains(x)))),
+            DataType::Utf8View => a.as_string_view().iter().for_each(|v| push(v.is_some(), v.is_some_and(|x| s.contains(x)))),
+            dt => return Err(WhError::Execution(format!("IN list on {dt}"))),
+        },
     }
     Ok(BooleanArray::new(values.into(), Some(valid.into())))
 }
@@ -590,7 +705,9 @@ fn compile_function(func: ScalarFunc, args: &[Expr], schema: &PlanSchema) -> Res
         }
         Substring => {
             nargs(2, 3)?;
-            a[0] = to_utf8(a[0].clone())?;
+            if !matches!(a[0].data_type(), DataType::Utf8 | DataType::Utf8View) {
+                a[0] = to_utf8(a[0].clone())?;
+            }
             for i in 1..a.len() {
                 a[i] = cast_expr(a[i].clone(), &DataType::Int64)?;
             }

@@ -12,17 +12,18 @@ const cards = (
   .filter(([key]) => suites[key])
   .map(([key, title]) => {
     const sum = summary(suites[key]);
-    const ranked = [...sum.engines].sort((a, b) => a.sumS - b.sumS);
-    const iara = sum.engines.find((e) => e.key === 'iara')!;
+    const ranked = sum.engines.filter((e) => e.sumS != null).sort((a, b) => a.sumS! - b.sumS!);
+    const iara = ranked.find((e) => e.key === 'iara')!;
     const rank = ranked.indexOf(iara);
     const next = ranked[rank === 0 ? 1 : 0];
-    const badge = rank === 0 ? `${(next.sumS / iara.sumS).toFixed(2)}× vs ${next.name}` : `#${rank + 1} of ${ranked.length}`;
+    const badge = rank === 0 ? `${(next.sumS! / iara.sumS!).toFixed(2)}× vs ${next.name}` : `#${rank + 1} of ${ranked.length}`;
     return {
       title,
       badge,
-      label: `sum of ${sum.shared} queries all engines ran`,
+      label: `sum of all ${sum.of} queries`,
       engines: sum.engines.map((e) => e.key),
       values: Object.fromEntries(sum.engines.map((e) => [e.key, e.sumS])),
+      notes: Object.fromEntries(sum.engines.filter((e) => e.sumS == null).map((e) => [e.key, `ran ${e.ran} of ${sum.of}`])),
     };
   });
 const others = (suites.tpch_sf10?.engines ?? []).filter((e) => e !== 'iara').map((e) => names[e]);
@@ -43,7 +44,7 @@ const others = (suites.tpch_sf10?.engines ?? []).filter((e) => e !== 'iara').map
             <h3>{c.title}</h3>
             <span class="bench-card__badge">{c.badge}</span>
           </div>
-          <BenchBars title={c.title} unit="s" engines={c.engines} names={names} rows={[{ label: c.label, values: c.values }]} />
+          <BenchBars title={c.title} unit="s" engines={c.engines} names={names} rows={[{ label: c.label, values: c.values, notes: c.notes }]} />
         </div>
       ))}
     </div>

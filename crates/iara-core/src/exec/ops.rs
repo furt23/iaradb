@@ -63,10 +63,26 @@ pub fn make_batch(schema: &SchemaRef, mut cols: Vec<arrow::array::ArrayRef>, row
     )?)
 }
 
+thread_local! {
+    static DEFERRED_MASK: std::cell::RefCell<Option<(arrow::array::BooleanArray, usize)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Take the deferred filter mask attached to the current batch on this thread, if any.
+pub fn take_deferred_mask() -> Option<(arrow::array::BooleanArray, usize)> {
+    DEFERRED_MASK.with(|c| c.borrow_mut().take())
+}
+
+/// Number of selected rows in the current batch on this thread if a filter mask is deferred.
+pub fn deferred_selected_rows() -> Option<usize> {
+    DEFERRED_MASK.with(|c| c.borrow().as_ref().map(|(_, s)| *s))
+}
+
 pub struct FilterOp {
     pub predicate: PhysExpr,
     /// Columns to keep after filtering (fused projection).
     pub projection: Option<Vec<usize>>,
+    /// Defer physical batch compaction on high-selectivity batches for a downstream AggregateSink.
+    pub defer_mask: bool,
 }
 
 impl Operator for FilterOp {
@@ -85,6 +101,13 @@ impl Operator for FilterOp {
         if selected == n && mask.null_count() == 0 {
             return emit(batch);
         }
+        if self.defer_mask && selected * 2 > n {
+            let mask = crate::physical::expr::null_as_false(mask);
+            DEFERRED_MASK.with(|c| *c.borrow_mut() = Some((mask, selected)));
+            let res = emit(batch);
+            DEFERRED_MASK.with(|c| *c.borrow_mut() = None);
+            return res;
+        }
         emit(filter_record_batch(&batch, mask)?)
     }
 
@@ -101,10 +124,11 @@ pub struct ProjectOp {
 impl Operator for ProjectOp {
     fn execute(&self, batch: RecordBatch, emit: Emit<'_>) -> Result<()> {
         let n = batch.num_rows();
+        let mut cache = Vec::new();
         let cols = self
             .exprs
             .iter()
-            .map(|e| e.evaluate(&batch)?.into_array(n))
+            .map(|e| e.evaluate_cached(&batch, &mut cache)?.into_array(n))
             .collect::<Result<Vec<_>>>()?;
         emit(make_batch(&self.schema, cols, n)?)
     }

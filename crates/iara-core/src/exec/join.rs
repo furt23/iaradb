@@ -109,7 +109,7 @@ unsafe impl Sync for SendPtr {}
 
 /// Normalised probe/build keys: either packed i64s or row-format bytes.
 enum KeyBatch {
-    Int { values: ScalarBuffer<i64>, valid: Vec<bool> },
+    Int { values: ScalarBuffer<i64>, valid: Option<Vec<bool>> },
     Rows { rows: Rows, hashes: Vec<u64>, valid: Option<NullBuffer> },
 }
 
@@ -176,17 +176,19 @@ impl JoinHashTable {
                 match packing {
                     None => {
                         let values = ints[0].as_primitive::<arrow::datatypes::Int64Type>().values().clone();
-                        let valid = match nulls {
-                            None => vec![true; n],
-                            Some(nb) => (0..n).map(|i| nb.is_valid(i)).collect(),
-                        };
+                        let valid = nulls.map(|nb| (0..n).map(|i| nb.is_valid(i)).collect());
                         Ok(KeyBatch::Int { values, valid })
                     }
                     Some(p) => {
                         let mut kb = pack(&ints, p, n);
                         if let (KeyBatch::Int { valid, .. }, Some(nb)) = (&mut kb, nulls) {
-                            for (i, v) in valid.iter_mut().enumerate() {
-                                *v &= nb.is_valid(i);
+                            match valid {
+                                Some(v) => {
+                                    for (i, b) in v.iter_mut().enumerate() {
+                                        *b &= nb.is_valid(i);
+                                    }
+                                }
+                                None => *valid = Some((0..n).map(|i| nb.is_valid(i)).collect()),
                             }
                         }
                         Ok(kb)
@@ -205,7 +207,9 @@ impl JoinHashTable {
     #[inline]
     fn for_each_match(&self, kb: &KeyBatch, mut on_match: impl FnMut(usize, usize) -> bool) {
         match (&self.keys, kb) {
-            (BuildKeys::Int { table, .. }, KeyBatch::Int { values, valid }) => table.probe(values, valid, on_match),
+            (BuildKeys::Int { table, .. }, KeyBatch::Int { values, valid }) => {
+                table.probe(values, valid.as_deref(), on_match)
+            }
             (BuildKeys::Rows { rows: br, hashes: bh, chains, .. }, KeyBatch::Rows { rows, hashes, valid }) => {
                 for (i, &h) in hashes.iter().enumerate() {
                     if valid.as_ref().is_some_and(|v| v.is_null(i)) {
@@ -307,19 +311,46 @@ fn packing_of(ints: &[ArrayRef]) -> Option<Packing> {
 }
 
 fn pack(ints: &[ArrayRef], p: &Packing, n: usize) -> KeyBatch {
+    if ints.len() == 2 {
+        let a0 = ints[0].as_primitive::<arrow::datatypes::Int64Type>().values();
+        let a1 = ints[1].as_primitive::<arrow::datatypes::Int64Type>().values();
+        let (mn0, mx0, s0) = p.cols[0];
+        let (mn1, mx1, s1) = p.cols[1];
+        let mut values = Vec::with_capacity(n);
+        let mut any_invalid = false;
+        for (&v0, &v1) in a0.iter().zip(a1.iter()) {
+            let ok = v0 >= mn0 && v0 <= mx0 && v1 >= mn1 && v1 <= mx1;
+            any_invalid |= !ok;
+            let packed = if ok {
+                (((v0 - mn0) as i64) << s0) | (((v1 - mn1) as i64) << s1)
+            } else {
+                0
+            };
+            values.push(packed);
+        }
+        let valid = any_invalid.then(|| {
+            a0.iter()
+                .zip(a1.iter())
+                .map(|(&v0, &v1)| v0 >= mn0 && v0 <= mx0 && v1 >= mn1 && v1 <= mx1)
+                .collect()
+        });
+        return KeyBatch::Int { values: values.into(), valid };
+    }
     let mut values = vec![0i64; n];
     let mut valid = vec![true; n];
+    let mut any_invalid = false;
     for (c, &(mn, mx, shift)) in ints.iter().zip(&p.cols) {
         let a = c.as_primitive::<arrow::datatypes::Int64Type>();
         for (i, &v) in a.values().iter().enumerate() {
             if v < mn || v > mx {
                 valid[i] = false;
+                any_invalid = true;
             } else {
                 values[i] |= ((v - mn) as i64) << shift;
             }
         }
     }
-    KeyBatch::Int { values: values.into(), valid }
+    KeyBatch::Int { values: values.into(), valid: any_invalid.then_some(valid) }
 }
 
 // ---------------------------------------------------------------------------
@@ -580,6 +611,16 @@ impl HashJoinProbe {
         Ok(())
     }
 
+    fn emit_matched_pairs(&self, probe: &RecordBatch, p: &[u32], b: &[u32], emit: Emit<'_>) -> Result<()> {
+        for start in (0..p.len()).step_by(OUT_CHUNK) {
+            let end = (start + OUT_CHUNK).min(p.len());
+            let bidx = UInt32Array::from(b[start..end].to_vec());
+            let joined = self.assemble(probe, &p[start..end], &bidx)?;
+            emit(self.finish_batch(joined)?)?;
+        }
+        Ok(())
+    }
+
     /// Evaluate the residual predicate over the candidate pairs, `OUT_CHUNK`
     /// at a time. `each` gets the range of pairs, their joined batch (the
     /// batch the predicate saw, so kept pairs need no second assemble) and
@@ -774,8 +815,7 @@ impl Operator for HashJoinProbe {
                     if self.join_type == JoinType::Right {
                         self.mark(&b);
                     }
-                    let b: Vec<Option<u32>> = b.into_iter().map(Some).collect();
-                    return self.emit_pairs(&batch, &p, &b, emit);
+                    return self.emit_matched_pairs(&batch, &p, &b, emit);
                 }
                 match self.join_type {
                     JoinType::Inner => self.emit_filtered(&batch, &p, &b, emit).map(|_| ()),

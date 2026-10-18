@@ -7,9 +7,9 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, UInt64Array};
+use arrow::array::{Array, ArrayRef, AsArray, UInt64Array};
 use arrow::compute::interleave;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Int64Type, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
@@ -21,7 +21,7 @@ use super::source::{ParquetSource, ScanRequest};
 use crate::error::Result;
 use crate::exec::pipeline::{Emit, Source};
 use crate::expr::Expr;
-use crate::io::LateRows;
+use crate::io::{LateRows, ScanBound};
 
 /// A position is `file << FILE_SHIFT | row in the file`.
 const FILE_SHIFT: u32 = 40;
@@ -64,13 +64,23 @@ impl ParquetRows {
 }
 
 impl LateRows for ParquetRows {
-    fn positioned_source(&self, projection: &[usize], filters: &[Expr]) -> Result<Arc<dyn Source>> {
-        let req = ScanRequest { files: &self.files, table_schema: &self.table_schema, projection: projection.to_vec(), filters, fetch: None, conform: false };
+    fn positioned_source(&self, projection: &[usize], filters: &[Expr], bound: Option<&ScanBound>) -> Result<Arc<dyn Source>> {
+        let req = ScanRequest {
+            files: &self.files,
+            table_schema: &self.table_schema,
+            projection: projection.to_vec(),
+            filters,
+            fetch: None,
+            conform: false,
+            row_numbers: true,
+            bound,
+        };
         let inner = ParquetSource::try_new(req)?;
+        // the row numbers become positions
         let mut fields = inner.schema().fields().to_vec();
-        fields.push(Arc::new(Field::new(POSITION_COLUMN, DataType::UInt64, false)));
+        *fields.last_mut().expect("row numbers") = Arc::new(Field::new(POSITION_COLUMN, DataType::UInt64, false));
         let schema = Arc::new(Schema::new(fields));
-        Ok(Arc::new(PositionedSource { inner, starts: self.starts.clone(), schema }))
+        Ok(Arc::new(PositionedSource { inner, schema }))
     }
 
     fn fetch(&self, projection: &[usize], positions: &[u64]) -> Result<RecordBatch> {
@@ -142,10 +152,11 @@ fn read_rows(file: &ParquetFile, rg: usize, rows: &[u64], projection: &[usize], 
     Ok(arrow::compute::concat_batches(schema, &parts)?)
 }
 
-/// A Parquet scan emitting each row's position as a last column.
+/// A Parquet scan emitting each row's position as a last column: its file
+/// and its number in the file, as the decoder numbers it (rows filtered
+/// while decoding keep their numbers).
 struct PositionedSource {
     inner: ParquetSource,
-    starts: Vec<Vec<u64>>,
     schema: SchemaRef,
 }
 
@@ -155,15 +166,13 @@ impl Source for PositionedSource {
     }
 
     fn run_morsel(&self, morsel: usize, emit: Emit<'_>) -> Result<()> {
-        let (f, rg, first) = self.inner.morsel_start(morsel);
-        let base = ((f as u64) << FILE_SHIFT) | (self.starts[f][rg] + first as u64);
-        let mut at = base;
+        let file = (self.inner.morsel_file(morsel) as u64) << FILE_SHIFT;
         self.inner.run_morsel(morsel, &mut |b| {
-            let n = b.num_rows() as u64;
             let mut cols = b.columns().to_vec();
-            cols.push(Arc::new(UInt64Array::from_iter_values(at..at + n)));
-            at += n;
-            emit(RecordBatch::try_new_with_options(self.schema.clone(), cols, &RecordBatchOptions::new().with_row_count(Some(n as usize)))?)
+            let rows = cols.pop().expect("row numbers");
+            let rows = rows.as_primitive::<Int64Type>().values();
+            cols.push(Arc::new(UInt64Array::from_iter_values(rows.iter().map(|&r| file | r as u64))));
+            emit(RecordBatch::try_new_with_options(self.schema.clone(), cols, &RecordBatchOptions::new().with_row_count(Some(b.num_rows())))?)
         })
     }
 

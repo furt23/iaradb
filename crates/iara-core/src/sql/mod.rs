@@ -1227,6 +1227,9 @@ impl<'a> SqlPlanner<'a> {
             }
         }
         let id = self.fresh();
+        if let Some(res) = try_window_decorrelate(&outer_plan, &agg_input, &outer_keys, &inner_keys, &a.aggs, &a.schema, &p.exprs[0], id) {
+            return Ok(res);
+        }
         // magic set (DuckDB's "delim join"): aggregate only the groups the
         // outer query can ask for, i.e. semi-join the subquery input with the
         // distinct correlation keys of the outer relation -- or of the smallest
@@ -1706,6 +1709,212 @@ fn key_sources(plan: &LogicalPlan, cols: &[Column], out: &mut Vec<LogicalPlan>) 
         }
         _ => {}
     }
+}
+
+struct LeafScan {
+    table_name: String,
+    qualifier: Option<String>,
+    schema: PlanSchema,
+    preds: Vec<Expr>,
+}
+
+fn unqualify_expr(e: &Expr) -> Expr {
+    e.clone()
+        .transform_up(&mut |x| match x {
+            Expr::Column(c) => Ok(Expr::Column(Column::from_name(c.name))),
+            other => Ok(other),
+        })
+        .unwrap_or_else(|_| e.clone())
+}
+
+fn decompose_equi_tree(plan: &LogicalPlan, leaves: &mut Vec<LeafScan>, joins: &mut Vec<(Column, Column)>) -> bool {
+    match plan {
+        LogicalPlan::Scan(s) if s.fetch.is_none() => {
+            leaves.push(LeafScan {
+                table_name: s.table_name.clone(),
+                qualifier: s.qualifier.clone(),
+                schema: s.schema.as_ref().clone(),
+                preds: vec![],
+            });
+            true
+        }
+        LogicalPlan::Filter(f) => {
+            let LogicalPlan::Scan(s) = f.input.as_ref() else { return false };
+            if s.fetch.is_none() {
+                let preds = split_conjunction(&f.predicate).into_iter().map(|c| unqualify_expr(&c)).collect();
+                leaves.push(LeafScan {
+                    table_name: s.table_name.clone(),
+                    qualifier: s.qualifier.clone(),
+                    schema: s.schema.as_ref().clone(),
+                    preds,
+                });
+                true
+            } else {
+                false
+            }
+        }
+        LogicalPlan::Join(j) if j.join_type == JoinType::Inner && j.filter.is_none() => {
+            for (l, r) in &j.on {
+                let (Some(lc), Some(rc)) = (l.as_column(), r.as_column()) else { return false };
+                joins.push((lc.clone(), rc.clone()));
+            }
+            decompose_equi_tree(&j.left, leaves, joins) && decompose_equi_tree(&j.right, leaves, joins)
+        }
+        _ => false,
+    }
+}
+
+/// When the outer query is the subquery's input inner-joined with an extra
+/// relation solely on the correlation keys, and every aggregate is invariant
+/// to uniform partition multiplicity (`MIN`, `MAX`, `AVG`, `BOOL_AND`,
+/// `BOOL_OR`), evaluate the aggregates as a window over `outer_plan` instead
+/// of scanning and joining the subquery tables a second time.
+#[allow(clippy::too_many_arguments)]
+fn try_window_decorrelate(
+    outer_plan: &LogicalPlan,
+    agg_input: &LogicalPlan,
+    outer_keys: &[Expr],
+    inner_keys: &[Expr],
+    aggs: &[Expr],
+    agg_schema: &PlanSchema,
+    proj_expr: &Expr,
+    id: usize,
+) -> Option<(LogicalPlan, Expr)> {
+    let outer_cols: Vec<Column> = outer_keys.iter().map(|e| e.as_column().cloned()).collect::<Option<_>>()?;
+    let inner_cols: Vec<Column> = inner_keys.iter().map(|e| e.as_column().cloned()).collect::<Option<_>>()?;
+    if outer_cols.is_empty() || outer_cols.len() != inner_cols.len() {
+        return None;
+    }
+    for ae in aggs {
+        let Expr::Agg { func, distinct, filter: None, order_by, .. } = ae.unalias_ref() else {
+            return None;
+        };
+        if !order_by.is_empty() {
+            return None;
+        }
+        match func {
+            AggFunc::Min | AggFunc::Max | AggFunc::BoolAnd | AggFunc::BoolOr => {}
+            AggFunc::Mean if !distinct => {}
+            _ => return None,
+        }
+    }
+    let outer_pushed = crate::optimizer::pushed_down(outer_plan);
+    let inner_pushed = crate::optimizer::pushed_down(agg_input);
+    let (mut outer_leaves, mut outer_joins) = (vec![], vec![]);
+    let (mut inner_leaves, mut inner_joins) = (vec![], vec![]);
+    if !decompose_equi_tree(&outer_pushed, &mut outer_leaves, &mut outer_joins)
+        || !decompose_equi_tree(&inner_pushed, &mut inner_leaves, &mut inner_joins)
+    {
+        return None;
+    }
+    if outer_leaves.len() <= inner_leaves.len() {
+        return None;
+    }
+    if (0..outer_leaves.len()).any(|i| outer_leaves[..i].iter().any(|l| l.table_name == outer_leaves[i].table_name))
+        || (0..inner_leaves.len()).any(|i| inner_leaves[..i].iter().any(|l| l.table_name == inner_leaves[i].table_name))
+    {
+        return None;
+    }
+    for il in &inner_leaves {
+        let ol = outer_leaves.iter().find(|o| o.table_name == il.table_name)?;
+        if il.preds.len() != ol.preds.len()
+            || !il.preds.iter().all(|p| ol.preds.contains(p))
+            || !ol.preds.iter().all(|p| il.preds.contains(p))
+        {
+            return None;
+        }
+    }
+    let resolve_leaf = |leaves: &[LeafScan], col: &Column| -> Option<(String, String)> {
+        let mut matches = leaves.iter().filter(|l| l.schema.has_column(col));
+        let first = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
+        Some((first.table_name.clone(), col.name.clone()))
+    };
+    let in_shared = |t: &str| inner_leaves.iter().any(|il| il.table_name == t);
+    let mut corr_pairs = Vec::with_capacity(outer_cols.len());
+    for (oc, ic) in outer_cols.iter().zip(&inner_cols) {
+        let o_ref = resolve_leaf(&outer_leaves, oc)?;
+        let i_ref = resolve_leaf(&inner_leaves, ic)?;
+        if in_shared(&o_ref.0) || !in_shared(&i_ref.0) {
+            return None;
+        }
+        let pair = if o_ref <= i_ref { (o_ref, i_ref) } else { (i_ref, o_ref) };
+        corr_pairs.push(pair);
+    }
+    let canon_joins = |leaves: &[LeafScan], joins: &[(Column, Column)]| -> Option<Vec<((String, String), (String, String))>> {
+        let mut out = Vec::with_capacity(joins.len());
+        for (l, r) in joins {
+            let a = resolve_leaf(leaves, l)?;
+            let b = resolve_leaf(leaves, r)?;
+            out.push(if a <= b { (a, b) } else { (b, a) });
+        }
+        Some(out)
+    };
+    let inner_pairs = canon_joins(&inner_leaves, &inner_joins)?;
+    let outer_pairs = canon_joins(&outer_leaves, &outer_joins)?;
+    if !inner_pairs.iter().all(|p| outer_pairs.contains(p)) || !corr_pairs.iter().all(|p| outer_pairs.contains(p)) {
+        return None;
+    }
+    for (a, b) in &outer_pairs {
+        match (in_shared(&a.0), in_shared(&b.0)) {
+            (true, true) if !inner_pairs.contains(&(a.clone(), b.clone())) => return None,
+            (true, false) | (false, true) if !corr_pairs.contains(&(a.clone(), b.clone())) => return None,
+            _ => {}
+        }
+    }
+    let map_col = |e: &Expr| -> Option<Expr> {
+        let mut ok = true;
+        let mapped = e
+            .clone()
+            .transform_up(&mut |x| match x {
+                Expr::Column(c) => {
+                    let Some((tname, cname)) = resolve_leaf(&inner_leaves, &c) else {
+                        ok = false;
+                        return Ok(Expr::Column(c));
+                    };
+                    let Some(ol) = outer_leaves.iter().find(|o| o.table_name == tname) else {
+                        ok = false;
+                        return Ok(Expr::Column(c));
+                    };
+                    Ok(Expr::Column(Column::new(ol.qualifier.clone(), cname)))
+                }
+                other => Ok(other),
+            })
+            .ok()?;
+        ok.then_some(mapped)
+    };
+    let mut win_exprs = Vec::with_capacity(aggs.len());
+    for (i, ae) in aggs.iter().enumerate() {
+        let Expr::Agg { func, args, distinct, .. } = ae.unalias_ref() else { return None };
+        let mapped_args: Vec<Expr> = args.iter().map(map_col).collect::<Option<_>>()?;
+        let mut we = crate::window::WindowExpr::new(
+            crate::window::WindowFunc::Agg(*func),
+            mapped_args,
+            outer_keys.to_vec(),
+            vec![],
+        );
+        we.distinct = *distinct;
+        win_exprs.push(Expr::Window(Box::new(we)).alias(format!("__sq{id}_w{i}")));
+    }
+    let win_plan = LogicalPlan::window(Arc::new(outer_plan.clone()), win_exprs).ok()?;
+    let mut ok = true;
+    let val_expr = proj_expr
+        .clone()
+        .unalias()
+        .transform_up(&mut |x| match x {
+            Expr::Column(c) => match agg_schema.maybe_index_of(&c) {
+                Ok(Some(i)) => Ok(Expr::Column(Column::from_name(format!("__sq{id}_w{i}")))),
+                _ => {
+                    ok = false;
+                    Ok(Expr::Column(c))
+                }
+            },
+            other => Ok(other),
+        })
+        .ok()?;
+    ok.then_some((win_plan, val_expr))
 }
 
 /// `JOIN ... USING (k)` / `NATURAL JOIN`: the key appears once, unqualified

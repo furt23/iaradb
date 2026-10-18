@@ -189,8 +189,25 @@ fn whole_partition(f: &WindowFunctionExpr, func: AggFunc, batch: &RecordBatch, l
         }
     }
     let groups = layout.partitions.len().max(1);
+    whole_partition_gids(f, func, batch, &gids, groups)
+}
+
+pub fn whole_partition_gids(
+    f: &WindowFunctionExpr,
+    func: AggFunc,
+    batch: &RecordBatch,
+    gids: &[u32],
+    groups: usize,
+) -> Result<ArrayRef> {
     let args = f.args.iter().map(|a| a.evaluate_array(batch)).collect::<Result<Vec<_>>>()?;
     let input_type = args.first().map(|a| a.data_type().clone());
+    if let Some(row_acc) = crate::exec::accumulators::create_row_accumulator(func, input_type.as_ref(), f.distinct) {
+        let mut accs = crate::exec::acc_rows::AccSet::new(vec![crate::exec::acc_rows::AccPart::Row(row_acc)]);
+        let fl = f.filter.as_ref().map(|fl| fl.evaluate_array(batch)).transpose()?;
+        accs.update(&[(args, fl)], gids, groups)?;
+        let per_partition = accs.finish(groups)?.into_iter().next().expect("one column");
+        return Ok(take(&per_partition, &UInt32Array::from(gids.to_vec()), None)?);
+    }
     let mut acc = create_accumulator(func, input_type.as_ref(), f.distinct)?;
     match &f.filter {
         Some(fl) => {
@@ -199,8 +216,8 @@ fn whole_partition(f: &WindowFunctionExpr, func: AggFunc, batch: &RecordBatch, l
             let kept: Vec<u32> = gids.iter().zip(mask.values().iter()).filter_map(|(g, m)| m.then_some(*g)).collect();
             acc.update(&vals, &kept, groups)?;
         }
-        None => acc.update(&args, &gids, groups)?,
+        None => acc.update(&args, gids, groups)?,
     }
     let per_partition = acc.finish(groups)?;
-    Ok(take(&per_partition, &UInt32Array::from(gids), None)?)
+    Ok(take(&per_partition, &UInt32Array::from(gids.to_vec()), None)?)
 }

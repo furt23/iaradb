@@ -12,6 +12,7 @@ use crate::exec::aggregate::AggregateExpr;
 use crate::exec::join::joined_schema;
 use crate::exec::ops::nullable_schema;
 use crate::exec::pipeline::Source;
+use crate::exec::topk_bound::TopKBound;
 use crate::exec::window::{WindowFunctionExpr, WindowSpec};
 use crate::io::work_table::WorkTable;
 use crate::expr::{AggFunc, Expr, Operator, SortExpr, WindowFunc, split_conjunction};
@@ -60,7 +61,8 @@ pub enum PhysicalPlan {
         schema: SchemaRef,
         order: Option<Vec<usize>>,
     },
-    Sort { input: Box<PhysicalPlan>, keys: Vec<PhysSortExpr>, fetch: Option<usize>, schema: SchemaRef },
+    /// `bound`: a top k's running bound, shared with the scan it reads
+    Sort { input: Box<PhysicalPlan>, keys: Vec<PhysSortExpr>, fetch: Option<usize>, schema: SchemaRef, bound: Option<Arc<TopKBound>> },
     Limit { input: Box<PhysicalPlan>, skip: usize, fetch: Option<usize> },
     Union { inputs: Vec<PhysicalPlan>, schema: SchemaRef },
     Values { batches: Vec<RecordBatch>, schema: SchemaRef },
@@ -295,7 +297,7 @@ pub fn predicate_selectivity_in(p: &Expr, input: Option<&LogicalPlan>) -> f64 {
             let s = (one * list.len() as f64).min(0.9);
             if *negated { 1.0 - s } else { s }
         }
-        Expr::Like { negated: false, .. } => 0.25,
+        Expr::Like { negated: false, .. } => 0.2,
         Expr::Like { negated: true, .. } => 0.9,
         Expr::IsNull(_) => 0.1,
         Expr::IsNotNull(_) => 0.9,
@@ -497,7 +499,10 @@ pub fn cardinality(plan: &LogicalPlan) -> (f64, f64) {
         }
         LogicalPlan::Filter(f) => {
             let (b, s) = cardinality(&f.input);
-            (b, s * selectivity_in(&f.predicate, Some(&f.input)))
+            let sel = selectivity_in(&f.predicate, Some(&f.input));
+            // HAVING predicates filter aggregated groups, which are typically selective
+            let having_factor = if matches!(f.input.as_ref(), LogicalPlan::Aggregate(_)) { 0.1 } else { 1.0 };
+            (b, s * sel * having_factor)
         }
         LogicalPlan::Projection(p) => cardinality(&p.input),
         LogicalPlan::SubqueryAlias(s) => cardinality(&s.input),
@@ -514,7 +519,7 @@ pub fn cardinality(plan: &LogicalPlan) -> (f64, f64) {
             let fsel = j.filter.as_ref().map(|f| residual_selectivity(f, &[j.left.schema(), j.right.schema()])).unwrap_or(1.0);
             match j.join_type {
                 JoinType::Inner if j.on.is_empty() => (lb * ls * rb * rs, fsel),
-                JoinType::Inner => (join_cardinality(&j.left, &j.right, &j.on, lb * ls, rb * rs), fsel),
+                JoinType::Inner => (join_cardinality(&j.left, &j.right, &j.on, lb, rb), ls * rs * fsel),
                 JoinType::Left => (lb, ls),
                 JoinType::Right => (rb, rs),
                 JoinType::Full => (lb * ls + rb * rs, 1.0),
@@ -595,6 +600,118 @@ fn output_schema(names: &PlanSchema, _exprs: &[PhysExpr]) -> SchemaRef {
     ))
 }
 
+/// Group keys that other keys determine are not hashed: constants, and
+/// deterministic expressions of plain column keys (`GROUP BY ip, ip - 1`,
+/// `GROUP BY 1, url`). The aggregate groups by the other keys and computes
+/// these from its output.
+fn derived_keys(a: &crate::logical::Aggregate) -> Result<Option<PhysicalPlan>> {
+    let plain: Vec<&crate::schema::Column> = a.group_by.iter().filter_map(|g| g.unalias_ref().as_column()).collect();
+    let volatile = |e: &Expr| {
+        let mut found = false;
+        e.visit(&mut |x| {
+            found |= matches!(x, Expr::Function { func: crate::expr::ScalarFunc::Random, .. });
+            !found
+        });
+        found
+    };
+    let derived: Vec<bool> = a
+        .group_by
+        .iter()
+        .map(|g| {
+            let g = g.unalias_ref();
+            g.as_column().is_none()
+                && !g.contains_subquery()
+                && !g.contains_agg()
+                && !g.contains_window()
+                && !volatile(g)
+                && g.column_refs().iter().all(|c| plain.contains(&c))
+        })
+        .collect();
+    // grouping by constants alone still makes no group of an empty input
+    if !derived.contains(&true) || derived.iter().all(|&d| d) {
+        return Ok(None);
+    }
+    let nk = a.group_by.len();
+    let kept: Vec<usize> = (0..nk).filter(|&i| !derived[i]).collect();
+    let fields: Vec<_> = kept.iter().copied().chain(nk..a.schema.len()).map(|i| a.schema.qualified_field(i).clone()).collect();
+    let inner_schema = Arc::new(PlanSchema::new(fields));
+    let mut exprs = Vec::with_capacity(a.schema.len());
+    for i in 0..nk {
+        let e = match kept.iter().position(|&k| k == i) {
+            Some(j) => key_column(&inner_schema, j),
+            // a key whose column is aliased away resolves to nothing: leave the aggregate as it is
+            None => match compile(a.group_by[i].unalias_ref(), &inner_schema) {
+                Ok(e) => cast_expr(e, a.schema.field(i).data_type())?,
+                Err(_) => return Ok(None),
+            },
+        };
+        exprs.push(e);
+    }
+    for j in kept.len()..inner_schema.len() {
+        exprs.push(key_column(&inner_schema, j));
+    }
+    let group_by = kept.iter().map(|&i| a.group_by[i].clone()).collect();
+    let inner = crate::logical::Aggregate { input: a.input.clone(), group_by, aggs: a.aggs.clone(), schema: inner_schema };
+    let input = create_physical_plan(&LogicalPlan::Aggregate(inner))?;
+    let schema = output_schema(&a.schema, &exprs);
+    Ok(Some(PhysicalPlan::Project { input: Box::new(input), exprs, schema }))
+}
+
+/// Column `i` of a plan schema, as an expression.
+fn key_column(schema: &PlanSchema, i: usize) -> PhysExpr {
+    let f = schema.field(i);
+    PhysExpr::Column { index: i, name: f.name().clone(), dt: f.data_type().clone() }
+}
+
+/// An ungrouped `MIN` / `MAX` / `COUNT` of a whole table, answered by the
+/// table's metadata (`SELECT min(d), max(d) FROM t` reads no rows).
+fn stats_aggregate(a: &crate::logical::Aggregate) -> Result<Option<PhysicalPlan>> {
+    use crate::io::StatsAgg;
+    let LogicalPlan::Scan(s) = a.input.as_ref() else { return Ok(None) };
+    if !a.group_by.is_empty() || !s.filters.is_empty() || s.fetch.is_some() {
+        return Ok(None);
+    }
+    let table_column = |e: &Expr| -> Option<usize> {
+        let i = s.schema.maybe_index_of(e.as_column()?).ok()??;
+        Some(s.projection.as_ref().map_or(i, |p| p[i]))
+    };
+    let mut wanted = Vec::with_capacity(a.aggs.len());
+    for ae in &a.aggs {
+        let Expr::Agg { func, args, distinct: false, filter: None, order_by } = ae.unalias_ref() else { return Ok(None) };
+        let w = match (func, args.as_slice()) {
+            _ if !order_by.is_empty() => None,
+            (AggFunc::Count, []) => Some(StatsAgg::Rows),
+            (AggFunc::Count, [Expr::Literal(v)]) if !v.is_null() => Some(StatsAgg::Rows),
+            (AggFunc::Count, [e]) => table_column(e).map(StatsAgg::NonNull),
+            (AggFunc::Min, [e]) => table_column(e).map(StatsAgg::Min),
+            (AggFunc::Max, [e]) => table_column(e).map(StatsAgg::Max),
+            _ => None,
+        };
+        let Some(w) = w else { return Ok(None) };
+        wanted.push(w);
+    }
+    // a scan of no columns already counts rows from metadata
+    if wanted.iter().all(|w| *w == StatsAgg::Rows) {
+        return Ok(None);
+    }
+    let Some(values) = s.source.stats_aggregates(&wanted) else { return Ok(None) };
+    let fields: Vec<Field> = a.schema.fields().iter().map(|f| Field::new(f.name(), f.field.data_type().clone(), true)).collect();
+    let cols = values
+        .iter()
+        .zip(&fields)
+        .map(|(v, f)| Ok(arrow::compute::cast(&v.to_array(1)?, f.data_type())?))
+        .collect::<Result<Vec<_>>>()?;
+    let schema: SchemaRef = Arc::new(Schema::new(fields));
+    let batch = RecordBatch::try_new(schema.clone(), cols)?;
+    Ok(Some(PhysicalPlan::Values { batches: vec![batch], schema }))
+}
+
+thread_local! {
+    /// Scans being planned under a top k (by address), with the top k's
+    /// running bound and whether the scan's source took it.
+    static BOUNDED_SCANS: std::cell::RefCell<Vec<(*const crate::logical::Scan, crate::io::ScanBound, bool)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 fn swap_order(nl: usize, nr: usize) -> Vec<usize> {
     // logical output = [left..., right...]; joined = [right(probe)..., left(build)...]
     (0..nl).map(|i| nr + i).chain(0..nr).collect()
@@ -603,7 +720,17 @@ fn swap_order(nl: usize, nr: usize) -> Vec<usize> {
 pub fn create_physical_plan(plan: &LogicalPlan) -> Result<PhysicalPlan> {
     Ok(match plan {
         LogicalPlan::Scan(s) => {
-            let source = s.source.create_source(s.projection.as_deref(), &s.filters, s.fetch)?;
+            let bounded = BOUNDED_SCANS.with(|m| {
+                let mut m = m.borrow_mut();
+                let (_, b, used) = m.iter_mut().rev().find(|(p, ..)| std::ptr::eq(*p, s))?;
+                let source = s.source.create_bounded_source(s.projection.as_deref(), &s.filters, b)?;
+                *used = true;
+                Some(source)
+            });
+            let source = match bounded {
+                Some(source) => source?,
+                None => s.source.create_source(s.projection.as_deref(), &s.filters, s.fetch)?,
+            };
             let schema = source.schema();
             PhysicalPlan::Source { source, schema }
         }
@@ -647,6 +774,12 @@ pub fn create_physical_plan(plan: &LogicalPlan) -> Result<PhysicalPlan> {
             }
         }
         LogicalPlan::Aggregate(a) => {
+            if let Some(values) = stats_aggregate(a)? {
+                return Ok(values);
+            }
+            if let Some(p) = derived_keys(a)? {
+                return Ok(p);
+            }
             let input = create_physical_plan(&a.input)?;
             let in_schema = a.input.schema();
             let group_exprs = a.group_by.iter().map(|e| compile(e, in_schema)).collect::<Result<Vec<_>>>()?;
@@ -713,7 +846,21 @@ pub fn create_physical_plan(plan: &LogicalPlan) -> Result<PhysicalPlan> {
             if let Some(p) = crate::physical::late::plan(s, &compile)? {
                 return Ok(p);
             }
-            let input = create_physical_plan(&s.input)?;
+            // the scan under a top k may drop rows past its running bound
+            let bounded = crate::physical::late::bounded_scan(s);
+            if let Some((scan, b)) = &bounded {
+                BOUNDED_SCANS.with(|m| m.borrow_mut().push((*scan, b.clone(), false)));
+            }
+            let input = create_physical_plan(&s.input);
+            let bound = bounded.and_then(|(scan, b)| {
+                let used = BOUNDED_SCANS.with(|m| {
+                    let mut m = m.borrow_mut();
+                    let at = m.iter().rposition(|(p, ..)| std::ptr::eq(*p, scan)).expect("registered");
+                    m.remove(at).2
+                });
+                used.then_some(b.bound)
+            });
+            let input = input?;
             let keys = s
                 .exprs
                 .iter()
@@ -725,8 +872,13 @@ pub fn create_physical_plan(plan: &LogicalPlan) -> Result<PhysicalPlan> {
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
+            // without a scan to share it, the bound still drops rows before the sort buffers them
+            let bound = bound.or_else(|| {
+                let first = keys.first().filter(|k| s.fetch.is_some() && TopKBound::supports(&k.expr.data_type()))?;
+                Some(Arc::new(TopKBound::new(first.descending, first.nulls_first)))
+            });
             let schema = input.schema();
-            PhysicalPlan::Sort { input: Box::new(input), keys, fetch: s.fetch, schema }
+            PhysicalPlan::Sort { input: Box::new(input), keys, fetch: s.fetch, schema, bound }
         }
         LogicalPlan::Limit(l) => {
             PhysicalPlan::Limit { input: Box::new(create_physical_plan(&l.input)?), skip: l.skip, fetch: l.fetch }

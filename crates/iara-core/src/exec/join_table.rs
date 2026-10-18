@@ -182,7 +182,7 @@ impl IntTable {
     /// equals a valid probe key; returning false skips that probe row's
     /// remaining matches.
     #[inline]
-    pub fn probe(&self, keys: &[i64], valid: &[bool], mut on_match: impl FnMut(usize, usize) -> bool) {
+    pub fn probe(&self, keys: &[i64], valid: Option<&[bool]>, mut on_match: impl FnMut(usize, usize) -> bool) {
         let n = keys.len();
         let hashes: Vec<u64> = keys.iter().map(|&k| hash_u64(k as u64)).collect();
         let dir = self.dir.as_ptr();
@@ -202,7 +202,7 @@ impl IntTable {
                     prefetch(unsafe { entries.add(self.range(b, d).0) });
                 }
             }
-            if !valid[i] {
+            if valid.is_some_and(|v| !v[i]) {
                 continue;
             }
             let h = hashes[i];
@@ -228,7 +228,7 @@ mod tests {
 
     fn matches(t: &IntTable, keys: &[i64]) -> Vec<(usize, usize)> {
         let mut out = vec![];
-        t.probe(keys, &vec![true; keys.len()], |i, b| {
+        t.probe(keys, None, |i, b| {
             out.push((i, b));
             true
         });
@@ -256,7 +256,7 @@ mod tests {
     fn invalid_probe_rows_and_early_stop() {
         let t = IntTable::build(&[4i64, 4, 4], None);
         let mut seen = vec![];
-        t.probe(&[4, 4], &[false, true], |i, b| {
+        t.probe(&[4, 4], Some(&[false, true]), |i, b| {
             seen.push((i, b));
             false
         });

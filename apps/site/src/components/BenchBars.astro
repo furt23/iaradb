@@ -35,14 +35,10 @@ const valid = (r: Row, k: string) => r.values[k] != null && !r.notes?.[k];
 const bestOf = (r: Row) => Math.min(...keys.filter((k) => valid(r, k)).map((k) => r.values[k] as number));
 const allVals = rows.flatMap((r) => keys.map((k) => r.values[k]).filter((v): v is number => v != null));
 const rawMax = Math.max(1, ...allVals);
-// Default detail cap: 1.5x the largest per-query median, so one slow engine does not flatten the rest
-const median = (xs: number[]) => {
-  const v = [...xs].sort((a, b) => a - b);
-  return v.length ? (v[(v.length - 1) >> 1] + v[v.length >> 1]) / 2 : 0;
-};
-const medianMax = Math.max(1, ...rows.map((r) => median(keys.map((k) => r.values[k]).filter((v): v is number => v != null))));
-const niceStep = medianMax * 1.5 >= 2000 ? 500 : 50;
-const detailMax = capMax ?? Math.min(rawMax, Math.ceil((medianMax * 1.5) / niceStep) * niceStep);
+// Default detail cap: 2.5x the slowest per-query best time, so slow engines do not flatten the rest
+const bestMax = Math.max(1, ...rows.map((r) => bestOf(r)).filter((v) => Number.isFinite(v)));
+const niceStep = bestMax * 2.5 >= 2000 ? 500 : 50;
+const detailMax = capMax ?? Math.min(rawMax, Math.ceil((bestMax * 2.5) / niceStep) * niceStep);
 
 const pct = (v: number, m = rawMax) => `${Math.min(100, (v / m) * 100).toFixed(2)}%`;
 const fmt = (v: number) => (unit === 'ms' ? Math.round(v).toLocaleString('en-US') : v.toFixed(v < 10 ? 2 : 1));
@@ -69,6 +65,8 @@ const plotMinWidth = Math.max(780, rows.length * (engines.length * 7 + 10));
       <div class="bb__rows">
         {rows.map((r) => {
           const best = bestOf(r);
+          // a slow engine would shrink every other bar; bars past 4x the fastest are cut
+          const scale = Math.min(rawMax, best * 4);
           return (
             <div class="bb__row">
               <div class="bb__label">{r.label}</div>
@@ -82,7 +80,7 @@ const plotMinWidth = Math.max(780, rows.length * (engines.length * 7 + 10));
                         <span class="bb__value bb__value--na">{r.notes?.[e.key] ?? 'n/a'}</span>
                       ) : (
                         <>
-                          <span class={`bb__bar bb__bar--${e.key}`} style={`width: ${pct(v)}`} />
+                          <span class={`bb__bar bb__bar--${e.key} ${v > scale ? 'bb__bar--cut' : ''}`} style={`width: ${pct(v, scale)}`} />
                           <span
                             class={`bb__value ${e.key === 'iara' ? 'bb__value--iara' : ''} ${v === best ? 'bb__value--best' : ''}`}
                           >
@@ -430,6 +428,11 @@ const plotMinWidth = Math.max(780, rows.length * (engines.length * 7 + 10));
 
   .hchart__col-bar.is-flagged {
     opacity: 0.35;
+  }
+
+  .bb__bar--cut {
+    -webkit-mask: linear-gradient(90deg, #000 calc(100% - 14px), transparent calc(100% - 14px), transparent calc(100% - 10px), #000 calc(100% - 10px));
+    mask: linear-gradient(90deg, #000 calc(100% - 14px), transparent calc(100% - 14px), transparent calc(100% - 10px), #000 calc(100% - 10px));
   }
 
   .bb__value {

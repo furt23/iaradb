@@ -40,6 +40,18 @@ pub struct ColumnStats {
     pub exact: bool,
 }
 
+/// An ungrouped aggregate of a whole table that metadata may answer
+/// ([`TableProvider::stats_aggregates`]); columns are the table's.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum StatsAgg {
+    /// `COUNT(*)`
+    Rows,
+    /// `COUNT(column)`
+    NonNull(usize),
+    Min(usize),
+    Max(usize),
+}
+
 pub trait TableProvider: Send + Sync + Debug {
     fn schema(&self) -> SchemaRef;
     fn num_rows(&self) -> Option<usize>;
@@ -55,6 +67,11 @@ pub trait TableProvider: Send + Sync + Debug {
     /// Per-column min / max / null counts from file metadata (None = not
     /// available for this kind of table).
     fn column_stats(&self) -> Option<Vec<ColumnStats>> {
+        None
+    }
+    /// The values of ungrouped aggregates over the whole table, answered
+    /// from file metadata; None unless the metadata gives every one exactly.
+    fn stats_aggregates(&self, _aggs: &[StatsAgg]) -> Option<Vec<crate::scalar::Scalar>> {
         None
     }
     /// Where the table's files live, when it is a folder of Parquet files
@@ -83,12 +100,25 @@ pub trait TableProvider: Send + Sync + Debug {
     fn late_rows(&self) -> Option<Arc<dyn LateRows>> {
         None
     }
+    /// A source like [`Self::create_source`] that drops rows past a top k's
+    /// running bound while it reads (None: this kind of table cannot).
+    fn create_bounded_source(&self, _projection: Option<&[usize]>, _filters: &[Expr], _bound: &ScanBound) -> Option<Result<Arc<dyn Source>>> {
+        None
+    }
+}
+
+/// A top k's running bound on a column of the scanned table (see
+/// [`crate::exec::topk_bound`]).
+#[derive(Debug, Clone)]
+pub struct ScanBound {
+    pub column: usize,
+    pub bound: Arc<crate::exec::topk_bound::TopKBound>,
 }
 
 /// A table whose rows can be read by position: a scan emitting each row's
 /// position (a last UInt64 column), and the other columns of given rows.
 pub trait LateRows: Send + Sync {
-    fn positioned_source(&self, projection: &[usize], filters: &[Expr]) -> Result<Arc<dyn Source>>;
+    fn positioned_source(&self, projection: &[usize], filters: &[Expr], bound: Option<&ScanBound>) -> Result<Arc<dyn Source>>;
     /// Columns `projection` of the rows at `positions`, in that order.
     fn fetch(&self, projection: &[usize], positions: &[u64]) -> Result<arrow::record_batch::RecordBatch>;
 }

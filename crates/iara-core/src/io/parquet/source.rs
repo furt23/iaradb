@@ -5,9 +5,12 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::SchemaRef;
+use arrow::array::Array;
+use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
-use parquet::arrow::ProjectionMask;
+use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
+use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
+use parquet::arrow::{ProjectionMask, RowNumber};
 use rayon::prelude::*;
 
 use super::batch_size;
@@ -19,7 +22,9 @@ use super::prune::keep_row_groups;
 use crate::error::Result;
 use crate::exec::pipeline::{Emit, Source};
 use crate::exec::query::QueryHandle;
+use crate::exec::topk_bound::{TopKBound, ordinal_at};
 use crate::expr::Expr;
+use crate::io::ScanBound;
 use crate::io::object::config;
 use crate::io::object::prefetch::{self, FetchGroups, Prefetcher};
 
@@ -46,6 +51,12 @@ pub struct ParquetSource {
     columns: Option<Vec<FileColumns>>,
     /// filters applied while decoding (files laid out like the table only)
     late_filter: Option<LateFilter>,
+    /// per file, the metadata that also decodes each row's number in the
+    /// file (a last Int64 column), when asked for
+    numbered: Option<Vec<ArrowReaderMetadata>>,
+    /// a top k's bound, and per morsel the ordinal range (and NULLs) of the
+    /// bound column's statistics: morsels past the bound are skipped
+    bound: Option<(Arc<TopKBound>, Vec<Option<(i64, i64, bool)>>)>,
 }
 
 pub struct ScanRequest<'a> {
@@ -56,11 +67,23 @@ pub struct ScanRequest<'a> {
     pub fetch: Option<usize>,
     /// the files' columns are matched to the table's by name
     pub conform: bool,
+    /// emit each row's number in its file as a last Int64 column
+    pub row_numbers: bool,
+    /// a top k's running bound (files laid out like the table only)
+    pub bound: Option<&'a ScanBound>,
 }
 
 impl ParquetSource {
     pub fn try_new(req: ScanRequest<'_>) -> Result<Self> {
-        let schema = Arc::new(req.table_schema.project(&req.projection)?);
+        let mut schema = Arc::new(req.table_schema.project(&req.projection)?);
+        let numbered = if req.row_numbers {
+            let mut fields = schema.fields().to_vec();
+            fields.push(row_number_field());
+            schema = Arc::new(Schema::new(fields));
+            Some(numbered_metas(req.files)?)
+        } else {
+            None
+        };
         let mut morsels = surviving_row_groups(req.files, req.table_schema, req.filters);
         let row_groups_kept = morsels.len();
         let row_groups_total = req.files.iter().map(|f| f.meta.metadata().num_row_groups()).sum();
@@ -85,9 +108,16 @@ impl ParquetSource {
             cancel: crate::exec::query::current(),
             columns: None,
             late_filter: None,
+            numbered,
+            bound: None,
         };
+        let bound = req.bound.filter(|_| !req.conform);
         if !req.conform && req.fetch.is_none() {
-            src.late_filter = LateFilter::new(req.table_schema, &src.projection, req.filters);
+            src.late_filter = LateFilter::new(req.table_schema, &src.projection, req.filters, bound);
+        }
+        if let Some(b) = bound {
+            let ranges = morsel_ranges(&src.files, &src.morsels, req.table_schema.field(b.column).name());
+            src.bound = Some((b.bound.clone(), ranges));
         }
         if req.conform {
             src.columns = Some(src.files.iter().map(|f| FileColumns::new(f, req.table_schema, &src.projection)).collect());
@@ -159,6 +189,50 @@ fn surviving_row_groups(files: &[Arc<ParquetFile>], schema: &SchemaRef, filters:
     per_file.into_iter().flatten().collect()
 }
 
+/// The virtual column of a row's number in its file.
+fn row_number_field() -> FieldRef {
+    Arc::new(Field::new("__row_number", DataType::Int64, false).with_extension_type(RowNumber))
+}
+
+/// Per file, its metadata with a virtual row-number column added.
+fn numbered_metas(files: &[Arc<ParquetFile>]) -> Result<Vec<ArrowReaderMetadata>> {
+    let field = row_number_field();
+    files
+        .iter()
+        .map(|f| {
+            let opts = ArrowReaderOptions::new().with_schema(f.meta.schema().clone()).with_virtual_columns(vec![field.clone()])?;
+            Ok(ArrowReaderMetadata::try_new(f.meta.metadata().clone(), opts)?)
+        })
+        .collect()
+}
+
+/// Per morsel, the ordinal range of a column's row-group statistics and
+/// whether it has NULLs (None: unknown).
+fn morsel_ranges(files: &[Arc<ParquetFile>], morsels: &[Morsel], column: &str) -> Vec<Option<(i64, i64, bool)>> {
+    let per_file: Vec<Vec<Option<(i64, i64, bool)>>> = files
+        .iter()
+        .map(|f| {
+            let rgs = f.meta.metadata().row_groups();
+            let stats = || -> Option<Vec<Option<(i64, i64, bool)>>> {
+                let conv = StatisticsConverter::try_new(column, f.meta.schema(), f.meta.parquet_schema()).ok()?.with_missing_null_counts_as_zero(false);
+                let mins = conv.row_group_mins(rgs.iter()).ok()?;
+                let maxs = conv.row_group_maxes(rgs.iter()).ok()?;
+                let nulls = conv.row_group_null_counts(rgs.iter()).ok()?;
+                Some(
+                    (0..rgs.len())
+                        .map(|i| {
+                            let (lo, hi) = (ordinal_at(mins.as_ref(), i)?, ordinal_at(maxs.as_ref(), i)?);
+                            Some((lo, hi, !nulls.is_valid(i) || nulls.value(i) > 0))
+                        })
+                        .collect(),
+                )
+            };
+            stats().unwrap_or_else(|| vec![None; rgs.len()])
+        })
+        .collect();
+    morsels.iter().map(|m| per_file[m.file][m.row_group]).collect()
+}
+
 /// The first morsels that hold `rows` rows between them.
 fn enough_rows(mut morsels: Vec<Morsel>, rows: usize) -> Vec<Morsel> {
     let mut have = 0;
@@ -223,7 +297,17 @@ impl Source for ParquetSource {
         if self.projection.is_empty() {
             return self.emit_counts(self.fetch.map_or(m.rows, |f| m.rows.min(f)), emit);
         }
+        if let Some((bound, ranges)) = &self.bound {
+            if ranges[morsel].is_some_and(|(min, max, nulls)| !bound.may_hold(min, max, nulls)) {
+                // a prefetched morsel is still taken, or the prefetch window stalls
+                if let Some(p) = &self.prefetch {
+                    p.take(morsel, self.cancel.as_deref())?;
+                }
+                return Ok(());
+            }
+        }
         let f = &self.files[m.file];
+        let meta = self.numbered.as_ref().map_or(&f.meta, |n| &n[m.file]);
         let mask = self.mask(m.file);
         let cancel = self.cancel.as_deref();
         let input = match &self.prefetch {
@@ -231,11 +315,20 @@ impl Source for ParquetSource {
             None => f.blob.read(&chunk_ranges(&f.meta, m.row_group, &mask), cancel)?,
         };
         let Some(columns) = &self.columns else {
-            let part = Part { meta: &f.meta, row_group: m.row_group, rows: m.range, limit: self.fetch, schema: &self.schema };
-            return decode(input, mask, &part, self.late_filter.as_ref(), emit);
+            let part = Part { meta, row_group: m.row_group, rows: m.range, limit: self.fetch, schema: &self.schema };
+            let Some(late) = &self.late_filter else { return decode(input, mask, &part, None, emit) };
+            // timed with the operators above: they filter what the scan did not
+            let rg = f.meta.metadata().row_group(m.row_group);
+            let chunks: i64 = (0..rg.num_columns()).filter(|&c| mask.leaf_included(c)).map(|c| rg.column(c).uncompressed_size()).sum();
+            let bytes = (chunks.max(0) as u64).saturating_mul(m.rows as u64) / (rg.num_rows().max(1) as u64);
+            let mode = late.choose();
+            let start = std::time::Instant::now();
+            decode(input, mask, &part, mode.early().then_some(late), emit)?;
+            late.finished(mode, bytes, start.elapsed());
+            return Ok(());
         };
         let c = &columns[m.file];
-        let part = Part { meta: &f.meta, row_group: m.row_group, rows: m.range, limit: self.fetch, schema: &c.decoded };
+        let part = Part { meta, row_group: m.row_group, rows: m.range, limit: self.fetch, schema: &c.decoded };
         decode(input, mask, &part, None, &mut |b| emit(c.adapt(b, &self.schema)?))
     }
 

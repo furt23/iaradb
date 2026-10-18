@@ -146,6 +146,10 @@ pub fn order(rels: Vec<Relation>, conjuncts: &[&Expr]) -> Result<Option<Ordered>
         }
     }
 
+    let class_masks: Vec<u32> = classes
+        .iter()
+        .map(|c| c.iter().fold(0u32, |m, &i| m | (1 << members[i].rel)))
+        .collect();
     let full = (1u32 << n) - 1;
     let card = |s: u32| -> f64 {
         let mut c: f64 = (0..n).filter(|r| s & (1 << r) != 0).map(|r| rels[r].rows.max(1.0)).product();
@@ -167,8 +171,16 @@ pub fn order(rels: Vec<Relation>, conjuncts: &[&Expr]) -> Result<Option<Ordered>
                 }
             }
             ndvs.sort_by(|a, b| a.0.total_cmp(&b.0).then(rels[b.1].rows.total_cmp(&rels[a.1].rows)));
-            if let Some(&(_, partner)) = ndvs.first() {
-                for &(d, r) in ndvs.iter().skip(1) {
+            if let Some(&(_, first)) = ndvs.first() {
+                for (idx, &(d, r)) in ndvs.iter().enumerate().skip(1) {
+                    let partner = ndvs[..idx]
+                        .iter()
+                        .map(|&(_, p)| p)
+                        .find(|&p| {
+                            let pair = (1u32 << r) | (1u32 << p);
+                            class_masks.iter().filter(|&&m| m & pair == pair).count() > 1
+                        })
+                        .unwrap_or(first);
                     divisor[r][partner] *= d;
                 }
             }

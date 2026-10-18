@@ -19,6 +19,7 @@ chrono.workspace = true
 parking_lot.workspace = true
 memchr = "2"
 regex = "1"
+regex-syntax = "0.8"
 # Delta Lake transaction log (JSON actions, schema strings, file statistics)
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }

@@ -43,8 +43,8 @@
     {
      "label": "Q1",
      "ms": {
-      "iara": 312.4,
-      "duckdb": 294.0,
+      "iara": 257.2,
+      "duckdb": 283.2,
       "polars": 409.3,
       "datafusion": 459.9,
       "chdb": 499.9,
@@ -58,8 +58,8 @@
     {
      "label": "Q2",
      "ms": {
-      "iara": 70.5,
-      "duckdb": 73.4,
+      "iara": 48.3,
+      "duckdb": 71.6,
       "polars": 50.2,
       "datafusion": 117.1,
       "chdb": 130.3,
@@ -71,8 +71,8 @@
     {
      "label": "Q3",
      "ms": {
-      "iara": 176.6,
-      "duckdb": 232.3,
+      "iara": 185.1,
+      "duckdb": 219.1,
       "polars": 178.2,
       "datafusion": 279.3,
       "chdb": 579.4,
@@ -84,8 +84,8 @@
     {
      "label": "Q4",
      "ms": {
-      "iara": 89.5,
-      "duckdb": 162.8,
+      "iara": 92.4,
+      "duckdb": 154.3,
       "polars": 105.1,
       "datafusion": 145.2,
       "chdb": 214.7,
@@ -97,8 +97,8 @@
     {
      "label": "Q5",
      "ms": {
-      "iara": 190.3,
-      "duckdb": 269.1,
+      "iara": 192.7,
+      "duckdb": 257.6,
       "polars": 193.5,
       "datafusion": 429.7,
       "chdb": 502.4,
@@ -110,8 +110,8 @@
     {
      "label": "Q6",
      "ms": {
-      "iara": 132.2,
-      "duckdb": 116.7,
+      "iara": 94.5,
+      "duckdb": 109.5,
       "polars": 88.4,
       "datafusion": 164.0,
       "chdb": 188.3,
@@ -126,7 +126,7 @@
     {
      "label": "Q7",
      "ms": {
-      "iara": 204.8,
+      "iara": 211.5,
       "duckdb": 243.1,
       "polars": 410.8,
       "datafusion": 637.9,
@@ -139,8 +139,8 @@
     {
      "label": "Q8",
      "ms": {
-      "iara": 223.9,
-      "duckdb": 326.3,
+      "iara": 241.2,
+      "duckdb": 320.7,
       "polars": 217.9,
       "datafusion": 489.0,
       "chdb": 1207.5,
@@ -154,8 +154,8 @@
     {
      "label": "Q9",
      "ms": {
-      "iara": 444.0,
-      "duckdb": 549.1,
+      "iara": 412.7,
+      "duckdb": 537.9,
       "polars": 356.1,
       "datafusion": 759.2,
       "chdb": 1384.5,
@@ -169,8 +169,8 @@
     {
      "label": "Q10",
      "ms": {
-      "iara": 314.8,
-      "duckdb": 292.7,
+      "iara": 283.4,
+      "duckdb": 283.5,
       "polars": 259.8,
       "datafusion": 378.9,
       "chdb": 605.1,
@@ -182,8 +182,8 @@
     {
      "label": "Q11",
      "ms": {
-      "iara": 53.0,
-      "duckdb": 52.5,
+      "iara": 55.2,
+      "duckdb": 62.2,
       "polars": 59.9,
       "datafusion": 97.9,
       "chdb": 99.9,
@@ -195,8 +195,8 @@
     {
      "label": "Q12",
      "ms": {
-      "iara": 95.8,
-      "duckdb": 163.7,
+      "iara": 93.6,
+      "duckdb": 161.8,
       "polars": 102.9,
       "datafusion": 243.4,
       "chdb": 429.7,
@@ -208,8 +208,8 @@
     {
      "label": "Q13",
      "ms": {
-      "iara": 221.8,
-      "duckdb": 357.0,
+      "iara": 228.8,
+      "duckdb": 359.0,
       "polars": 272.5,
       "datafusion": 305.2,
       "chdb": 407.9,
@@ -221,8 +221,8 @@
     {
      "label": "Q14",
      "ms": {
-      "iara": 116.6,
-      "duckdb": 188.4,
+      "iara": 129.6,
+      "duckdb": 177.6,
       "polars": 123.5,
       "datafusion": 177.4,
       "chdb": 215.0,
@@ -236,8 +236,8 @@
     {
      "label": "Q15",
      "ms": {
-      "iara": 132.2,
-      "duckdb": 156.5,
+      "iara": 120.6,
+      "duckdb": 149.4,
       "polars": 120.8,
       "datafusion": 337.2,
       "chdb": 399.3,
@@ -249,8 +249,8 @@
     {
      "label": "Q16",
      "ms": {
-      "iara": 89.6,
-      "duckdb": 91.2,
+      "iara": 90.5,
+      "duckdb": 90.7,
       "polars": 90.0,
       "datafusion": 77.7,
       "chdb": 117.0,
@@ -262,8 +262,8 @@
     {
      "label": "Q17",
      "ms": {
-      "iara": 204.7,
-      "duckdb": 285.9,
+      "iara": 146.0,
+      "duckdb": 253.0,
       "polars": 123.1,
       "datafusion": 740.4,
       "chdb": 442.1,
@@ -275,8 +275,8 @@
     {
      "label": "Q18",
      "ms": {
-      "iara": 396.0,
-      "duckdb": 405.2,
+      "iara": 400.1,
+      "duckdb": 391.2,
       "polars": 346.9,
       "datafusion": 1017.6,
       "chdb": 390.2,
@@ -288,8 +288,8 @@
     {
      "label": "Q19",
      "ms": {
-      "iara": 255.7,
-      "duckdb": 274.4,
+      "iara": 221.3,
+      "duckdb": 260.0,
       "polars": 170.2,
       "datafusion": 274.8,
       "chdb": 445.5,
@@ -301,8 +301,8 @@
     {
      "label": "Q20",
      "ms": {
-      "iara": 204.2,
-      "duckdb": 224.9,
+      "iara": 180.1,
+      "duckdb": 207.6,
       "polars": 260.3,
       "datafusion": 307.5,
       "chdb": 484.6,
@@ -314,8 +314,8 @@
     {
      "label": "Q21",
      "ms": {
-      "iara": 336.2,
-      "duckdb": 756.0,
+      "iara": 359.2,
+      "duckdb": 713.5,
       "polars": 2131.7,
       "datafusion": 932.0,
       "chdb": 1461.0,
@@ -329,8 +329,8 @@
     {
      "label": "Q22",
      "ms": {
-      "iara": 69.2,
-      "duckdb": 104.2,
+      "iara": 61.3,
+      "duckdb": 101.0,
       "polars": 59.4,
       "datafusion": 70.0,
       "chdb": 123.3,
@@ -340,6 +340,1151 @@
      "notes": {}
     }
    ]
+  },
+  "tpch_sf100": {
+   "meta": {
+    "benchmark": "tpch",
+    "data": "/home/ec2-user/data/sf100",
+    "runs": 3,
+    "timeout": 900,
+    "date": "2026-10-18",
+    "machine": "x86_64",
+    "cpus": 16,
+    "ram_gb": 61.8,
+    "python": "3.12.14",
+    "versions": {
+     "duckdb": "1.5.6",
+     "iara": "0.1.0",
+     "polars": "2.0.0",
+     "datafusion": "55.0.0",
+     "chdb": "4.4.0",
+     "spark": "4.2.0",
+     "daft": "0.7.26"
+    }
+   },
+   "engines": [
+    "iara",
+    "duckdb",
+    "polars",
+    "datafusion",
+    "chdb",
+    "spark",
+    "daft"
+   ],
+   "queries": [
+    {
+     "label": "Q1",
+     "ms": {
+      "iara": 2472.1,
+      "duckdb": 2607.6,
+      "polars": 3985.7,
+      "datafusion": 4648.0,
+      "chdb": 4416.6,
+      "spark": 71477.2,
+      "daft": null
+     },
+     "notes": {
+      "daft": "InvalidSQLException: Daft error: DaftError::External Unable to create logical plan node."
+     }
+    },
+    {
+     "label": "Q2",
+     "ms": {
+      "iara": 300.0,
+      "duckdb": 622.8,
+      "polars": 213.1,
+      "datafusion": 1071.3,
+      "chdb": 859.3,
+      "spark": 10071.4,
+      "daft": 2578.9
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q3",
+     "ms": {
+      "iara": 1769.7,
+      "duckdb": 2511.4,
+      "polars": 2011.5,
+      "datafusion": 3128.0,
+      "chdb": 49964.7,
+      "spark": 23933.1,
+      "daft": 6631.2
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q4",
+     "ms": {
+      "iara": 863.7,
+      "duckdb": 1526.5,
+      "polars": 1157.4,
+      "datafusion": 1469.9,
+      "chdb": 2506.2,
+      "spark": 16120.9,
+      "daft": 5038.4
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q5",
+     "ms": {
+      "iara": 2101.1,
+      "duckdb": 2939.9,
+      "polars": 2008.1,
+      "datafusion": 4587.4,
+      "chdb": 5122.8,
+      "spark": 61872.4,
+      "daft": 6439.4
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q6",
+     "ms": {
+      "iara": 859.6,
+      "duckdb": 1150.6,
+      "polars": 868.8,
+      "datafusion": 1666.7,
+      "chdb": 1884.8,
+      "spark": 6260.7,
+      "daft": 14031.6
+     },
+     "notes": {
+      "chdb": "wrong result: row 0: (7534757999.2287,) != (12330426888.4637,)",
+      "daft": "wrong result: row 0: (7534757999.2287,) != (12330426888.4637,)"
+     }
+    },
+    {
+     "label": "Q7",
+     "ms": {
+      "iara": 2283.7,
+      "duckdb": 2984.4,
+      "polars": 4378.5,
+      "datafusion": 7567.7,
+      "chdb": 5205.0,
+      "spark": 23581.3,
+      "daft": 6037.6
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q8",
+     "ms": {
+      "iara": 2341.5,
+      "duckdb": 3696.7,
+      "polars": 2261.0,
+      "datafusion": 4658.1,
+      "chdb": 7847.8,
+      "spark": 35100.0,
+      "daft": null
+     },
+     "notes": {
+      "daft": "InvalidSQLException: Daft error: DaftError::External Unable to create logical plan node."
+     }
+    },
+    {
+     "label": "Q9",
+     "ms": {
+      "iara": 4369.3,
+      "duckdb": 6347.6,
+      "polars": 4802.6,
+      "datafusion": 7773.0,
+      "chdb": 224636.4,
+      "spark": 90632.8,
+      "daft": null
+     },
+     "notes": {
+      "daft": "InvalidSQLException: Daft error: DaftError::External Unable to create logical plan node."
+     }
+    },
+    {
+     "label": "Q10",
+     "ms": {
+      "iara": 3042.3,
+      "duckdb": 2860.5,
+      "polars": 2828.4,
+      "datafusion": 3854.2,
+      "chdb": 5752.8,
+      "spark": 19901.9,
+      "daft": 19578.8
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q11",
+     "ms": {
+      "iara": 392.3,
+      "duckdb": 487.5,
+      "polars": 567.7,
+      "datafusion": 991.1,
+      "chdb": 805.2,
+      "spark": 10084.1,
+      "daft": 3371.5
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q12",
+     "ms": {
+      "iara": 859.5,
+      "duckdb": 1660.8,
+      "polars": 977.0,
+      "datafusion": 2490.2,
+      "chdb": 4463.9,
+      "spark": 13091.4,
+      "daft": 20401.0
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q13",
+     "ms": {
+      "iara": 2359.4,
+      "duckdb": 3714.2,
+      "polars": 3669.2,
+      "datafusion": 3721.5,
+      "chdb": 4429.1,
+      "spark": 20541.0,
+      "daft": 9892.2
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q14",
+     "ms": {
+      "iara": 1143.0,
+      "duckdb": 1988.0,
+      "polars": 1226.4,
+      "datafusion": 1856.9,
+      "chdb": 2254.4,
+      "spark": 9722.9,
+      "daft": null
+     },
+     "notes": {
+      "daft": "InvalidSQLException: Daft error: DaftError::External Unable to create logical plan node."
+     }
+    },
+    {
+     "label": "Q15",
+     "ms": {
+      "iara": 1144.2,
+      "duckdb": 1780.2,
+      "polars": 1221.9,
+      "datafusion": 3577.7,
+      "chdb": 4259.0,
+      "spark": 20469.5,
+      "daft": 6653.8
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q16",
+     "ms": {
+      "iara": 638.9,
+      "duckdb": 914.9,
+      "polars": 651.8,
+      "datafusion": 575.1,
+      "chdb": 952.6,
+      "spark": 16027.6,
+      "daft": 2075.4
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q17",
+     "ms": {
+      "iara": 1352.9,
+      "duckdb": 3034.1,
+      "polars": 1085.6,
+      "datafusion": 8914.0,
+      "chdb": 4182.1,
+      "spark": 88996.4,
+      "daft": 20907.6
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q18",
+     "ms": {
+      "iara": 4597.0,
+      "duckdb": 4421.2,
+      "polars": 3770.5,
+      "datafusion": 13692.8,
+      "chdb": 4336.9,
+      "spark": 76625.1,
+      "daft": 12445.0
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q19",
+     "ms": {
+      "iara": 2084.4,
+      "duckdb": 2654.4,
+      "polars": 1844.1,
+      "datafusion": 2727.2,
+      "chdb": 4449.9,
+      "spark": 9745.3,
+      "daft": 22537.7
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q20",
+     "ms": {
+      "iara": 1580.0,
+      "duckdb": 2442.4,
+      "polars": 3032.1,
+      "datafusion": 3067.0,
+      "chdb": 3821.5,
+      "spark": 12793.5,
+      "daft": 7676.4
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q21",
+     "ms": {
+      "iara": 4045.2,
+      "duckdb": 7647.6,
+      "polars": 26149.5,
+      "datafusion": 12274.3,
+      "chdb": 55422.3,
+      "spark": 88510.4,
+      "daft": null
+     },
+     "notes": {
+      "daft": "DaftCoreException: DaftError::ValueError Failed to bind predicate for row group pruning on '/home/ec2-user/data/sf100/lineitem/lineitem.parquet': DaftError::InternalError Outer reference columns cannot be bound: col(l1."
+     }
+    },
+    {
+     "label": "Q22",
+     "ms": {
+      "iara": 460.0,
+      "duckdb": 1248.9,
+      "polars": 610.6,
+      "datafusion": 641.6,
+      "chdb": 1231.1,
+      "spark": 8135.6,
+      "daft": 1637.5
+     },
+     "notes": {}
+    }
+   ]
+  },
+  "clickbench": {
+   "meta": {
+    "benchmark": "clickbench",
+    "data": "/home/ec2-user/data/clickbench/hits_typed.parquet",
+    "runs": 3,
+    "timeout": 600,
+    "date": "2026-10-18",
+    "machine": "x86_64",
+    "cpus": 16,
+    "ram_gb": 61.8,
+    "python": "3.12.14",
+    "versions": {
+     "iara": "0.1.0",
+     "duckdb": "1.5.6",
+     "polars": "2.0.0",
+     "datafusion": "55.0.0",
+     "chdb": "4.4.0",
+     "spark": "4.2.0",
+     "daft": "0.7.26"
+    }
+   },
+   "engines": [
+    "iara",
+    "duckdb",
+    "polars",
+    "datafusion",
+    "chdb",
+    "spark",
+    "daft"
+   ],
+   "queries": [
+    {
+     "label": "Q0",
+     "ms": {
+      "iara": 2.0,
+      "duckdb": 75.4,
+      "polars": 3.2,
+      "datafusion": 1.1,
+      "chdb": 90.3,
+      "spark": 1018.3,
+      "daft": 60.7
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q1",
+     "ms": {
+      "iara": 9.2,
+      "duckdb": 73.7,
+      "polars": 6.5,
+      "datafusion": 27.5,
+      "chdb": 53.2,
+      "spark": 871.8,
+      "daft": 688.8
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q2",
+     "ms": {
+      "iara": 34.8,
+      "duckdb": 130.9,
+      "polars": 28.7,
+      "datafusion": 55.7,
+      "chdb": 108.6,
+      "spark": 893.8,
+      "daft": 95.8
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q3",
+     "ms": {
+      "iara": 40.5,
+      "duckdb": 125.6,
+      "polars": 44.7,
+      "datafusion": 64.2,
+      "chdb": 99.9,
+      "spark": 907.9,
+      "daft": 94.0
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q4",
+     "ms": {
+      "iara": 358.9,
+      "duckdb": 263.7,
+      "polars": 247.3,
+      "datafusion": 350.0,
+      "chdb": 306.7,
+      "spark": 2575.5,
+      "daft": 420.7
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q5",
+     "ms": {
+      "iara": 429.6,
+      "duckdb": 413.5,
+      "polars": 446.0,
+      "datafusion": 596.2,
+      "chdb": 480.7,
+      "spark": 2370.4,
+      "daft": 614.9
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q6",
+     "ms": {
+      "iara": 0.5,
+      "duckdb": 59.9,
+      "polars": 9.2,
+      "datafusion": 0.8,
+      "chdb": 86.3,
+      "spark": 1099.6,
+      "daft": null
+     },
+     "notes": {
+      "daft": "InvalidSQLException: Daft error: DaftError::External Unable to create logical plan node."
+     }
+    },
+    {
+     "label": "Q7",
+     "ms": {
+      "iara": 9.6,
+      "duckdb": 71.3,
+      "polars": 10.7,
+      "datafusion": 25.0,
+      "chdb": 60.3,
+      "spark": 1097.8,
+      "daft": 721.1
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q8",
+     "ms": {
+      "iara": 689.9,
+      "duckdb": 386.5,
+      "polars": 546.3,
+      "datafusion": 456.1,
+      "chdb": 496.7,
+      "spark": 2904.4,
+      "daft": 1753.3
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q9",
+     "ms": {
+      "iara": 757.4,
+      "duckdb": 482.0,
+      "polars": 623.6,
+      "datafusion": 569.5,
+      "chdb": 553.7,
+      "spark": 3517.2,
+      "daft": 1183.2
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q10",
+     "ms": {
+      "iara": 85.4,
+      "duckdb": 174.2,
+      "polars": 100.6,
+      "datafusion": 130.2,
+      "chdb": 229.0,
+      "spark": 1306.8,
+      "daft": 1684.8
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q11",
+     "ms": {
+      "iara": 100.7,
+      "duckdb": 197.0,
+      "polars": 102.9,
+      "datafusion": 147.6,
+      "chdb": 266.2,
+      "spark": 1336.0,
+      "daft": 1686.8
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q12",
+     "ms": {
+      "iara": 300.3,
+      "duckdb": 456.7,
+      "polars": 360.2,
+      "datafusion": 595.2,
+      "chdb": 453.1,
+      "spark": 2369.7,
+      "daft": 3423.4
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q13",
+     "ms": {
+      "iara": 405.9,
+      "duckdb": 700.7,
+      "polars": 793.0,
+      "datafusion": 719.6,
+      "chdb": 651.8,
+      "spark": 4322.9,
+      "daft": 5560.8
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q14",
+     "ms": {
+      "iara": 390.4,
+      "duckdb": 501.4,
+      "polars": 371.7,
+      "datafusion": 603.7,
+      "chdb": 522.0,
+      "spark": 2440.9,
+      "daft": 3541.7
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q15",
+     "ms": {
+      "iara": 293.8,
+      "duckdb": 303.0,
+      "polars": 310.1,
+      "datafusion": 384.0,
+      "chdb": 283.2,
+      "spark": 2704.4,
+      "daft": 526.5
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q16",
+     "ms": {
+      "iara": 1204.2,
+      "duckdb": 811.9,
+      "polars": 981.1,
+      "datafusion": 914.4,
+      "chdb": 965.1,
+      "spark": 4559.4,
+      "daft": 1466.2
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q17",
+     "ms": {
+      "iara": 1208.3,
+      "duckdb": 663.1,
+      "polars": 973.8,
+      "datafusion": 907.5,
+      "chdb": 483.9,
+      "spark": 4358.7,
+      "daft": 1357.7
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q18",
+     "ms": {
+      "iara": 2144.2,
+      "duckdb": 1426.9,
+      "polars": 1750.4,
+      "datafusion": 1615.0,
+      "chdb": 1719.7,
+      "spark": 7423.5,
+      "daft": 2244.9
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q19",
+     "ms": {
+      "iara": 27.5,
+      "duckdb": 94.3,
+      "polars": 34.6,
+      "datafusion": 28.3,
+      "chdb": 56.0,
+      "spark": 1103.4,
+      "daft": 84.7
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q20",
+     "ms": {
+      "iara": 725.5,
+      "duckdb": 887.3,
+      "polars": 911.9,
+      "datafusion": 946.0,
+      "chdb": 1266.6,
+      "spark": 3143.6,
+      "daft": 1191.4
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q21",
+     "ms": {
+      "iara": 830.6,
+      "duckdb": 919.8,
+      "polars": 1010.5,
+      "datafusion": 962.6,
+      "chdb": 1243.9,
+      "spark": 3415.1,
+      "daft": 3744.4
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q22",
+     "ms": {
+      "iara": 1439.4,
+      "duckdb": 1522.5,
+      "polars": 1239.0,
+      "datafusion": 2356.7,
+      "chdb": 1957.8,
+      "spark": 4459.8,
+      "daft": 4423.8
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q23",
+     "ms": {
+      "iara": 361.3,
+      "duckdb": 350.9,
+      "polars": 1765.4,
+      "datafusion": 4913.5,
+      "chdb": 1493.0,
+      "spark": 26020.5,
+      "daft": null
+     },
+     "notes": {
+      "daft": "crashed (exit -9): "
+     }
+    },
+    {
+     "label": "Q24",
+     "ms": {
+      "iara": 57.9,
+      "duckdb": 151.7,
+      "polars": 247.1,
+      "datafusion": 126.7,
+      "chdb": 566.0,
+      "spark": 1831.3,
+      "daft": 3006.2
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q25",
+     "ms": {
+      "iara": 219.7,
+      "duckdb": 321.6,
+      "polars": 156.5,
+      "datafusion": 346.9,
+      "chdb": 366.6,
+      "spark": 1500.1,
+      "daft": 398.4
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q26",
+     "ms": {
+      "iara": 56.0,
+      "duckdb": 144.1,
+      "polars": 294.3,
+      "datafusion": 113.9,
+      "chdb": 569.5,
+      "spark": 1600.2,
+      "daft": 3029.1
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q27",
+     "ms": {
+      "iara": 1121.0,
+      "duckdb": 836.3,
+      "polars": 1157.3,
+      "datafusion": 1140.0,
+      "chdb": 1412.7,
+      "spark": 4749.2,
+      "daft": 11415.2
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q28",
+     "ms": {
+      "iara": 2926.6,
+      "duckdb": 6592.0,
+      "polars": null,
+      "datafusion": 3573.5,
+      "chdb": 1568.8,
+      "spark": 15581.6,
+      "daft": null
+     },
+     "notes": {
+      "polars": "SQLInterfaceError: unsupported function 'regexp_replace'",
+      "daft": "InvalidSQLException: Daft error: DaftError::External Unable to create logical plan node."
+     }
+    },
+    {
+     "label": "Q29",
+     "ms": {
+      "iara": 31.3,
+      "duckdb": 131.1,
+      "polars": 143.3,
+      "datafusion": 54.0,
+      "chdb": 754.0,
+      "spark": 4444.1,
+      "daft": null
+     },
+     "notes": {
+      "daft": "InvalidSQLException: Daft error: DaftError::External Unable to create logical plan node."
+     }
+    },
+    {
+     "label": "Q30",
+     "ms": {
+      "iara": 336.6,
+      "duckdb": 503.8,
+      "polars": 348.4,
+      "datafusion": 592.2,
+      "chdb": 768.5,
+      "spark": 2181.6,
+      "daft": 3310.6
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q31",
+     "ms": {
+      "iara": 420.3,
+      "duckdb": 562.3,
+      "polars": 394.1,
+      "datafusion": 592.0,
+      "chdb": 814.9,
+      "spark": 2536.2,
+      "daft": 3417.7
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q32",
+     "ms": {
+      "iara": 1842.2,
+      "duckdb": 1418.6,
+      "polars": 1504.2,
+      "datafusion": 1234.0,
+      "chdb": 2194.8,
+      "spark": 8864.5,
+      "daft": 2613.8
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q33",
+     "ms": {
+      "iara": 2039.1,
+      "duckdb": 1643.1,
+      "polars": 2268.5,
+      "datafusion": 1978.2,
+      "chdb": 2075.0,
+      "spark": 7194.5,
+      "daft": 4396.8
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q34",
+     "ms": {
+      "iara": 2041.3,
+      "duckdb": 1737.6,
+      "polars": 2290.7,
+      "datafusion": 1993.2,
+      "chdb": 2078.1,
+      "spark": 7103.8,
+      "daft": 4932.3
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q35",
+     "ms": {
+      "iara": 257.4,
+      "duckdb": 441.0,
+      "polars": null,
+      "datafusion": 357.3,
+      "chdb": 224.6,
+      "spark": 2700.6,
+      "daft": 918.7
+     },
+     "notes": {
+      "polars": "DuplicateError: group_by keys contained duplicate output name 'ClientIP'. It's possible that multiple expressions are returning the same default column name. If this is the case, try renaming the columns with `.alias"
+     }
+    },
+    {
+     "label": "Q36",
+     "ms": {
+      "iara": 47.6,
+      "duckdb": 128.9,
+      "polars": 46.3,
+      "datafusion": 136.9,
+      "chdb": 68.9,
+      "spark": 859.6,
+      "daft": 222.8
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q37",
+     "ms": {
+      "iara": 17.9,
+      "duckdb": 91.0,
+      "polars": 20.7,
+      "datafusion": 51.6,
+      "chdb": 49.0,
+      "spark": 814.3,
+      "daft": 143.3
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q38",
+     "ms": {
+      "iara": 30.5,
+      "duckdb": 109.1,
+      "polars": 26.6,
+      "datafusion": 89.2,
+      "chdb": 64.2,
+      "spark": 769.7,
+      "daft": 101.6
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q39",
+     "ms": {
+      "iara": 106.0,
+      "duckdb": 160.3,
+      "polars": 73.2,
+      "datafusion": 251.1,
+      "chdb": 84.3,
+      "spark": 1324.9,
+      "daft": 208.3
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q40",
+     "ms": {
+      "iara": 12.9,
+      "duckdb": 88.4,
+      "polars": 10.7,
+      "datafusion": 26.5,
+      "chdb": 43.1,
+      "spark": 808.7,
+      "daft": 88.7
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q41",
+     "ms": {
+      "iara": 12.0,
+      "duckdb": 86.2,
+      "polars": 8.1,
+      "datafusion": 26.8,
+      "chdb": 39.9,
+      "spark": 798.5,
+      "daft": 90.9
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q42",
+     "ms": {
+      "iara": 9.9,
+      "duckdb": 91.9,
+      "polars": null,
+      "datafusion": 30.6,
+      "chdb": 36.4,
+      "spark": 811.1,
+      "daft": 79.7
+     },
+     "notes": {
+      "polars": "SQLInterfaceError: unsupported function 'date_trunc'"
+     }
+    }
+   ]
   }
- }
+ },
+ "realistic": [
+  {
+   "name": "csv_groupby",
+   "iara": {
+    "s": 3.38,
+    "mb": 171
+   },
+   "polars": {
+    "s": 6.23,
+    "mb": 525
+   }
+  },
+  {
+   "name": "csv_big_aggregate",
+   "iara": {
+    "s": 110.7,
+    "mb": 140
+   },
+   "polars": {
+    "s": 335.16,
+    "mb": 234
+   }
+  },
+  {
+   "name": "csv_to_parquet",
+   "iara": {
+    "s": 14.17,
+    "mb": 10436
+   },
+   "polars": {
+    "s": 12.85,
+    "mb": 1228
+   }
+  },
+  {
+   "name": "ndjson_groupby",
+   "iara": {
+    "s": 9.36,
+    "mb": 323
+   },
+   "polars": {
+    "s": 8.08,
+    "mb": 616
+   }
+  },
+  {
+   "name": "many_small_files",
+   "iara": {
+    "s": 1.02,
+    "mb": 251
+   },
+   "polars": {
+    "s": 2.12,
+    "mb": 778
+   }
+  },
+  {
+   "name": "feature_engineering_sink",
+   "iara": {
+    "s": 78.68,
+    "mb": 7067
+   },
+   "polars": {
+    "s": 55.03,
+    "mb": 2707
+   }
+  },
+  {
+   "name": "full_sort_sink",
+   "iara": {
+    "s": 28.22,
+    "mb": 36836
+   },
+   "polars": {
+    "s": 24.67,
+    "mb": 40037
+   }
+  },
+  {
+   "name": "to_pandas",
+   "iara": null,
+   "polars": {
+    "s": 45.7,
+    "mb": 60162
+   }
+  },
+  {
+   "name": "top3_per_customer",
+   "iara": {
+    "s": 9.07,
+    "mb": 40401
+   },
+   "polars": {
+    "s": 5.03,
+    "mb": 28463
+   }
+  },
+  {
+   "name": "sessionize",
+   "iara": {
+    "s": 6.17,
+    "mb": 7493
+   },
+   "polars": {
+    "s": 7.92,
+    "mb": 10133
+   }
+  },
+  {
+   "name": "rolling_daily",
+   "iara": {
+    "s": 0.17,
+    "mb": 143
+   },
+   "polars": {
+    "s": 0.11,
+    "mb": 371
+   }
+  },
+  {
+   "name": "url_domains",
+   "iara": {
+    "s": 3.87,
+    "mb": 3232
+   },
+   "polars": {
+    "s": 4.78,
+    "mb": 9625
+   }
+  },
+  {
+   "name": "word_count",
+   "iara": {
+    "s": 12.06,
+    "mb": 485
+   },
+   "polars": {
+    "s": 13.7,
+    "mb": 1306
+   }
+  },
+  {
+   "name": "search_phrase_contains",
+   "iara": {
+    "s": 0.74,
+    "mb": 359
+   },
+   "polars": {
+    "s": 0.73,
+    "mb": 862
+   }
+  },
+  {
+   "name": "string_key_join",
+   "iara": {
+    "s": 4.08,
+    "mb": 10051
+   },
+   "polars": {
+    "s": 4.99,
+    "mb": 2924
+   }
+  },
+  {
+   "name": "dedupe_pairs",
+   "iara": {
+    "s": 3.34,
+    "mb": 20214
+   },
+   "polars": {
+    "s": 3.12,
+    "mb": 20881
+   }
+  },
+  {
+   "name": "wide_filter",
+   "iara": {
+    "s": 0.18,
+    "mb": 1589
+   },
+   "polars": {
+    "s": 0.14,
+    "mb": 775
+   }
+  },
+  {
+   "name": "conditional_aggs",
+   "iara": {
+    "s": 0.48,
+    "mb": 171
+   },
+   "polars": {
+    "s": 0.3,
+    "mb": 416
+   }
+  },
+  {
+   "name": "eager_session",
+   "iara": {
+    "s": 4.87,
+    "mb": 38640
+   },
+   "polars": {
+    "s": 11.56,
+    "mb": 54713
+   }
+  }
+ ]
 }

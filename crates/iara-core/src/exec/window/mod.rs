@@ -122,6 +122,8 @@ pub struct WindowEval {
 /// limit) partitioned to disk by the shared PARTITION BY keys.
 pub struct WindowSink {
     eval: WindowEval,
+    read_cols: Vec<usize>,
+    n_win: usize,
     /// set when the windows share PARTITION BY keys (the input can spill)
     partition_keys: Option<Vec<PhysExpr>>,
     spill: Option<PartitionedSpill>,
@@ -151,9 +153,11 @@ impl Windowed {
 impl WindowSink {
     pub fn new(specs: Vec<WindowSpec>, schema: SchemaRef) -> Self {
         let partition_keys = partitioned::common_partition(&specs);
+        let n_win = specs.iter().map(|s| s.funcs.len()).sum();
         let eval = WindowEval { specs, schema };
+        let read_cols = eval.read_columns();
         let spill = partition_keys.as_ref().map(|_| PartitionedSpill::new(eval.input_schema(), grace_partitions()));
-        Self { eval, partition_keys, spill, spilling: AtomicBool::new(false) }
+        Self { eval, read_cols, n_win, partition_keys, spill, spilling: AtomicBool::new(false) }
     }
 
     fn spill_batch(&self, b: &RecordBatch) -> Result<()> {
@@ -184,6 +188,40 @@ impl WindowEval {
         for spec in &self.specs {
             if let Some(q) = crate::exec::query::current() {
                 q.check()?;
+            }
+            let hash_only = spec.order_by.is_empty()
+                && !spec.partition_by.is_empty()
+                && batch.num_rows() > 0
+                && spec.funcs.iter().all(|(_, f)| {
+                    f.frame.is_whole()
+                        && matches!(
+                            f.func,
+                            WindowFunc::Agg(func)
+                                if !matches!(
+                                    func,
+                                    AggFunc::First
+                                        | AggFunc::Last
+                                        | AggFunc::ArrayAgg
+                                        | AggFunc::CollectList
+                                )
+                        )
+                });
+            if hash_only {
+                let pkeys = spec.partition_by.iter().map(|e| e.evaluate_array(batch)).collect::<Result<Vec<_>>>()?;
+                let ptypes: Vec<DataType> = pkeys.iter().map(|a| a.data_type().clone()).collect();
+                let mut gk = crate::exec::groupby::GroupKeys::try_new(&ptypes)?;
+                let mut gids = Vec::new();
+                gk.intern(&pkeys, &mut gids)?;
+                let groups = gk.len().max(1);
+                for (pos, f) in &spec.funcs {
+                    let WindowFunc::Agg(func) = f.func else { unreachable!() };
+                    let mut a = aggregate::whole_partition_gids(f, func, batch, &gids, groups)?;
+                    if a.data_type() != &f.out_type {
+                        a = arrow::compute::cast(&a, &f.out_type)?;
+                    }
+                    window_cols[pos - n_in] = Some(a);
+                }
+                continue;
             }
             let layout = Layout::new(batch, &spec.partition_by, &spec.order_by)?;
             for (pos, f) in &spec.funcs {
@@ -300,7 +338,15 @@ impl Sink for WindowSink {
         }
         // the input, its sorted layout and the window columns
         let batch = crate::exec::batch_mem::compact(batch)?;
-        let bytes = crate::exec::batch_mem::batch_bytes(&batch) * 3;
+        let read_bytes: usize = self
+            .read_cols
+            .iter()
+            .filter_map(|&i| batch.columns().get(i))
+            .map(|c| crate::exec::batch_mem::array_bytes(c.as_ref()))
+            .sum();
+        let bytes = crate::exec::batch_mem::batch_bytes(&batch)
+            + read_bytes * 2
+            + batch.num_rows() * (16 + self.n_win * 8);
         if !local.reservation.try_grow(bytes) {
             if self.spill.is_some() {
                 self.spilling.store(true, Ordering::Relaxed);

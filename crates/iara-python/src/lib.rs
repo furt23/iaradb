@@ -389,10 +389,39 @@ impl PyExpr {
 // data frames
 // ---------------------------------------------------------------------------
 
+struct FrameInner {
+    batches: Vec<RecordBatch>,
+    idx: Option<std::sync::Arc<[u32]>>,
+}
+
 #[pyclass(name = "PyDataFrame", module = "iara._iara", frozen)]
 pub struct PyDataFrame {
     schema: SchemaRef,
-    batches: Vec<RecordBatch>,
+    inner: parking_lot::Mutex<FrameInner>,
+}
+
+impl PyDataFrame {
+    fn new(schema: SchemaRef, batches: Vec<RecordBatch>) -> Self {
+        Self { schema, inner: parking_lot::Mutex::new(FrameInner { batches, idx: None }) }
+    }
+
+    fn from_collected(c: iara_core::session::Collected) -> Self {
+        match c {
+            iara_core::session::Collected::Batches(schema, batches) => Self::new(schema, batches),
+            iara_core::session::Collected::Sorted { schema, batches, idx } => Self {
+                schema,
+                inner: parking_lot::Mutex::new(FrameInner { batches, idx: Some(idx) }),
+            },
+        }
+    }
+
+    fn batches(&self) -> PyResult<Vec<RecordBatch>> {
+        let mut g = self.inner.lock();
+        if let Some(idx) = g.idx.take() {
+            g.batches = iara_core::exec::sort::gather(&self.schema, &g.batches, &idx, iara_core::exec::pipeline::MORSEL_ROWS).py()?;
+        }
+        Ok(g.batches.clone())
+    }
 }
 
 fn import_stream(obj: &Bound<'_, PyAny>) -> PyResult<(SchemaRef, Vec<RecordBatch>)> {
@@ -426,7 +455,7 @@ impl PyDataFrame {
     #[staticmethod]
     fn from_arrow(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
         let (schema, batches) = import_stream(obj)?;
-        Ok(Self { schema, batches })
+        Ok(Self::new(schema, batches))
     }
 
     #[pyo3(signature = (requested_schema=None))]
@@ -436,13 +465,18 @@ impl PyDataFrame {
         requested_schema: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyCapsule>> {
         let _ = requested_schema;
-        let reader = RecordBatchIterator::new(self.batches.clone().into_iter().map(Ok), self.schema.clone());
+        let batches = self.batches()?;
+        let reader = RecordBatchIterator::new(batches.into_iter().map(Ok), self.schema.clone());
         let stream = FFI_ArrowArrayStream::new(Box::new(reader));
         PyCapsule::new_with_value(py, stream, c"arrow_array_stream")
     }
 
     fn num_rows(&self) -> usize {
-        self.batches.iter().map(|b| b.num_rows()).sum()
+        let g = self.inner.lock();
+        match &g.idx {
+            Some(idx) => idx.len(),
+            None => g.batches.iter().map(|b| b.num_rows()).sum(),
+        }
     }
 
     fn num_columns(&self) -> usize {
@@ -457,13 +491,22 @@ impl PyDataFrame {
         schema_list(&self.schema)
     }
 
-    fn num_batches(&self) -> usize {
-        self.batches.len()
+    fn num_batches(&self) -> PyResult<usize> {
+        Ok(self.batches()?.len())
     }
 
     #[pyo3(signature = (max_rows=10))]
     fn to_string(&self, max_rows: usize) -> PyResult<String> {
-        let head = iara_core::exec::pipeline::apply_limit(self.batches.clone(), 0, Some(max_rows));
+        let head = {
+            let g = self.inner.lock();
+            match &g.idx {
+                Some(idx) => {
+                    let end = max_rows.min(idx.len());
+                    iara_core::exec::sort::gather(&self.schema, &g.batches, &idx[..end], iara_core::exec::pipeline::MORSEL_ROWS).py()?
+                }
+                None => iara_core::exec::pipeline::apply_limit(g.batches.clone(), 0, Some(max_rows)),
+            }
+        };
         let table = if head.is_empty() {
             arrow::util::pretty::pretty_format_batches(&[RecordBatch::new_empty(self.schema.clone())]).py()?
         } else {
@@ -477,15 +520,26 @@ impl PyDataFrame {
         Ok(s)
     }
 
-    fn slice(&self, offset: usize, length: usize) -> Self {
-        Self {
-            schema: self.schema.clone(),
-            batches: iara_core::exec::pipeline::apply_limit(self.batches.clone(), offset, Some(length)),
+    fn slice(&self, offset: usize, length: usize) -> PyResult<Self> {
+        let g = self.inner.lock();
+        if let Some(idx) = &g.idx {
+            let start = offset.min(idx.len());
+            let end = start.saturating_add(length).min(idx.len());
+            let batches = iara_core::exec::sort::gather(
+                &self.schema,
+                &g.batches,
+                &idx[start..end],
+                iara_core::exec::pipeline::MORSEL_ROWS,
+            )
+            .py()?;
+            return Ok(Self::new(self.schema.clone(), batches));
         }
+        let batches = iara_core::exec::pipeline::apply_limit(g.batches.clone(), offset, Some(length));
+        Ok(Self::new(self.schema.clone(), batches))
     }
 
     fn lazy(&self, ctx: PyRef<'_, PySessionContext>) -> PyResult<PyLazyFrame> {
-        Ok(PyLazyFrame { inner: ctx.inner.from_batches(self.schema.clone(), self.batches.clone()).py()? })
+        Ok(PyLazyFrame { inner: ctx.inner.from_batches(self.schema.clone(), self.batches()?).py()? })
     }
 
     #[pyo3(signature = (path, compression="zstd", row_group_size=None, storage_options=None))]
@@ -498,7 +552,7 @@ impl PyDataFrame {
         storage_options: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<()> {
         let opts = storage::options(storage_options)?;
-        let (schema, batches) = (self.schema.clone(), self.batches.clone());
+        let (schema, batches) = (self.schema.clone(), self.batches()?);
         let (path, compression) = (path.to_string(), compression.to_string());
         py.detach(move || write_parquet_with(&path, schema, &batches, &compression, row_group_size, &opts)).py()
     }
@@ -513,7 +567,7 @@ impl PyDataFrame {
         storage_options: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<()> {
         let opts = storage::options(storage_options)?;
-        let batches = self.batches.clone();
+        let batches = self.batches()?;
         let path = path.to_string();
         let d = delimiter.as_bytes().first().copied().unwrap_or(b',');
         py.detach(move || write_csv_with(&path, &batches, has_header, d, &opts)).py()
@@ -523,7 +577,7 @@ impl PyDataFrame {
     #[pyo3(signature = (path, storage_options=None))]
     fn write_ndjson(&self, py: Python<'_>, path: &str, storage_options: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
         let opts = storage::options(storage_options)?;
-        let (batches, path) = (self.batches.clone(), path.to_string());
+        let (batches, path) = (self.batches()?, path.to_string());
         py.detach(move || iara_core::io::json::write_json_with(&path, &batches, &opts)).py()
     }
 }
@@ -712,15 +766,15 @@ impl PyLazyFrame {
 
     fn collect(&self, py: Python<'_>) -> PyResult<PyDataFrame> {
         let inner = self.inner.clone();
-        let (schema, batches) = py.detach(move || inner.collect()).py()?;
-        Ok(PyDataFrame { schema, batches })
+        let collected = py.detach(move || inner.collect_lazy()).py()?;
+        Ok(PyDataFrame::from_collected(collected))
     }
 
     /// `(DataFrame, profile)`: the result and its per-pipeline run profile.
     fn collect_profiled<'py>(&self, py: Python<'py>) -> PyResult<(PyDataFrame, Bound<'py, pyo3::types::PyDict>)> {
         let inner = self.inner.clone();
-        let (schema, batches, stats) = py.detach(move || inner.collect_profiled()).py()?;
-        Ok((PyDataFrame { schema, batches }, runtime::stats_dict(py, &stats)?))
+        let (collected, stats) = py.detach(move || inner.collect_lazy_profiled()).py()?;
+        Ok((PyDataFrame::from_collected(collected), runtime::stats_dict(py, &stats)?))
     }
 
     /// Run the query measuring every operator (its result is read batch by
@@ -876,7 +930,7 @@ impl PySessionContext {
     }
 
     fn register_dataframe(&self, name: &str, df: PyRef<'_, PyDataFrame>) -> PyResult<()> {
-        self.inner.register_batches(name, df.schema.clone(), df.batches.clone()).py()
+        self.inner.register_batches(name, df.schema.clone(), df.batches()?).py()
     }
 
     fn register_lazy(&self, name: &str, frame: PyRef<'_, PyLazyFrame>) -> PyResult<()> {
@@ -1017,7 +1071,7 @@ impl PySessionContext {
     }
 
     fn from_dataframe(&self, df: PyRef<'_, PyDataFrame>) -> PyResult<PyLazyFrame> {
-        lf(self.inner.from_batches(df.schema.clone(), df.batches.clone()))
+        lf(self.inner.from_batches(df.schema.clone(), df.batches()?))
     }
 }
 

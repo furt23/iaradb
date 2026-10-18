@@ -13,7 +13,8 @@ use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use super::decode::{chunk_ranges, reader};
 use super::file::ParquetFile;
 use super::sample_cache;
-use crate::io::ColumnStats;
+use crate::io::{ColumnStats, StatsAgg};
+use crate::scalar::Scalar;
 
 /// Distinct count of a string column, extrapolated from its first row
 /// group: repetitive columns (flags, names, types) keep the sample's count,
@@ -120,6 +121,77 @@ fn one_column_stats(files: &[Arc<ParquetFile>], name: &str) -> Option<ColumnStat
     let (mins, maxs) = (concat(&mins)?, concat(&maxs)?);
     let exact = mins.null_count() == 0 && maxs.null_count() == 0;
     Some(ColumnStats { column: name.to_string(), min: extreme(&mins, false), max: extreme(&maxs, true), nulls, exact })
+}
+
+/// `aggs` over all rows of `files` (laid out like `schema`) from row-group
+/// statistics, when they answer every one exactly.
+pub fn aggregates(files: &[Arc<ParquetFile>], schema: &SchemaRef, aggs: &[StatsAgg]) -> Option<Vec<Scalar>> {
+    let rows: u64 = files.iter().map(|f| f.meta.metadata().file_metadata().num_rows() as u64).sum();
+    aggs.iter()
+        .map(|a| match *a {
+            StatsAgg::Rows => Some(Scalar::int64(rows as i64)),
+            StatsAgg::NonNull(c) => {
+                let mut nulls = 0;
+                for f in files {
+                    let conv = converter(f, schema, c)?;
+                    let counts = conv.row_group_null_counts(f.meta.metadata().row_groups().iter()).ok()?;
+                    if counts.null_count() > 0 {
+                        return None;
+                    }
+                    nulls += counts.values().iter().sum::<u64>();
+                }
+                Some(Scalar::int64((rows - nulls) as i64))
+            }
+            StatsAgg::Min(c) => exact_extreme(files, schema, c, false),
+            StatsAgg::Max(c) => exact_extreme(files, schema, c, true),
+        })
+        .collect()
+}
+
+fn converter<'a>(f: &'a ParquetFile, schema: &SchemaRef, column: usize) -> Option<StatisticsConverter<'a>> {
+    let conv = StatisticsConverter::try_new(schema.field(column).name(), f.meta.schema(), f.meta.parquet_schema()).ok()?;
+    // an unknown null count must not read as zero
+    Some(conv.with_missing_null_counts_as_zero(false))
+}
+
+/// The smallest (or largest) value of a column over every row group, when
+/// each row group with a value has its exact bound: integers, dates and
+/// timestamps (never truncated), and decimals whose bounds are marked exact.
+/// Not floats (statistics leave NaN out) nor strings (bounds may be cut).
+fn exact_extreme(files: &[Arc<ParquetFile>], schema: &SchemaRef, column: usize, largest: bool) -> Option<Scalar> {
+    let dt = schema.field(column).data_type();
+    let fixed = dt.is_integer() || matches!(dt, DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _));
+    if !fixed && !matches!(dt, DataType::Decimal128(_, _)) {
+        return None;
+    }
+    let mut bounds = vec![];
+    for f in files {
+        let rgs = f.meta.metadata().row_groups();
+        let conv = converter(f, schema, column)?;
+        let (values, exact) = if largest {
+            (conv.row_group_maxes(rgs.iter()).ok()?, conv.row_group_is_max_value_exact(rgs.iter()).ok()?)
+        } else {
+            (conv.row_group_mins(rgs.iter()).ok()?, conv.row_group_is_min_value_exact(rgs.iter()).ok()?)
+        };
+        let nulls = conv.row_group_null_counts(rgs.iter()).ok()?;
+        for (i, rg) in rgs.iter().enumerate() {
+            let all_null = nulls.is_valid(i) && nulls.value(i) == rg.num_rows() as u64;
+            if rg.num_rows() == 0 || all_null {
+                continue;
+            }
+            if values.is_null(i) || !(fixed || (exact.is_valid(i) && exact.value(i))) {
+                return None;
+            }
+        }
+        bounds.push(arrow::compute::cast(&values, dt).ok()?);
+    }
+    let all = concat(&bounds)?;
+    let order = SortOptions { descending: largest, nulls_first: false };
+    let idx = arrow::compute::sort_to_indices(&all, Some(order), Some(1)).ok()?;
+    match idx.values().first() {
+        Some(&i) if !all.is_null(i as usize) => Scalar::from_array(all.as_ref(), i as usize).ok(),
+        _ => Some(Scalar::null_of(dt)),
+    }
 }
 
 fn concat(arrays: &[ArrayRef]) -> Option<ArrayRef> {

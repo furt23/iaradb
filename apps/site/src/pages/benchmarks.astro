@@ -43,8 +43,7 @@ const pretty = (w: string) => w.replace(/_/g, ' ');
         <p class="muted">
           Each figure is the median of 3 runs after a warm-up run (one run when the warm-up takes over 30 s). A query that
           fails or runs past the time limit (10 min at SF10 and ClickBench, 15 min at SF100) shows as n/a or timeout.
-          TPC-H results are compared with DuckDB's; a dagger (†) marks a result that differs. Totals add up only the
-          queries every engine ran correctly. Measured {suites.tpch_sf10?.meta.date}.
+          TPC-H results are compared with DuckDB's; a dagger (†) marks a result that differs. Measured {suites.tpch_sf10?.meta.date}; Iara re-measured on the same instance type after later engine changes, the other engines kept from the first run.
         </p>
       </header>
 
@@ -70,23 +69,27 @@ const pretty = (w: string) => w.replace(/_/g, ' ');
                 <thead>
                   <tr>
                     <th scope="col">Engine</th>
-                    <th scope="col" class="num">Queries run</th>
-                    <th scope="col" class="num">Sum of {sum.shared} shared</th>
+                    <th scope="col" class="num">Correct results</th>
+                    <th scope="col" class="num">Sum, all {sum.of}</th>
                     <th scope="col" class="num">Geometric mean</th>
                     <th scope="col" class="num">Iara faster by</th>
                   </tr>
                 </thead>
                 <tbody>
                   {sum.engines.map((e) => {
-                    const bestSum = Math.min(...sum.engines.map((x) => x.sumS));
+                    const bestSum = Math.min(...sum.engines.map((x) => x.sumS ?? Infinity));
                     return (
                       <tr>
                         <th scope="row">
                           {e.name} <span class="muted small">{e.version}</span>
                         </th>
                         <td class="num">{e.completed} / {sum.of}</td>
-                        <td class={`num ${e.sumS === bestSum ? 'cell-best' : ''}`}>{e.sumS.toFixed(e.sumS < 10 ? 2 : 1)} s</td>
-                        <td class="num">{e.geomeanMs < 10000 ? `${Math.round(e.geomeanMs)} ms` : `${(e.geomeanMs / 1000).toFixed(1)} s`}</td>
+                        <td class={`num ${e.sumS === bestSum ? 'cell-best' : ''} ${e.sumS == null ? 'cell-na' : ''}`}>
+                          {e.sumS == null ? `${sum.of - e.ran} failed` : `${e.sumS.toFixed(e.sumS < 10 ? 2 : 1)} s${e.wrong ? ' †' : ''}`}
+                        </td>
+                        <td class={`num ${e.geomeanMs == null ? 'cell-na' : ''}`}>
+                          {e.geomeanMs == null ? '' : e.geomeanMs < 10000 ? `${Math.round(e.geomeanMs)} ms` : `${(e.geomeanMs / 1000).toFixed(1)} s`}
+                        </td>
                         <td class="num">{e.key === 'iara' ? '' : `${e.vsIara.toFixed(2)}×`}</td>
                       </tr>
                     );
@@ -95,8 +98,9 @@ const pretty = (w: string) => w.replace(/_/g, ' ');
               </table>
             </div>
             <p class="muted small table-note">
-              "Iara faster by" is the geometric mean of the per-query time ratios over the queries both engines ran
-              correctly; below 1× the other engine is faster.
+              Sums and geometric means cover all {sum.of} queries, so they are left out for an engine that failed one;
+              † marks a sum that includes a wrong result. "Iara faster by" is the geometric mean of the per-query time
+              ratios over the queries both engines ran correctly (below 1×, the other engine is faster).
             </p>
 
             <div class="chart" data-reveal="scale">
@@ -189,7 +193,27 @@ const pretty = (w: string) => w.replace(/_/g, ' ');
       <div class="grid grid--2 bottom-notes" data-reveal-stagger>
         <div class="card">
           <h2>Notes</h2>
-          <!-- NOTES -->
+          <ul class="notes muted">
+            <li>
+              Where Iara is slower: TPC-H Q2 against Polars (1.4× at SF100); in ClickBench, grouped
+              <code>COUNT(DISTINCT ...)</code> (Q8, Q9: 1.6-1.8× DuckDB), wide <code>GROUP BY</code>s (Q16-Q18, Q32: 1.5-2.5×) and
+              <code>REGEXP_REPLACE</code> (Q28: 2.9 s against chDB's 1.6 s).
+            </li>
+            <li>
+              chDB and Daft return a wrong sum for TPC-H Q6: they evaluate <code>between 0.06 - 0.01 and 0.06 + 0.01</code>
+              in floating point, which drops the rows with a 0.07 discount. Polars and chDB round Q8's ratio to the
+              <code>DECIMAL</code> scale (0.04, 0.0395); those count as correct.
+            </li>
+            <li>
+              Daft cannot plan TPC-H Q1, Q8, Q9 and Q14 (in Q1 the <code>DECIMAL</code> product exceeds 38 digits) or the
+              correlated subquery in Q21, and ran out of memory on ClickBench Q23. Polars SQL has no
+              <code>regexp_replace</code> or <code>date_trunc</code> and rejects Q35's repeated group key.
+            </li>
+            <li>
+              ClickBench reads a copy of hits.parquet with <code>EventTime</code> as a timestamp, <code>EventDate</code> as a
+              date and strings as UTF-8 (<code>prepare_hits.py</code>). DuckDB runs with its Parquet metadata cache on.
+            </li>
+          </ul>
         </div>
 
         <div class="card">
@@ -371,6 +395,14 @@ python benchmarks/bench_clickbench.py hits_typed.parquet</pre>
 
   .bottom-notes p:last-child {
     margin-bottom: 0;
+  }
+
+  .notes {
+    margin: 0;
+    padding-left: 18px;
+    display: grid;
+    gap: 10px;
+    font-size: 0.92rem;
   }
 
   .code-mini {

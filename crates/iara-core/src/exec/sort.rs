@@ -22,6 +22,7 @@ use crate::exec::memory::{self, Reservation};
 use crate::exec::merge::{Merge, Run};
 use crate::exec::pipeline::{Sink, rechunk, MORSEL_ROWS};
 use crate::exec::spill::{SpillFile, SpillWriter};
+use crate::exec::topk_bound::TopKBound;
 use crate::physical::expr::PhysSortExpr;
 
 fn sort_by_cmp<F>(idx: &mut Vec<u32>, limit: Option<usize>, cmp: F)
@@ -95,33 +96,108 @@ pub fn sort_indices(keys: &[ArrayRef], opts: &[SortOptions], limit: Option<usize
     Ok(idx)
 }
 
+fn gather_byte_view<T: arrow::datatypes::ByteViewType>(arrays: &[&dyn Array], at: &[(usize, usize)], has_nulls: bool) -> ArrayRef {
+    use arrow::buffer::{Buffer, NullBuffer, ScalarBuffer};
+    let mut views = Vec::with_capacity(at.len());
+    let mut data: Vec<u8> = Vec::new();
+    let mut buffers: Vec<Buffer> = Vec::new();
+    let nulls = if has_nulls {
+        let mut b = BooleanBufferBuilder::new(at.len());
+        for &(bi, row) in at {
+            let a = arrays[bi].as_byte_view::<T>();
+            if a.is_null(row) {
+                b.append(false);
+                views.push(0);
+            } else {
+                b.append(true);
+                let v = a.views()[row];
+                if (v as u32) <= 12 {
+                    views.push(v);
+                } else {
+                    let bytes: &[u8] = a.value(row).as_ref();
+                    if data.len() + bytes.len() > u32::MAX as usize {
+                        buffers.push(Buffer::from_vec(std::mem::take(&mut data)));
+                    }
+                    let buf_idx = buffers.len() as u128;
+                    let offset = data.len() as u128;
+                    data.extend_from_slice(bytes);
+                    views.push((v & 0xFFFF_FFFF_FFFF_FFFF) | (buf_idx << 64) | (offset << 96));
+                }
+            }
+        }
+        Some(NullBuffer::new(b.finish())).filter(|n| n.null_count() > 0)
+    } else {
+        for &(bi, row) in at {
+            let a = arrays[bi].as_byte_view::<T>();
+            let v = a.views()[row];
+            if (v as u32) <= 12 {
+                views.push(v);
+            } else {
+                let bytes: &[u8] = a.value(row).as_ref();
+                if data.len() + bytes.len() > u32::MAX as usize {
+                    buffers.push(Buffer::from_vec(std::mem::take(&mut data)));
+                }
+                let buf_idx = buffers.len() as u128;
+                let offset = data.len() as u128;
+                data.extend_from_slice(bytes);
+                views.push((v & 0xFFFF_FFFF_FFFF_FFFF) | (buf_idx << 64) | (offset << 96));
+            }
+        }
+        None
+    };
+    if !data.is_empty() {
+        buffers.push(Buffer::from_vec(data));
+    }
+    // SAFETY: views and buffers are constructed from valid GenericByteViewArray<T> values
+    Arc::new(unsafe { GenericByteViewArray::<T>::new_unchecked(ScalarBuffer::from(views), Arc::from(buffers), nulls) })
+}
+
 /// The rows `idx` (positions in the concatenation of `batches`) as batches
 /// of `chunk` rows, gathered in parallel; strings are copied into each
 /// chunk's own buffers.
 pub fn gather(schema: &SchemaRef, batches: &[RecordBatch], idx: &[u32], chunk: usize) -> Result<Vec<RecordBatch>> {
-    let mut starts = Vec::with_capacity(batches.len() + 1);
-    let mut total = 0u32;
-    for b in batches {
-        starts.push(total);
-        total += b.num_rows() as u32;
+    if idx.is_empty() {
+        return Ok(vec![]);
     }
-    starts.push(total);
-    let locate = |i: u32| {
-        let b = starts.partition_point(|&s| s <= i) - 1;
-        (b, (i - starts[b]) as usize)
+    let uniform = batches.first().map(|b| b.num_rows() as u32).filter(|&b0| {
+        b0 > 0
+            && batches[..batches.len().saturating_sub(1)].iter().all(|b| b.num_rows() as u32 == b0)
+            && batches.last().is_some_and(|b| b.num_rows() as u32 <= b0)
+    });
+    let starts = if uniform.is_none() {
+        let mut s = Vec::with_capacity(batches.len() + 1);
+        let mut total = 0u32;
+        for b in batches {
+            s.push(total);
+            total += b.num_rows() as u32;
+        }
+        s.push(total);
+        s
+    } else {
+        Vec::new()
     };
+    let locate = |i: u32| match uniform {
+        Some(b0) => ((i / b0) as usize, (i % b0) as usize),
+        None => {
+            let b = starts.partition_point(|&s| s <= i) - 1;
+            (b, (i - starts[b]) as usize)
+        }
+    };
+    let col_arrays: Vec<Vec<&dyn Array>> = (0..schema.fields().len())
+        .map(|c| batches.iter().map(|b| b.column(c).as_ref()).collect())
+        .collect();
+    let col_has_nulls: Vec<bool> = col_arrays.iter().map(|arrays| arrays.iter().any(|a| a.null_count() > 0)).collect();
     idx.par_chunks(chunk.max(1))
         .map(|part| {
             let at: Vec<(usize, usize)> = part.iter().map(|&i| locate(i)).collect();
             let cols = (0..schema.fields().len())
                 .map(|c| {
-                    let arrays: Vec<&dyn Array> = batches.iter().map(|b| b.column(c).as_ref()).collect();
-                    let out = arrow::compute::interleave(&arrays, &at)?;
-                    Ok(match out.data_type() {
-                        DataType::Utf8View => Arc::new(out.as_string_view().gc()) as ArrayRef,
-                        DataType::BinaryView => Arc::new(out.as_binary_view().gc()) as ArrayRef,
-                        _ => out,
-                    })
+                    let arrays = &col_arrays[c];
+                    match schema.field(c).data_type() {
+                        DataType::Utf8View => Ok(gather_byte_view::<arrow::datatypes::StringViewType>(arrays, &at, col_has_nulls[c])),
+                        DataType::BinaryView => Ok(gather_byte_view::<arrow::datatypes::BinaryViewType>(arrays, &at, col_has_nulls[c])),
+                        _ => Ok(arrow::compute::interleave(arrays, &at)?),
+                    }
                 })
                 .collect::<Result<Vec<_>>>()?;
             Ok(RecordBatch::try_new_with_options(schema.clone(), cols, &RecordBatchOptions::new().with_row_count(Some(part.len())))?)
@@ -147,6 +223,11 @@ pub struct SortSink {
     pub keys: Vec<PhysSortExpr>,
     pub fetch: Option<usize>,
     pub schema: SchemaRef,
+    /// a top k's running bound on its first key, shared with the scan below
+    pub bound: Option<Arc<TopKBound>>,
+    /// the input batches are resident (see [`crate::exec::pipeline::Source::resident`]):
+    /// only the sort's own keys and positions take memory
+    pub resident: bool,
 }
 
 pub struct SortLocal {
@@ -156,6 +237,8 @@ pub struct SortLocal {
     reservation: Reservation,
     /// sorted runs spilled by this worker
     runs: Vec<SpillFile>,
+    /// this worker has offered a top k's bound
+    offered: bool,
 }
 
 /// Rows per batch of a spilled run.
@@ -281,6 +364,10 @@ pub struct Gather {
 }
 
 impl Gather {
+    pub fn into_parts(self) -> (SchemaRef, Vec<RecordBatch>, Vec<u32>) {
+        (self.schema, self.batches, self.idx)
+    }
+
     /// The sorted rows, `chunk` at a time, gathered one batch per call.
     fn chunks(self, chunk: usize) -> impl Iterator<Item = Result<RecordBatch>> + Send {
         let n = self.idx.len();
@@ -361,7 +448,7 @@ impl Sink for SortSink {
     type Output = Sorted;
 
     fn make_local(&self) -> Self::Local {
-        Ok(SortLocal { batches: vec![], rows: 0, seq: 0, reservation: memory::pool().reservation(), runs: vec![] })
+        Ok(SortLocal { batches: vec![], rows: 0, seq: 0, reservation: memory::pool().reservation(), runs: vec![], offered: false })
     }
 
     fn push(&self, local: &mut Self::Local, morsel: usize, batch: RecordBatch) -> Result<()> {
@@ -372,11 +459,12 @@ impl Sink for SortSink {
         if batch.num_rows() == 0 {
             return Ok(());
         }
-        let batch = if self.fetch.is_none() { crate::exec::batch_mem::compact(batch)? } else { batch };
+        let batch = if self.fetch.is_none() && !self.resident { crate::exec::batch_mem::compact(batch)? } else { batch };
         if self.fetch.is_none() {
             // the rows, plus their keys and sorted positions; the sorted rows
             // are gathered from them a few chunks at a time
-            let bytes = crate::exec::batch_mem::batch_bytes(&batch) + batch.num_rows() * 24;
+            let held = if self.resident { 0 } else { crate::exec::batch_mem::batch_bytes(&batch) };
+            let bytes = held + batch.num_rows() * 24;
             if !l.reservation.try_grow(bytes) {
                 if !l.batches.is_empty() {
                     self.spill_run(l)?;
@@ -386,14 +474,36 @@ impl Sink for SortSink {
                 }
             }
         }
+        // rows past the top k's bound cannot make it
+        let batch = match &self.bound {
+            Some(bound) => match bound.mask(&self.keys[0].expr.evaluate_array(&batch)?) {
+                Some(keep) if keep.true_count() < batch.num_rows() => arrow::compute::filter_record_batch(&batch, &keep)?,
+                _ => batch,
+            },
+            None => batch,
+        };
+        if batch.num_rows() == 0 {
+            return Ok(());
+        }
         l.rows += batch.num_rows();
         l.batches.push((morsel, l.seq, batch));
         l.seq += 1;
         if let Some(k) = self.fetch {
-            if l.rows > (2 * k).max(1 << 16) {
+            let due = match &self.bound {
+                // the first k rows set the bound (a selective filter may pass few
+                // rows per worker), and each compaction tightens it
+                Some(_) if !l.offered => l.rows >= k.max(1),
+                Some(_) => l.rows > (2 * k).max(1 << 12),
+                None => l.rows > (2 * k).max(1 << 16),
+            };
+            if due {
                 let batches: Vec<RecordBatch> = l.batches.drain(..).map(|(_, _, b)| b).collect();
                 let all = concat_parallel(&self.schema, &batches)?;
                 let top = self.sort_batch(&all, Some(k))?;
+                if let (Some(bound), true) = (&self.bound, k > 0 && top.num_rows() == k) {
+                    bound.offer(self.keys[0].expr.evaluate_array(&top)?.as_ref(), k - 1);
+                    l.offered = true;
+                }
                 l.rows = top.num_rows();
                 l.batches.push((morsel, l.seq, top));
                 l.seq += 1;

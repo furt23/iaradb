@@ -103,6 +103,11 @@ fn substr_chars(s: &str, start: i64, len: Option<i64>) -> &str {
     } else {
         ((start - 1) as usize, len.map(|l| l.max(0)))
     };
+    if s.is_ascii() {
+        let b0 = begin.min(s.len());
+        let end = count.map_or(s.len(), |c| b0.saturating_add(c as usize).min(s.len()));
+        return &s[b0..end];
+    }
     let mut it = s.char_indices().skip(begin);
     let Some((b0, _)) = it.next() else { return "" };
     match count {
@@ -235,6 +240,18 @@ fn eval_arrays(func: ScalarFunc, args: &[ColumnarValue], m: usize, dt: &DataType
             let a = arr(0)?;
             let start = scalar_i64(&args[1], "substring start")?.unwrap_or(1);
             let len = if args.len() > 2 { scalar_i64(&args[2], "substring length")? } else { None };
+            if a.data_type() == &DataType::Utf8View {
+                let s = a.as_string_view();
+                let cap = len.map_or(8, |l| l.clamp(0, 64) as usize) * s.len();
+                let mut b = StringBuilder::with_capacity(s.len(), cap);
+                for v in s.iter() {
+                    match v {
+                        Some(x) => b.append_value(substr_chars(x, start, len)),
+                        None => b.append_null(),
+                    }
+                }
+                return Ok(Arc::new(b.finish()));
+            }
             let s = a.as_string::<i32>();
             let mut b = StringBuilder::with_capacity(s.len(), s.value_data().len());
             for v in s.iter() {

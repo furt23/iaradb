@@ -4,7 +4,7 @@ import { DOCS_URL } from '../config';
 import { suites, summary } from '../data/bench';
 
 const quickstartUrl = `${DOCS_URL}/quickstart/`;
-// Iara's sum over the queries every engine ran, and the next fastest engine on the same queries
+// Iara's sum over all queries, and the fastest other engine that ran them all
 const stats = (
   [
     ['tpch_sf10', 'TPC-H SF10'],
@@ -16,9 +16,9 @@ const stats = (
   .map(([key, title]) => {
     const sum = summary(suites[key]);
     const iara = sum.engines.find((e) => e.key === 'iara')!;
-    const next = sum.engines.filter((e) => e.key !== 'iara').sort((a, b) => a.sumS - b.sumS)[0];
+    const next = sum.engines.filter((e) => e.key !== 'iara' && e.sumS != null).sort((a, b) => a.sumS! - b.sumS!)[0];
     const f = (v: number) => `${v.toFixed(v < 10 ? 2 : 1)} s`;
-    return { value: f(iara.sumS), label: `${title}, ${sum.shared} queries`, next: `${next.name} ${f(next.sumS)}` };
+    return { value: f(iara.sumS!), label: `${title}, all ${sum.of} queries`, next: `${next.name} ${f(next.sumS!)}` };
   });
 const engineCount = suites.tpch_sf10?.engines.length ?? 0;
 ---
@@ -43,7 +43,7 @@ const engineCount = suites.tpch_sf10?.engines.length ?? 0;
           </div>
         ))}
       </div>
-      <p class="small muted stats__note">16 vCPUs, 64 GB RAM, the queries all {engineCount} engines ran. Fastest other engine: {stats.map((s) => s.next).join(', ')}.</p>
+      <p class="small muted stats__note">16 vCPUs, 64 GB RAM, {engineCount} engines. Fastest other engine: {stats.map((s) => s.next).join(', ')}.</p>
     </div>
 
     <div class="hero__visual">

@@ -142,7 +142,8 @@ pub struct Meter {
 impl Meter {
     /// Hand a batch to `emit`, counting it and the time `emit` takes.
     pub fn through(&mut self, batch: RecordBatch, emit: &mut dyn FnMut(RecordBatch) -> Result<()>) -> Result<()> {
-        self.rows += batch.num_rows() as u64;
+        let rows = crate::exec::ops::deferred_selected_rows().unwrap_or_else(|| batch.num_rows());
+        self.rows += rows as u64;
         self.batches += 1;
         let start = Instant::now();
         let out = emit(batch);

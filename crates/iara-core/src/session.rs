@@ -1017,6 +1017,10 @@ impl LazyFrame {
         execute_logical(&self.plan)
     }
 
+    pub fn collect_lazy(&self) -> Result<Collected> {
+        with_query(|_| execute_logical_collected(&self.plan))
+    }
+
     /// The result batch by batch, in order, while the query runs (nothing is
     /// collected); returns its schema and run profile.
     pub fn stream(
@@ -1070,6 +1074,22 @@ impl LazyFrame {
             Ok((schema, batches, q.stats()))
         })
     }
+
+    pub fn collect_lazy_profiled(&self) -> Result<(Collected, QueryStats)> {
+        with_query(|q| {
+            let collected = execute_logical_collected(&self.plan)?;
+            Ok((collected, q.stats()))
+        })
+    }
+}
+
+pub enum Collected {
+    Batches(SchemaRef, Vec<RecordBatch>),
+    Sorted {
+        schema: SchemaRef,
+        batches: Vec<RecordBatch>,
+        idx: Arc<[u32]>,
+    },
 }
 
 /// Optimize, plan and run a logical plan as a (cancellable, observable) query.
@@ -1085,6 +1105,31 @@ fn execute_logical_inner(plan: &LogicalPlan) -> Result<(SchemaRef, Vec<RecordBat
     use rayon::prelude::*;
     let batches = batches.into_par_iter().map(|b| conform(b, &schema)).collect::<Result<Vec<_>>>()?;
     Ok((schema, batches.into_iter().flatten().collect()))
+}
+
+fn execute_logical_collected(plan: &LogicalPlan) -> Result<Collected> {
+    let opt = optimize(plan)?;
+    let phys = create_physical_plan(&opt)?;
+    let schema = final_schema(opt.schema(), &phys.schema());
+    use rayon::prelude::*;
+    if matches!(&phys, PhysicalPlan::Sort { fetch: None, .. }) {
+        match crate::physical::execute::execute_sorted(&phys)? {
+            crate::exec::sort::Sorted::Gather(g) => {
+                let (_, batches, idx) = g.into_parts();
+                let batches = batches.into_par_iter().map(|b| conform(b, &schema)).collect::<Result<Vec<_>>>()?;
+                let batches = batches.into_iter().flatten().collect();
+                return Ok(Collected::Sorted { schema, batches, idx: Arc::from(idx) });
+            }
+            other => {
+                let batches = other.into_batches()?;
+                let batches = batches.into_par_iter().map(|b| conform(b, &schema)).collect::<Result<Vec<_>>>()?;
+                return Ok(Collected::Batches(schema, batches.into_iter().flatten().collect()));
+            }
+        }
+    }
+    let batches = execute(&phys)?;
+    let batches = batches.into_par_iter().map(|b| conform(b, &schema)).collect::<Result<Vec<_>>>()?;
+    Ok(Collected::Batches(schema, batches.into_iter().flatten().collect()))
 }
 
 /// A result batch as the query's final schema says (None: drop it, empty).

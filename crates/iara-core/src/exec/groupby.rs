@@ -37,6 +37,8 @@ use table::{IdTable, PREFETCH_AHEAD};
 pub trait ColumnInterner: Send + Sync {
     /// Map every row of `array` to a dense id (appending unseen values).
     fn intern(&mut self, array: &ArrayRef, out: &mut Vec<u32>) -> Result<()>;
+    /// Map selected rows of `array` to dense ids, and unselected rows to `u32::MAX`.
+    fn intern_masked(&mut self, array: &ArrayRef, mask: &arrow::buffer::BooleanBuffer, out: &mut Vec<u32>) -> Result<()>;
     fn len(&self) -> usize;
     /// The distinct values, in id order.
     fn values(&self) -> Result<ArrayRef>;
@@ -100,13 +102,22 @@ where
         out.reserve(arr.len());
         let nulls = arr.nulls().filter(|n| n.null_count() > 0);
         if !self.map.large() {
-            for (i, &v) in vals.iter().enumerate() {
-                let id = if nulls.is_none_or(|n| n.is_valid(i)) {
-                    self.lookup(<T::Native as NativeKey>::hash_key(v.to_key()), v)
-                } else {
-                    self.null()
-                };
-                out.push(id);
+            match nulls {
+                None => {
+                    for &v in vals.iter() {
+                        out.push(self.lookup(<T::Native as NativeKey>::hash_key(v.to_key()), v));
+                    }
+                }
+                Some(nulls) => {
+                    for (i, &v) in vals.iter().enumerate() {
+                        let id = if nulls.is_valid(i) {
+                            self.lookup(<T::Native as NativeKey>::hash_key(v.to_key()), v)
+                        } else {
+                            self.null()
+                        };
+                        out.push(id);
+                    }
+                }
             }
             return Ok(());
         }
@@ -134,6 +145,24 @@ where
             }
         }
         self.hashes = hashes;
+        Ok(())
+    }
+
+    fn intern_masked(&mut self, array: &ArrayRef, mask: &arrow::buffer::BooleanBuffer, out: &mut Vec<u32>) -> Result<()> {
+        let arr = array.as_primitive::<T>();
+        let vals = arr.values();
+        out.clear();
+        out.reserve(arr.len());
+        let nulls = arr.nulls().filter(|n| n.null_count() > 0);
+        for (i, &v) in vals.iter().enumerate() {
+            if !mask.value(i) {
+                out.push(u32::MAX);
+            } else if nulls.is_some_and(|n| n.is_null(i)) {
+                out.push(self.null());
+            } else {
+                out.push(self.lookup(<T::Native as NativeKey>::hash_key(v.to_key()), v));
+            }
+        }
         Ok(())
     }
 
@@ -168,6 +197,8 @@ struct BytesInterner {
     /// Utf8View strings of <= 12 bytes are fully described by their 128-bit
     /// view (length + inline bytes), which is used directly as the key
     short: IdTable<u128>,
+    /// direct lookup for 0-byte (index 256) and 1-byte (index 0..256) strings
+    one_byte: Box<[u32; 257]>,
     offsets: Vec<usize>,
     data: Vec<u8>,
     hashes: Vec<u64>,
@@ -180,6 +211,7 @@ impl BytesInterner {
         Self {
             map: IdTable::new(),
             short: IdTable::new(),
+            one_byte: Box::new([u32::MAX; 257]),
             offsets: vec![0],
             data: vec![],
             hashes: vec![],
@@ -203,9 +235,27 @@ impl BytesInterner {
         }
     }
 
+    #[inline(always)]
+    fn one_byte_id(&mut self, view: u128) -> u32 {
+        let len = view as u32;
+        let idx = if len == 0 { 256 } else { ((view >> 32) as u8) as usize };
+        let cached = self.one_byte[idx];
+        if cached != u32::MAX {
+            return cached;
+        }
+        let byte = [idx as u8];
+        let b: &[u8] = if len == 0 { &[] } else { &byte };
+        let id = self.lookup(hash_bytes(b), b);
+        self.one_byte[idx] = id;
+        id
+    }
+
     /// The id of a string of up to 12 bytes, keyed by its view.
     #[inline(always)]
     fn short_id(&mut self, view: u128, a: &StringViewArray, i: usize) -> u32 {
+        if view as u32 <= 1 {
+            return self.one_byte_id(view);
+        }
         self.short_id_hashed(hash_u128(view), view, a, i)
     }
 
@@ -267,16 +317,34 @@ impl BytesInterner {
         let views = a.views();
         let nulls = a.nulls().filter(|n| n.null_count() > 0);
         if !self.short.large() && !self.map.large() {
-            for (i, &view) in views.iter().enumerate() {
-                let id = if nulls.is_some_and(|n| n.is_null(i)) {
-                    self.null()
-                } else if view as u32 <= 12 {
-                    self.short_id(view, a, i)
-                } else {
-                    let b = a.value(i).as_bytes();
-                    self.lookup(hash_bytes(b), b)
-                };
-                out.push(id);
+            match nulls {
+                None => {
+                    for (i, &view) in views.iter().enumerate() {
+                        let len = view as u32;
+                        let id = if len <= 1 {
+                            self.one_byte_id(view)
+                        } else if len <= 12 {
+                            self.short_id_hashed(hash_u128(view), view, a, i)
+                        } else {
+                            let b = a.value(i).as_bytes();
+                            self.lookup(hash_bytes(b), b)
+                        };
+                        out.push(id);
+                    }
+                }
+                Some(nulls) => {
+                    for (i, &view) in views.iter().enumerate() {
+                        let id = if nulls.is_null(i) {
+                            self.null()
+                        } else if view as u32 <= 12 {
+                            self.short_id(view, a, i)
+                        } else {
+                            let b = a.value(i).as_bytes();
+                            self.lookup(hash_bytes(b), b)
+                        };
+                        out.push(id);
+                    }
+                }
             }
             return;
         }
@@ -294,7 +362,9 @@ impl BytesInterner {
                 out.push(id);
                 continue;
             }
-            let id = if view as u32 <= 12 {
+            let id = if view as u32 <= 1 {
+                self.one_byte_id(view)
+            } else if view as u32 <= 12 {
                 self.short_id_hashed(h, view, a, i)
             } else {
                 self.lookup(h, a.value(i).as_bytes())
@@ -302,6 +372,50 @@ impl BytesInterner {
             out.push(id);
         }
         self.hashes = hashes;
+    }
+    fn run_masked<'a>(
+        &mut self,
+        values: impl Fn(usize) -> Option<&'a [u8]>,
+        mask: &arrow::buffer::BooleanBuffer,
+        n: usize,
+        out: &mut Vec<u32>,
+    ) {
+        for i in 0..n {
+            if !mask.value(i) {
+                out.push(u32::MAX);
+                continue;
+            }
+            let id = match values(i) {
+                Some(b) => self.lookup(hash_bytes(b), b),
+                None => self.null(),
+            };
+            out.push(id);
+        }
+    }
+
+    fn run_view_masked(&mut self, a: &StringViewArray, mask: &arrow::buffer::BooleanBuffer, out: &mut Vec<u32>) {
+        let views = a.views();
+        let nulls = a.nulls().filter(|n| n.null_count() > 0);
+        for (i, &view) in views.iter().enumerate() {
+            if !mask.value(i) {
+                out.push(u32::MAX);
+                continue;
+            }
+            let id = if nulls.is_some_and(|n| n.is_null(i)) {
+                self.null()
+            } else {
+                let len = view as u32;
+                if len <= 1 {
+                    self.one_byte_id(view)
+                } else if len <= 12 {
+                    self.short_id_hashed(hash_u128(view), view, a, i)
+                } else {
+                    let b = a.value(i).as_bytes();
+                    self.lookup(hash_bytes(b), b)
+                }
+            };
+            out.push(id);
+        }
     }
 }
 
@@ -326,6 +440,31 @@ impl ColumnInterner for BytesInterner {
             DataType::Binary => run!(array.as_binary::<i32>(), std::convert::identity),
             DataType::LargeBinary => run!(array.as_binary::<i64>(), std::convert::identity),
             DataType::BinaryView => run!(array.as_binary_view(), std::convert::identity),
+            dt => unreachable!("bytes interner for {dt}"),
+        }
+        Ok(())
+    }
+
+    fn intern_masked(&mut self, array: &ArrayRef, mask: &arrow::buffer::BooleanBuffer, out: &mut Vec<u32>) -> Result<()> {
+        out.clear();
+        out.reserve(array.len());
+        let n = array.len();
+        macro_rules! run_m {
+            ($a:expr, $f:expr) => {{
+                let a = $a;
+                match a.nulls().filter(|x| x.null_count() > 0).cloned() {
+                    None => self.run_masked(|i| Some($f(a.value(i))), mask, n, out),
+                    Some(nulls) => self.run_masked(|i| nulls.is_valid(i).then(|| $f(a.value(i))), mask, n, out),
+                }
+            }};
+        }
+        match array.data_type() {
+            DataType::Utf8 => run_m!(array.as_string::<i32>(), str::as_bytes),
+            DataType::LargeUtf8 => run_m!(array.as_string::<i64>(), str::as_bytes),
+            DataType::Utf8View => self.run_view_masked(array.as_string_view(), mask, out),
+            DataType::Binary => run_m!(array.as_binary::<i32>(), std::convert::identity),
+            DataType::LargeBinary => run_m!(array.as_binary::<i64>(), std::convert::identity),
+            DataType::BinaryView => run_m!(array.as_binary_view(), std::convert::identity),
             dt => unreachable!("bytes interner for {dt}"),
         }
         Ok(())
@@ -438,6 +577,33 @@ impl ColumnInterner for BoolInterner {
         }
         Ok(())
     }
+    fn intern_masked(&mut self, array: &ArrayRef, mask: &arrow::buffer::BooleanBuffer, out: &mut Vec<u32>) -> Result<()> {
+        let a = array.as_boolean();
+        out.clear();
+        out.reserve(a.len());
+        for (i, v) in a.iter().enumerate() {
+            if !mask.value(i) {
+                out.push(u32::MAX);
+                continue;
+            }
+            let slot = match v {
+                Some(false) => 0,
+                Some(true) => 1,
+                None => 2,
+            };
+            let id = match self.ids[slot] {
+                Some(id) => id,
+                None => {
+                    let id = self.order.len() as u32;
+                    self.order.push(v);
+                    self.ids[slot] = Some(id);
+                    id
+                }
+            };
+            out.push(id);
+        }
+        Ok(())
+    }
     fn len(&self) -> usize {
         self.order.len()
     }
@@ -463,6 +629,25 @@ impl ColumnInterner for RowInterner {
         out.reserve(array.len());
         let before = self.bytes.len();
         for i in 0..rows.num_rows() {
+            let b = rows.row(i);
+            let id = self.bytes.lookup(hash_bytes(b.as_ref()), b.as_ref());
+            out.push(id);
+        }
+        if self.bytes.len() > before || self.rows.is_none() {
+            self.rows = None;
+        }
+        Ok(())
+    }
+    fn intern_masked(&mut self, array: &ArrayRef, mask: &arrow::buffer::BooleanBuffer, out: &mut Vec<u32>) -> Result<()> {
+        let rows = self.conv.convert_columns(std::slice::from_ref(array))?;
+        out.clear();
+        out.reserve(array.len());
+        let before = self.bytes.len();
+        for i in 0..rows.num_rows() {
+            if !mask.value(i) {
+                out.push(u32::MAX);
+                continue;
+            }
             let b = rows.row(i);
             let id = self.bytes.lookup(hash_bytes(b.as_ref()), b.as_ref());
             out.push(id);
@@ -537,8 +722,8 @@ struct Dependent {
 // ---------------------------------------------------------------------------
 
 enum Composite {
-    /// two column ids packed into one u64
-    Two { map: IdTable<u64>, keys: Vec<u64> },
+    /// two column ids packed into one u64; pairs below 64x64 also live in `small`
+    Two { map: IdTable<u64>, keys: Vec<u64>, small: Box<[u32; 4096]> },
     /// keyed by the hash of the tuple of column ids; equal hashes compare the tuples
     Many { k: usize, map: IdTable<u64>, ids: Vec<u32>, hashes: Vec<u64> },
 }
@@ -587,7 +772,7 @@ impl GroupKeys {
             self.dep = None;
             self.composite = match self.types.len() {
                 0 | 1 => None,
-                2 => Some(Composite::Two { map: IdTable::new(), keys: vec![] }),
+                2 => Some(Composite::Two { map: IdTable::new(), keys: vec![], small: Box::new([u32::MAX; 4096]) }),
                 k => Some(Composite::Many { k, map: IdTable::new(), ids: vec![], hashes: vec![] }),
             };
         }
@@ -604,7 +789,7 @@ impl GroupKeys {
             i.reserve(n);
         }
         match &mut self.composite {
-            Some(Composite::Two { map, keys }) => {
+            Some(Composite::Two { map, keys, .. }) => {
                 map.reserve(n, |&e| hash_u64(e));
                 keys.reserve(n);
             }
@@ -631,6 +816,83 @@ impl GroupKeys {
     /// Dependent mode: the column the others depend on (so far).
     pub fn lead(&self) -> Option<usize> {
         self.dep.as_ref().map(|d| d.lead)
+    }
+
+    pub fn intern_masked(&mut self, cols: &[ArrayRef], mask: &arrow::buffer::BooleanBuffer, out: &mut Vec<u32>) -> Result<()> {
+        debug_assert!(self.dep.is_none());
+        let Some(comp) = &mut self.composite else {
+            return self.interners[0].intern_masked(&cols[0], mask, out);
+        };
+        for (j, c) in cols.iter().enumerate() {
+            self.interners[j].intern_masked(c, mask, &mut self.scratch[j])?;
+        }
+        let n = cols[0].len();
+        out.clear();
+        out.reserve(n);
+        match comp {
+            Composite::Two { map, keys, small } => {
+                let (a, b) = (&self.scratch[0], &self.scratch[1]);
+                for i in 0..n {
+                    let (ai, bi) = (a[i], b[i]);
+                    if ai == u32::MAX {
+                        out.push(u32::MAX);
+                        continue;
+                    }
+                    if (ai | bi) < 64 {
+                        let sidx = ((ai as usize) << 6) | (bi as usize);
+                        let cached = small[sidx];
+                        if cached != u32::MAX {
+                            out.push(cached);
+                            continue;
+                        }
+                    }
+                    let k = ((ai as u64) << 32) | bi as u64;
+                    let h = hash_u64(k);
+                    let id = match map.find(h, |&e, _| e == k) {
+                        Ok(id) => id,
+                        Err(slot) => {
+                            let id = keys.len() as u32;
+                            keys.push(k);
+                            map.insert(slot, h, k, id, |&e| hash_u64(e));
+                            if (ai | bi) < 64 {
+                                small[((ai as usize) << 6) | (bi as usize)] = id;
+                            }
+                            id
+                        }
+                    };
+                    out.push(id);
+                }
+            }
+            Composite::Many { k, map, ids, .. } => {
+                let k = *k;
+                let scratch = &self.scratch;
+                let mut tuple = vec![0u32; k];
+                for i in 0..n {
+                    if scratch[0][i] == u32::MAX {
+                        out.push(u32::MAX);
+                        continue;
+                    }
+                    let mut h = 0u64;
+                    for (j, t) in tuple.iter_mut().enumerate() {
+                        let v = scratch[j][i];
+                        *t = v;
+                        h = combine(h, hash_u64(v as u64));
+                    }
+                    let found = map.find(h, |&e, g| e == h && ids[g as usize * k..(g as usize + 1) * k] == tuple[..]);
+                    let id = match found {
+                        Ok(id) => id,
+                        Err(slot) => {
+                            let id = (ids.len() / k) as u32;
+                            ids.extend_from_slice(&tuple);
+                            map.insert(slot, h, h, id, |&e| e);
+                            id
+                        }
+                    };
+                    out.push(id);
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn intern(&mut self, cols: &[ArrayRef], out: &mut Vec<u32>) -> Result<()> {
@@ -662,11 +924,20 @@ impl GroupKeys {
         out.clear();
         out.reserve(n);
         match comp {
-            Composite::Two { map, keys } => {
+            Composite::Two { map, keys, small } => {
                 let (a, b) = (&self.scratch[0], &self.scratch[1]);
                 let key = |i: usize| ((a[i] as u64) << 32) | b[i] as u64;
                 let large = map.large();
                 for i in 0..n {
+                    let (ai, bi) = (a[i], b[i]);
+                    if (ai | bi) < 64 {
+                        let sidx = ((ai as usize) << 6) | (bi as usize);
+                        let cached = small[sidx];
+                        if cached != u32::MAX {
+                            out.push(cached);
+                            continue;
+                        }
+                    }
                     if large && i + PREFETCH_AHEAD < n {
                         map.prefetch(hash_u64(key(i + PREFETCH_AHEAD)));
                     }
@@ -678,6 +949,9 @@ impl GroupKeys {
                             let id = keys.len() as u32;
                             keys.push(k);
                             map.insert(slot, h, k, id, |&e| hash_u64(e));
+                            if (ai | bi) < 64 {
+                                small[((ai as usize) << 6) | (bi as usize)] = id;
+                            }
                             id
                         }
                     };

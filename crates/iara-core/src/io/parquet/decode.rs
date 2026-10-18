@@ -42,6 +42,7 @@ pub struct Part<'a> {
     pub schema: &'a SchemaRef,
 }
 
+/// Decode a row group part; `filter` (if any) is applied while decoding.
 pub fn decode(input: RangeChunks, mask: ProjectionMask, part: &Part<'_>, filter: Option<&LateFilter>, emit: Emit<'_>) -> Result<()> {
     let mut builder = reader(input, part.meta, mask, part.row_group).with_batch_size(batch_size());
     if let Some((start, len)) = part.rows {
@@ -55,7 +56,7 @@ pub fn decode(input: RangeChunks, mask: ProjectionMask, part: &Part<'_>, filter:
     if let Some(limit) = part.limit {
         builder = builder.with_limit(limit);
     }
-    if let Some(f) = filter.filter(|f| f.active()) {
+    if let Some(f) = filter {
         builder = builder.with_row_filter(f.row_filter(part.meta.parquet_schema()));
     }
     for b in builder.build()? {

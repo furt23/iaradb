@@ -94,12 +94,14 @@ fn each_valid<T: Copy>(gids: &[u32], vals: &[T], nulls: Option<&NullBuffer>, mut
     match nulls {
         None => {
             for (&g, &v) in gids.iter().zip(vals) {
-                f(g as usize, v)
+                if g != u32::MAX {
+                    f(g as usize, v)
+                }
             }
         }
         Some(n) => {
             for (i, (&g, &v)) in gids.iter().zip(vals).enumerate() {
-                if n.is_valid(i) {
+                if g != u32::MAX && n.is_valid(i) {
                     f(g as usize, v)
                 }
             }
@@ -125,17 +127,22 @@ impl RowAcc for CountRow {
         1
     }
     fn update(&self, rows: &mut Rows, at: usize, values: &[ArrayRef], gids: &[u32]) -> Result<()> {
+        let stride = rows.stride;
+        let base = rows.lines.as_mut_ptr() as *mut u64;
         match values.first().and_then(|v| v.logical_nulls()).filter(|n| n.null_count() > 0) {
             None => {
                 for &g in gids {
-                    let g = g as usize;
-                    rows.set(g, at, rows.get::<i64>(g, at) + 1);
+                    if g != u32::MAX {
+                        // SAFETY: groups in `gids` are below `rows.groups`
+                        unsafe { *(base.add(g as usize * stride + at) as *mut i64) += 1 };
+                    }
                 }
             }
             Some(nulls) => {
                 for (i, &g) in gids.iter().enumerate() {
-                    let g = g as usize;
-                    rows.set(g, at, rows.get::<i64>(g, at) + nulls.is_valid(i) as i64);
+                    if g != u32::MAX {
+                        unsafe { *(base.add(g as usize * stride + at) as *mut i64) += nulls.is_valid(i) as i64 };
+                    }
                 }
             }
         }
@@ -199,13 +206,14 @@ where
         let arr = values[0].as_primitive::<I>();
         let (vals, nulls) = (arr.values(), nulls_of(arr));
         let mut over = false;
-        let seen = at + Self::WIDE;
-        each_valid(gids, vals, nulls, |g, v| {
-            let w = <O::Native as SumNative>::add_wide(rows.get::<Wide<O>>(g, at), v.into().widen(), &mut over);
-            rows.set(g, at, w);
-            if rows.get::<u64>(g, seen) == 0 {
-                rows.set(g, seen, 1u64);
-            }
+        let stride = rows.stride;
+        let base = rows.lines.as_mut_ptr() as *mut u64;
+        each_valid(gids, vals, nulls, |g, v| unsafe {
+            let p = base.add(g * stride + at);
+            let cur = std::ptr::read_unaligned(p as *const Wide<O>);
+            let w = <O::Native as SumNative>::add_wide(cur, v.into().widen(), &mut over);
+            std::ptr::write_unaligned(p as *mut Wide<O>, w);
+            *p.add(Self::WIDE) = 1u64;
         });
         self.check(over)
     }
@@ -303,11 +311,14 @@ impl<T: ArrowPrimitiveType, const MIN: bool> RowAcc for MinMaxRow<T, MIN> {
     fn update(&self, rows: &mut Rows, at: usize, values: &[ArrayRef], gids: &[u32]) -> Result<()> {
         let arr = values[0].as_primitive::<T>();
         let nulls = nulls_of(arr);
-        let seen = at + Self::VALUE;
-        each_valid(gids, arr.values(), nulls, |g, v| {
-            if rows.get::<u64>(g, seen) == 0 || Self::better(v, rows.get(g, at)) {
-                rows.set(g, at, v);
-                rows.set(g, seen, 1u64);
+        let stride = rows.stride;
+        let base = rows.lines.as_mut_ptr() as *mut u64;
+        each_valid(gids, arr.values(), nulls, |g, v| unsafe {
+            let p = base.add(g * stride + at);
+            let seen_p = p.add(Self::VALUE);
+            if *seen_p == 0 || Self::better(v, std::ptr::read_unaligned(p as *const T::Native)) {
+                std::ptr::write_unaligned(p as *mut T::Native, v);
+                *seen_p = 1u64;
             }
         });
         Ok(())
@@ -363,9 +374,12 @@ where
         let a = Self::input(&values[0])?;
         let a = a.as_primitive::<I>();
         let nulls = nulls_of(a);
-        each_valid(gids, a.values(), nulls, |g, v| {
-            rows.set(g, at, rows.get::<f64>(g, at) + v.to_f64());
-            rows.set(g, at + 1, rows.get::<i64>(g, at + 1) + 1);
+        let stride = rows.stride;
+        let base = rows.lines.as_mut_ptr() as *mut u64;
+        each_valid(gids, a.values(), nulls, |g, v| unsafe {
+            let p = base.add(g * stride + at);
+            *(p as *mut f64) += v.to_f64();
+            *(p.add(1) as *mut i64) += 1;
         });
         Ok(())
     }
@@ -435,11 +449,15 @@ impl RowAcc for DecimalMeanRow {
         let a = values[0].as_primitive::<Decimal128Type>();
         let nulls = nulls_of(a);
         let mut over = false;
-        each_valid(gids, a.values(), nulls, |g, v| {
-            let (r, o) = rows.get::<i128>(g, at).overflowing_add(v);
+        let stride = rows.stride;
+        let base = rows.lines.as_mut_ptr() as *mut u64;
+        each_valid(gids, a.values(), nulls, |g, v| unsafe {
+            let p = base.add(g * stride + at);
+            let cur = std::ptr::read_unaligned(p as *const i128);
+            let (r, o) = cur.overflowing_add(v);
             over |= o;
-            rows.set(g, at, r);
-            rows.set(g, at + 2, rows.get::<i64>(g, at + 2) + 1);
+            std::ptr::write_unaligned(p as *mut i128, r);
+            *(p.add(2) as *mut i64) += 1;
         });
         if over { Err(decimal_mean_overflow()) } else { Ok(()) }
     }
@@ -555,12 +573,17 @@ impl Accumulator for OwnRows {
 pub enum AccPart {
     /// state in the shared rows
     Row(Box<dyn RowAcc>),
+    /// state in the shared rows updated by `updater` and finished by `finisher`
+    PairedRow { updater: Box<dyn RowAcc>, finisher: Box<dyn RowAcc> },
+    /// state in the shared rows already updated by `owner`, finished by `finisher`
+    FollowerRow { finisher: Box<dyn RowAcc>, owner: usize },
     /// state of its own
     Own(Box<dyn Accumulator>),
 }
 
 enum Slot {
-    Row { acc: Box<dyn RowAcc>, at: usize },
+    Row { updater: Option<Box<dyn RowAcc>>, finisher: Box<dyn RowAcc>, at: usize },
+    FollowerRow { finisher: Box<dyn RowAcc>, at: usize },
     Own(Box<dyn Accumulator>),
 }
 
@@ -576,13 +599,25 @@ pub type AccInput = (Vec<ArrayRef>, Option<ArrayRef>);
 impl AccSet {
     pub fn new(parts: Vec<AccPart>) -> Self {
         let mut at = 0;
-        let mut slots = Vec::with_capacity(parts.len());
+        let mut slots: Vec<Slot> = Vec::with_capacity(parts.len());
         for p in parts {
             slots.push(match p {
                 AccPart::Row(acc) => {
                     let words = acc.words();
                     at += words;
-                    Slot::Row { acc, at: at - words }
+                    Slot::Row { updater: None, finisher: acc, at: at - words }
+                }
+                AccPart::PairedRow { updater, finisher } => {
+                    let words = updater.words();
+                    at += words;
+                    Slot::Row { updater: Some(updater), finisher, at: at - words }
+                }
+                AccPart::FollowerRow { finisher, owner } => {
+                    let owner_at = match &slots[owner] {
+                        Slot::Row { at, .. } | Slot::FollowerRow { at, .. } => *at,
+                        Slot::Own(_) => unreachable!("owner must be a row slot"),
+                    };
+                    Slot::FollowerRow { finisher, at: owner_at }
                 }
                 AccPart::Own(acc) => Slot::Own(acc),
             });
@@ -596,10 +631,23 @@ impl AccSet {
     pub fn update(&mut self, inputs: &[AccInput], gids: &[u32], num_groups: usize) -> Result<()> {
         self.rows.grow(num_groups);
         for (slot, (args, f)) in self.slots.iter_mut().zip(inputs) {
+            if matches!(slot, Slot::FollowerRow { .. }) {
+                continue;
+            }
+            let filtered_gids;
             let filtered;
-            let (vals, g): (&[ArrayRef], &[u32]) = match f {
-                None => (args, gids),
-                Some(mask) => {
+            let (vals, g): (&[ArrayRef], &[u32]) = match (f, &slot) {
+                (None, _) => (args, gids),
+                (Some(mask), Slot::Row { .. }) => {
+                    let mask = null_as_false(mask.as_boolean());
+                    filtered_gids = gids
+                        .iter()
+                        .zip(mask.values().iter())
+                        .map(|(&g, m)| if m { g } else { u32::MAX })
+                        .collect::<Vec<u32>>();
+                    (args, &filtered_gids)
+                }
+                (Some(mask), _) => {
                     let mask = null_as_false(mask.as_boolean());
                     let vals = args.iter().map(|v| filter(v, &mask)).collect::<Result<Vec<_>, _>>()?;
                     let g: Vec<u32> = gids.iter().zip(mask.values().iter()).filter_map(|(g, m)| m.then_some(*g)).collect();
@@ -608,7 +656,9 @@ impl AccSet {
                 }
             };
             match slot {
-                Slot::Row { acc, at } => acc.update(&mut self.rows, *at, vals, g)?,
+                Slot::Row { updater: Some(u), at, .. } => u.update(&mut self.rows, *at, vals, g)?,
+                Slot::Row { updater: None, finisher, at } => finisher.update(&mut self.rows, *at, vals, g)?,
+                Slot::FollowerRow { .. } => unreachable!(),
                 Slot::Own(acc) => acc.update(vals, g, num_groups)?,
             }
         }
@@ -619,6 +669,9 @@ impl AccSet {
     pub fn update_single(&mut self, inputs: &[AccInput], num_rows: usize) -> Result<()> {
         self.rows.grow(1);
         for (slot, (args, f)) in self.slots.iter_mut().zip(inputs) {
+            if matches!(slot, Slot::FollowerRow { .. }) {
+                continue;
+            }
             let filtered;
             let (vals, n): (&[ArrayRef], usize) = match f {
                 None => (args, num_rows),
@@ -629,7 +682,9 @@ impl AccSet {
                 }
             };
             match slot {
-                Slot::Row { acc, at } => acc.update_single(&mut self.rows, *at, vals, n)?,
+                Slot::Row { updater: Some(u), at, .. } => u.update_single(&mut self.rows, *at, vals, n)?,
+                Slot::Row { updater: None, finisher, at } => finisher.update_single(&mut self.rows, *at, vals, n)?,
+                Slot::FollowerRow { .. } => unreachable!(),
                 Slot::Own(acc) => acc.update_single(vals, n)?,
             }
         }
@@ -641,7 +696,13 @@ impl AccSet {
         self.rows.grow(num_groups);
         for (slot, theirs) in self.slots.iter_mut().zip(&other.slots) {
             match (slot, theirs) {
-                (Slot::Row { acc, at }, Slot::Row { .. }) => acc.merge(&mut self.rows, *at, &other.rows, src, dst)?,
+                (Slot::FollowerRow { .. }, Slot::FollowerRow { .. }) => {}
+                (Slot::Row { updater: Some(u), at, .. }, Slot::Row { .. }) => {
+                    u.merge(&mut self.rows, *at, &other.rows, src, dst)?;
+                }
+                (Slot::Row { updater: None, finisher, at }, Slot::Row { .. }) => {
+                    finisher.merge(&mut self.rows, *at, &other.rows, src, dst)?;
+                }
                 (Slot::Own(acc), Slot::Own(o)) => acc.merge(o.as_ref(), src, dst, num_groups)?,
                 _ => return Err(WhError::Execution("accumulator type mismatch during merge".into())),
             }
@@ -655,7 +716,9 @@ impl AccSet {
         self.slots
             .iter_mut()
             .map(|slot| match slot {
-                Slot::Row { acc, at } => acc.finish(rows, *at, num_groups),
+                Slot::Row { finisher, at, .. } | Slot::FollowerRow { finisher, at } => {
+                    finisher.finish(rows, *at, num_groups)
+                }
                 Slot::Own(acc) => acc.finish(num_groups),
             })
             .collect()
@@ -667,7 +730,7 @@ impl AccSet {
             .iter()
             .map(|s| match s {
                 Slot::Own(acc) => acc.state_bytes(),
-                Slot::Row { .. } => 0,
+                Slot::Row { .. } | Slot::FollowerRow { .. } => 0,
             })
             .sum()
     }

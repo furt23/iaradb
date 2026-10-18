@@ -35,6 +35,18 @@ pub fn execute(plan: &PhysicalPlan) -> Result<Vec<RecordBatch>> {
     Exec { metrics: None }.execute(plan, 0)
 }
 
+pub fn execute_sorted(plan: &PhysicalPlan) -> Result<crate::exec::sort::Sorted> {
+    let exec = Exec { metrics: None };
+    match plan {
+        PhysicalPlan::Sort { input, keys, fetch, schema, bound } => {
+            let pipe = exec.pipeline(input, 0)?;
+            let resident = pipe.resident();
+            exec.run(0, &pipe, &SortSink { keys: keys.clone(), fetch: *fetch, schema: schema.clone(), bound: bound.clone(), resident })
+        }
+        _ => Ok(crate::exec::sort::Sorted::Batches(exec.execute(plan, 0)?)),
+    }
+}
+
 /// Run a plan, handing its batches to `emit` in order as they are produced:
 /// pipelines stream through an order-preserving sink, a sort's runs are
 /// merged straight into `emit`. Only aggregations and window results are
@@ -107,13 +119,27 @@ impl Exec {
         let ids = self.ids(plan, id);
         match plan {
             PhysicalPlan::Aggregate { input, group_exprs, aggs, schema } => {
-                let pipe = self.pipeline(input, ids[0])?;
                 let sink = AggregateSink::new(group_exprs.clone(), aggs.clone(), schema.clone());
+                let pipe = match input.as_ref() {
+                    PhysicalPlan::Filter { input: fin, predicate, projection, .. } if sink.can_defer_filter() => {
+                        let f_ids = self.ids(input, ids[0]);
+                        self.pipeline(fin, f_ids[0])?.with_op(self.op(
+                            ids[0],
+                            Arc::new(FilterOp {
+                                predicate: predicate.clone(),
+                                projection: projection.clone(),
+                                defer_mask: true,
+                            }),
+                        ))
+                    }
+                    _ => self.pipeline(input, ids[0])?,
+                };
                 Ok(self.output(id, self.run(id, &pipe, &sink)?))
             }
-            PhysicalPlan::Sort { input, keys, fetch, schema } => {
+            PhysicalPlan::Sort { input, keys, fetch, schema, bound } => {
                 let pipe = self.pipeline(input, ids[0])?;
-                let sorted = self.run(id, &pipe, &SortSink { keys: keys.clone(), fetch: *fetch, schema: schema.clone() })?;
+                let resident = pipe.resident();
+                let sorted = self.run(id, &pipe, &SortSink { keys: keys.clone(), fetch: *fetch, schema: schema.clone(), bound: bound.clone(), resident })?;
                 Ok(self.output(id, self.timed(id, || sorted.into_batches())?))
             }
             PhysicalPlan::Limit { input, skip, fetch } => {
@@ -148,9 +174,10 @@ impl Exec {
     fn stream(&self, plan: &PhysicalPlan, id: usize, emit: Emitter<'_>) -> Result<()> {
         let ids = self.ids(plan, id);
         match plan {
-            PhysicalPlan::Sort { input, keys, fetch, schema } => {
+            PhysicalPlan::Sort { input, keys, fetch, schema, bound } => {
                 let pipe = self.pipeline(input, ids[0])?;
-                let sorted = self.run(id, &pipe, &SortSink { keys: keys.clone(), fetch: *fetch, schema: schema.clone() })?;
+                let resident = pipe.resident();
+                let sorted = self.run(id, &pipe, &SortSink { keys: keys.clone(), fetch: *fetch, schema: schema.clone(), bound: bound.clone(), resident })?;
                 match self.node(id) {
                     None => sorted.emit(emit),
                     // the merge is the node's, what `emit` does with its batches is not
@@ -213,7 +240,7 @@ impl Exec {
             PhysicalPlan::Source { source, .. } => Pipeline::new(self.source(id, source.clone())),
             PhysicalPlan::Filter { input, predicate, projection, .. } => self
                 .pipeline(input, ids[0])?
-                .with_op(self.op(id, Arc::new(FilterOp { predicate: predicate.clone(), projection: projection.clone() }))),
+                .with_op(self.op(id, Arc::new(FilterOp { predicate: predicate.clone(), projection: projection.clone(), defer_mask: false }))),
             PhysicalPlan::Project { input, exprs, schema } => self
                 .pipeline(input, ids[0])?
                 .with_op(self.op(id, Arc::new(ProjectOp { exprs: exprs.clone(), schema: schema.clone() }))),

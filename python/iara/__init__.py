@@ -1126,6 +1126,8 @@ class DataFrame:
         return pa.RecordBatchReader.from_stream(self._df).read_all()
 
     def to_pandas(self, **kwargs: Any) -> Any:
+        # dates as datetime64 columns, as Polars converts them, not one Python object per value
+        kwargs.setdefault("date_as_object", False)
         return self.to_arrow().to_pandas(**kwargs)
 
     def to_polars(self) -> Any:

@@ -1,6 +1,6 @@
 /**
  * Benchmark results for the site, from benchmarks.json (written by benchmarks/site_data.py).
- * Summaries only count queries every engine ran with a correct result, so totals compare the same work.
+ * Sums cover every query, so they are only given for engines that ran them all.
  */
 import data from './benchmarks.json';
 
@@ -27,29 +27,34 @@ export interface RealisticRow {
 
 export const ok = (q: Query, e: string) => q.ms[e] != null && !q.notes[e];
 
-/** Queries every engine ran correctly. */
-export const common = (s: Suite) => s.queries.filter((q) => s.engines.every((e) => ok(q, e)));
-
 const geomean = (xs: number[]) => Math.exp(xs.reduce((a, x) => a + Math.log(x), 0) / xs.length);
 
+/**
+ * Per engine: the sum and geometric mean over all queries (only for engines that ran every query;
+ * `wrong` counts results that differ from DuckDB's), and Iara's speed-up over the engine as the
+ * geometric mean of per-query ratios on the queries both ran correctly.
+ */
 export function summary(s: Suite) {
-  const shared = common(s);
   return {
-    shared: shared.length,
     of: s.queries.length,
-    engines: s.engines.map((e) => ({
-      key: e,
-      name: names[e],
-      version: s.meta.versions[e],
-      completed: s.queries.filter((q) => ok(q, e)).length,
-      sumS: shared.reduce((a, q) => a + (q.ms[e] as number), 0) / 1000,
-      geomeanMs: geomean(shared.map((q) => q.ms[e] as number)),
-      // Iara's speed-up over this engine, on the queries both ran correctly
-      vsIara:
-        e === 'iara'
-          ? 1
-          : geomean(s.queries.filter((q) => ok(q, e) && ok(q, 'iara')).map((q) => (q.ms[e] as number) / (q.ms.iara as number))),
-    })),
+    engines: s.engines.map((e) => {
+      const ran = s.queries.filter((q) => q.ms[e] != null);
+      const full = ran.length === s.queries.length;
+      return {
+        key: e,
+        name: names[e],
+        version: s.meta.versions[e],
+        completed: s.queries.filter((q) => ok(q, e)).length,
+        ran: ran.length,
+        wrong: ran.filter((q) => q.notes[e]).length,
+        sumS: full ? ran.reduce((a, q) => a + (q.ms[e] as number), 0) / 1000 : null,
+        geomeanMs: full ? geomean(ran.map((q) => q.ms[e] as number)) : null,
+        vsIara:
+          e === 'iara'
+            ? 1
+            : geomean(s.queries.filter((q) => ok(q, e) && ok(q, 'iara')).map((q) => (q.ms[e] as number) / (q.ms.iara as number))),
+      };
+    }),
   };
 }
 
