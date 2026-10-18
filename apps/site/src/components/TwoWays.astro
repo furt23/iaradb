@@ -1,14 +1,17 @@
 <section class="section section--alt" id="sql">
   <div class="container">
-    <div class="section-head">
+    <div class="section-head" data-reveal>
       <p class="eyebrow">Python or SQL</p>
       <h2>The same plan, either way.</h2>
       <p class="lede">The DataFrame API and SQL build the same logical plan, so they run through the same optimizer and the same execution engine. SQL follows a DuckDB-like dialect; the DataFrame API reads like Polars.</p>
     </div>
 
-    <div class="grid grid--2">
+    <div class="grid grid--2" data-reveal-stagger>
       <article class="card">
-        <h3>DataFrame</h3>
+        <div class="card__top">
+          <h3>DataFrame</h3>
+          <span class="card__tag">Python · Lazy</span>
+        </div>
         <pre class="code"><span class="fn">lf</span> = iara.<span class="fn">scan_parquet</span>(<span class="str">"s3://bucket/events/"</span>)
 <span class="fn">top</span> = (
     lf.<span class="fn">filter</span>(F.<span class="fn">col</span>(<span class="str">"country"</span>) == <span class="str">"BR"</span>)
@@ -21,7 +24,10 @@ top.<span class="fn">collect</span>()</pre>
       </article>
 
       <article class="card">
-        <h3>SQL</h3>
+        <div class="card__top">
+          <h3>SQL</h3>
+          <span class="card__tag">DuckDB-like dialect</span>
+        </div>
         <pre class="code">iara.<span class="fn">sql</span>(<span class="str">"""
     select page, count(*) as views
     from read_parquet('s3://bucket/events/')
@@ -33,13 +39,31 @@ top.<span class="fn">collect</span>()</pre>
       </article>
     </div>
 
-    <p class="small muted note">Inputs can also be pyarrow tables, pandas or Polars DataFrames: <code>iara.sql("select k, sum(v) from t group by k", t=arrow_table)</code>.</p>
+    <p class="small muted note" data-reveal>Inputs can also be pyarrow tables, pandas or Polars DataFrames: <code>iara.sql("select k, sum(v) from t group by k", t=arrow_table)</code>.</p>
   </div>
 </section>
 
 <style>
-  .card h3 {
+  .card__top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
     margin-bottom: 18px;
+  }
+
+  .card h3 {
+    margin: 0;
+  }
+
+  .card__tag {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--ink-2);
+    background: var(--parchment-2);
+    border: 1px solid var(--rule);
+    padding: 2px 9px;
+    border-radius: 999px;
   }
 
   .card .code {
@@ -53,3 +77,4 @@ top.<span class="fn">collect</span>()</pre>
     max-width: 720px;
   }
 </style>
+

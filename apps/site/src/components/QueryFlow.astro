@@ -32,13 +32,13 @@ const narrowLanes = narrowWidths.map((w, i) => lane(w, i, 112, 6, 396 + i * 28))
 
 <section class="section" id="engine">
   <div class="container">
-    <header class="section-head">
+    <header class="section-head" data-reveal>
       <span class="eyebrow">How a query runs</span>
       <h2>From a query to every core.</h2>
       <p class="lede">SQL and DataFrame code become one logical plan. The optimizer rewrites it, the planner cuts it into pipelines, and worker threads push small chunks of data, called morsels, through each pipeline in parallel.</p>
     </header>
 
-    <div class="flow-figure">
+    <div class="flow-figure" data-reveal="scale">
       <svg class="wide" viewBox="0 0 1120 360" width="100%" height="auto" role="img" aria-label="Flow: SQL and DataFrame code become one logical plan, the optimizer rewrites it, the pipelines run morsels on four cores, and the result goes out as Arrow batches or to a Parquet or CSV sink.">
         <!-- connectors first, boxes paint over their ends -->
         <path class="flow" d="M150 132 C172 132 172 180 195 180" />
@@ -47,6 +47,8 @@ const narrowLanes = narrowWidths.map((w, i) => lane(w, i, 112, 6, 396 + i * 28))
         <path class="flow" d="M655 180 H695" />
         <path class="flow" d="M925 180 H980" />
         <path class="flow" d="M1030 194 V250" />
+        <!-- animated stream overlay -->
+        <path class="flow-stream" d="M150 132 C172 132 172 180 195 180 M150 208 C172 208 172 180 195 180 M355 180 H395 M655 180 H695 M925 180 H980" />
         <path class="flow" d="M187 175 L195 180 L187 185" />
         <path class="flow" d="M387 175 L395 180 L387 185" />
         <path class="flow" d="M687 175 L695 180 L687 185" />
@@ -73,11 +75,19 @@ const narrowLanes = narrowWidths.map((w, i) => lane(w, i, 112, 6, 396 + i * 28))
         <!-- 4. pipelines -->
         <rect class="box" x="695" y="80" width="230" height="200" rx="10" />
         <text class="t-display" x="712" y="108">Pipelines</text>
-        {wideLanes.map((l) => (
+        {wideLanes.map((l, li) => (
           <g>
             <text class="t-lane" x="712" y={l.cy + 4}>{l.label}</text>
-            {l.morsels.map((m) => (
-              <rect x={m.x} y={l.cy - 9} width={m.w} height="18" rx="4" style={`fill: ${m.fill}`} />
+            {l.morsels.map((m, mi) => (
+              <rect
+                class="morsel"
+                x={m.x}
+                y={l.cy - 9}
+                width={m.w}
+                height="18"
+                rx="4"
+                style={`fill: ${m.fill}; --morsel-delay: ${(li * 2 + mi) * 180}ms`}
+              />
             ))}
           </g>
         ))}
@@ -98,6 +108,7 @@ const narrowLanes = narrowWidths.map((w, i) => lane(w, i, 112, 6, 396 + i * 28))
         <path class="flow" d="M170 316 V344" />
         <path class="flow" d="M170 548 V580" />
         <path class="flow" d="M170 620 V632 M90 632 H250 M90 632 V640 M250 632 V640" />
+        <path class="flow-stream" d="M170 74 V92 M170 164 V192 M170 316 V344 M170 548 V580" />
         <path class="flow" d="M164 92 L170 100 L176 92" />
         <path class="flow" d="M164 192 L170 200 L176 192" />
         <path class="flow" d="M164 344 L170 352 L176 344" />
@@ -124,11 +135,19 @@ const narrowLanes = narrowWidths.map((w, i) => lane(w, i, 112, 6, 396 + i * 28))
         <!-- 4. pipelines -->
         <rect class="box" x="40" y="352" width="260" height="196" rx="10" />
         <text class="t-display" x="56" y="380">Pipelines</text>
-        {narrowLanes.map((l) => (
+        {narrowLanes.map((l, li) => (
           <g>
             <text class="t-lane" x="56" y={l.cy + 4}>{l.label}</text>
-            {l.morsels.map((m) => (
-              <rect x={m.x} y={l.cy - 9} width={m.w} height="18" rx="4" style={`fill: ${m.fill}`} />
+            {l.morsels.map((m, mi) => (
+              <rect
+                class="morsel"
+                x={m.x}
+                y={l.cy - 9}
+                width={m.w}
+                height="18"
+                rx="4"
+                style={`fill: ${m.fill}; --morsel-delay: ${(li * 2 + mi) * 180}ms`}
+              />
             ))}
           </g>
         ))}
@@ -145,16 +164,16 @@ const narrowLanes = narrowWidths.map((w, i) => lane(w, i, 112, 6, 396 + i * 28))
       </svg>
     </div>
 
-    <div class="grid grid--3 facts">
-      <div>
+    <div class="grid grid--3 facts" data-reveal-stagger>
+      <div class="fact-card">
         <h3>Batches of 8,192 rows</h3>
         <p class="muted small">Columns stay in Arrow arrays from the scan to the result.</p>
       </div>
-      <div>
+      <div class="fact-card">
         <h3>Joins of up to 12 tables</h3>
         <p class="muted small">are ordered by dynamic programming over cardinality estimates from Parquet statistics.</p>
       </div>
-      <div>
+      <div class="fact-card">
         <h3>Streams out</h3>
         <p class="muted small">sink_parquet and iter_batches return rows while the query is still running.</p>
       </div>
@@ -179,6 +198,40 @@ const narrowLanes = narrowWidths.map((w, i) => lane(w, i, 112, 6, 396 + i * 28))
     stroke-width: 1.5;
     stroke-linecap: round;
     stroke-linejoin: round;
+  }
+
+  @keyframes stream-dash {
+    to {
+      stroke-dashoffset: -28;
+    }
+  }
+
+  .flow-stream {
+    fill: none;
+    stroke: var(--cobalt);
+    stroke-width: 2;
+    stroke-dasharray: 5 9;
+    stroke-linecap: round;
+    opacity: 0.65;
+    animation: stream-dash 1.3s linear infinite;
+    --animation-reduced: none;
+  }
+
+  @keyframes morsel-pulse {
+    0%, 100% {
+      opacity: 1;
+      transform: translateX(0);
+    }
+    50% {
+      opacity: 0.72;
+      transform: translateX(2px);
+    }
+  }
+
+  .morsel {
+    animation: morsel-pulse 2.2s ease-in-out infinite;
+    animation-delay: var(--morsel-delay, 0ms);
+    --animation-reduced: none;
   }
 
   .pill-main {
@@ -235,8 +288,25 @@ const narrowLanes = narrowWidths.map((w, i) => lane(w, i, 112, 6, 396 + i * 28))
     display: none;
   }
 
+  .fact-card {
+    padding: 20px 22px;
+    background: rgba(251, 247, 238, 0.65);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    transition: border-color 0.2s ease, transform 0.2s ease;
+  }
+
+  .fact-card:hover {
+    border-color: var(--rule-strong);
+    transform: translateY(-2px);
+  }
+
   .facts h3 {
     font-size: 1.1rem;
+  }
+
+  .facts p {
+    margin-bottom: 0;
   }
 
   @media (max-width: 980px) {
@@ -249,3 +319,4 @@ const narrowLanes = narrowWidths.map((w, i) => lane(w, i, 112, 6, 396 + i * 28))
     }
   }
 </style>
+

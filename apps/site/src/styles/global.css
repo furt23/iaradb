@@ -39,6 +39,10 @@
   --engine-iara: var(--cobalt);
   --engine-duckdb: #b9ae97;
   --engine-polars: #8e9aa3;
+  --engine-datafusion: #c39a6b;
+  --engine-chdb: #d4bf6a;
+  --engine-spark: #b48478;
+  --engine-daft: #8fae98;
 
   --font-display: 'Roboto Slab Variable', 'Roboto Slab', Georgia, 'Times New Roman', serif;
   --font-sans: 'Inter Variable', Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -215,17 +219,32 @@ pre {
   font-size: 0.98rem;
   text-decoration: none;
   border: 1px solid transparent;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  transition:
+    background 0.18s ease,
+    border-color 0.18s ease,
+    color 0.18s ease,
+    transform 0.18s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.18s ease;
+}
+
+.button:hover {
+  transform: translateY(-1px);
+}
+
+.button:active {
+  transform: translateY(0);
 }
 
 .button--primary {
   background: var(--cobalt);
   color: #fff;
+  box-shadow: 0 2px 8px rgba(30, 91, 184, 0.22);
 }
 
 .button--primary:hover {
   background: var(--cobalt-2);
   color: #fff;
+  box-shadow: 0 6px 16px rgba(30, 91, 184, 0.3);
 }
 
 .button--ghost {
@@ -235,6 +254,7 @@ pre {
 
 .button--ghost:hover {
   border-color: var(--ink-2);
+  background: rgba(29, 42, 54, 0.03);
   color: var(--ink);
 }
 
@@ -244,12 +264,26 @@ pre {
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow);
   padding: 28px;
+  transition:
+    transform 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 0.28s ease,
+    box-shadow 0.28s ease;
+}
+
+.card:hover {
+  transform: translateY(-3px);
+  border-color: var(--rule-strong);
+  box-shadow: 0 2px 0 rgba(29, 42, 54, 0.05), 0 16px 36px rgba(29, 42, 54, 0.09);
 }
 
 .section--night .card {
   background: var(--night-2);
   border-color: var(--night-rule);
   box-shadow: none;
+}
+
+.section--night .card:hover {
+  border-color: var(--cobalt-2);
 }
 
 .grid {
@@ -312,3 +346,147 @@ pre {
 .code .num { color: #f2c977; }
 .code .fn { color: var(--sky); }
 .code .com { color: #6f819a; font-style: italic; }
+
+/* ---------- motion & scroll-driven reveals ---------- */
+
+@property --animation-reduced {
+  syntax: "*";
+  inherits: false;
+  initial-value: none;
+}
+
+@keyframes reveal-up {
+  from {
+    opacity: 0;
+    transform: translateY(28px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes reveal-scale {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes bar-grow-x {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes bar-grow-y {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Native CSS Scroll-Driven ViewTimeline animations where supported */
+  @supports ((animation-timeline: view()) and (animation-range: entry)) {
+    [data-reveal] {
+      animation: reveal-up auto cubic-bezier(0.22, 1, 0.36, 1) backwards;
+      animation-timeline: view(block);
+      animation-range: entry 0% cover 26%;
+    }
+
+    [data-reveal="scale"] {
+      animation: reveal-scale auto cubic-bezier(0.22, 1, 0.36, 1) backwards;
+      animation-timeline: view(block);
+      animation-range: entry 0% cover 28%;
+    }
+
+    [data-reveal-stagger] > * {
+      animation: reveal-up auto cubic-bezier(0.22, 1, 0.36, 1) backwards;
+      animation-timeline: view(block);
+      animation-range: entry 4% cover 28%;
+    }
+
+    .bb__bar,
+    .mini-chart__bar {
+      transform-origin: left center;
+      animation: bar-grow-x auto cubic-bezier(0.22, 1, 0.36, 1) backwards;
+      animation-timeline: view(block);
+      animation-range: entry 5% cover 30%;
+    }
+
+    .hchart__col-bar {
+      transform-origin: center bottom;
+      animation: bar-grow-y auto cubic-bezier(0.22, 1, 0.36, 1) backwards;
+      animation-timeline: view(block);
+      animation-range: entry 5% cover 28%;
+    }
+  }
+
+  /* IntersectionObserver fallback classes for browsers without animation-timeline: view() */
+  html.io-reveal [data-reveal],
+  html.io-reveal [data-reveal-stagger] > * {
+    opacity: 0;
+    transform: translateY(24px) scale(0.985);
+    transition:
+      opacity 0.65s cubic-bezier(0.22, 1, 0.36, 1),
+      transform 0.65s cubic-bezier(0.22, 1, 0.36, 1);
+    transition-delay: var(--reveal-delay, 0ms);
+  }
+
+  html.io-reveal [data-reveal].is-visible,
+  html.io-reveal [data-reveal-stagger].is-visible > * {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+
+  html.io-reveal .bb__bar,
+  html.io-reveal .mini-chart__bar {
+    transform-origin: left center;
+    transform: scaleX(0);
+    transition: transform 0.75s cubic-bezier(0.22, 1, 0.36, 1);
+    transition-delay: var(--reveal-delay, 80ms);
+  }
+
+  html.io-reveal .is-visible .bb__bar,
+  html.io-reveal .bb__bar.is-visible,
+  html.io-reveal .is-visible .mini-chart__bar,
+  html.io-reveal .mini-chart__bar.is-visible {
+    transform: scaleX(1);
+  }
+
+  html.io-reveal .hchart__col-bar {
+    transform-origin: center bottom;
+    transform: scaleY(0);
+    transition: transform 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+    transition-delay: var(--bar-delay, 0ms);
+  }
+
+  html.io-reveal .is-visible .hchart__col-bar,
+  html.io-reveal .hchart__col-bar.is-visible {
+    transform: scaleY(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation: var(--animation-reduced) !important;
+    transition-duration: 0.01s !important;
+  }
+}
+

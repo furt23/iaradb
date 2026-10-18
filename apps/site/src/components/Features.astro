@@ -36,12 +36,12 @@ const features = [
 
 <section class="section section--alt" id="features">
   <div class="container">
-    <header class="section-head">
+    <header class="section-head" data-reveal>
       <span class="eyebrow">What it does</span>
       <h2>What you need for analytics, in one package.</h2>
     </header>
 
-    <div class="grid grid--3">
+    <div class="grid grid--3" data-reveal-stagger>
       {features.map((f) => (
         <div class="card feature">
           <div class="icon">
@@ -62,11 +62,16 @@ const features = [
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 40px;
-    height: 40px;
+    width: 42px;
+    height: 42px;
     border-radius: 10px;
     background: var(--mist-2);
+    border: 1px solid rgba(30, 91, 184, 0.14);
     margin-bottom: 18px;
+    transition:
+      background 0.25s ease,
+      transform 0.25s cubic-bezier(0.22, 1, 0.36, 1),
+      border-color 0.25s ease;
   }
 
   .icon svg {
@@ -77,9 +82,25 @@ const features = [
     stroke-width: 1.6;
     stroke-linecap: round;
     stroke-linejoin: round;
+    transition: stroke 0.25s ease;
+  }
+
+  .feature:hover .icon {
+    background: var(--cobalt);
+    border-color: var(--cobalt);
+    transform: scale(1.08) rotate(-3deg);
+  }
+
+  .feature:hover .icon svg {
+    stroke: #fff;
   }
 
   .feature h3 {
     font-size: 1.15rem;
   }
+
+  .feature p {
+    margin-bottom: 0;
+  }
 </style>
+

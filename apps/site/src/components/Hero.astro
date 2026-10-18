@@ -1,13 +1,26 @@
 ---
 import LogoMark from './LogoMark.astro';
 import { DOCS_URL } from '../config';
+import { suites, summary } from '../data/bench';
 
 const quickstartUrl = `${DOCS_URL}/quickstart/`;
-const stats = [
-  { value: '5.88 s', label: 'TPC-H SF10, all 22 queries' },
-  { value: '60.6 s', label: 'TPC-H SF100, all 22 queries' },
-  { value: '17.6 s', label: 'ClickBench, 32 queries' },
-];
+// Iara's sum over the queries every engine ran, and the next fastest engine on the same queries
+const stats = (
+  [
+    ['tpch_sf10', 'TPC-H SF10'],
+    ['tpch_sf100', 'TPC-H SF100'],
+    ['clickbench', 'ClickBench'],
+  ] as const
+)
+  .filter(([key]) => suites[key])
+  .map(([key, title]) => {
+    const sum = summary(suites[key]);
+    const iara = sum.engines.find((e) => e.key === 'iara')!;
+    const next = sum.engines.filter((e) => e.key !== 'iara').sort((a, b) => a.sumS - b.sumS)[0];
+    const f = (v: number) => `${v.toFixed(v < 10 ? 2 : 1)} s`;
+    return { value: f(iara.sumS), label: `${title}, ${sum.shared} queries`, next: `${next.name} ${f(next.sumS)}` };
+  });
+const engineCount = suites.tpch_sf10?.engines.length ?? 0;
 ---
 
 <section class="section hero">
@@ -22,7 +35,7 @@ const stats = [
         <a class="button button--ghost" href="/benchmarks/">See the benchmarks</a>
       </div>
 
-      <div class="stats">
+      <div class="stats" data-reveal-stagger>
         {stats.map((s) => (
           <div class="stat">
             <span class="stat__value">{s.value}</span>
@@ -30,7 +43,7 @@ const stats = [
           </div>
         ))}
       </div>
-      <p class="small muted stats__note">16 vCPUs, 64 GB RAM. DuckDB: 7.69 s, 82.1 s, 18.0 s. Polars: 8.11 s, 90.0 s, 20.3 s.</p>
+      <p class="small muted stats__note">16 vCPUs, 64 GB RAM, the queries all {engineCount} engines ran. Fastest other engine: {stats.map((s) => s.next).join(', ')}.</p>
     </div>
 
     <div class="hero__visual">
@@ -40,10 +53,11 @@ const stats = [
 
       <div class="window">
         <div class="window__bar">
-          <span class="window__dot"></span>
-          <span class="window__dot"></span>
-          <span class="window__dot"></span>
+          <span class="window__dot window__dot--1"></span>
+          <span class="window__dot window__dot--2"></span>
+          <span class="window__dot window__dot--3"></span>
           <span class="window__name">revenue.py</span>
+          <span class="window__badge">LazyFrame → Arrow</span>
         </div>
         <pre class="code"><span class="kw">import</span> iara
 <span class="kw">from</span> iara <span class="kw">import</span> functions <span class="kw">as</span> F
@@ -58,6 +72,18 @@ revenue = (
     .<span class="fn">sort</span>(<span class="str">"revenue"</span>, descending=<span class="kw">True</span>)
     .<span class="fn">collect</span>()
 )</pre>
+        <div class="window__foot" aria-hidden="true">
+          <span class="window__status">
+            <span class="window__pulse"></span>
+            5 rows · 42 ms
+          </span>
+          <span class="window__cores" title="16 worker threads active">
+            {Array.from({ length: 16 }).map((_, i) => (
+              <span class="window__core" style={`--core-i: ${i}`} />
+            ))}
+            <span class="window__cores-label">16 cores</span>
+          </span>
+        </div>
       </div>
     </div>
   </div>
@@ -81,6 +107,27 @@ revenue = (
   .hero__text,
   .hero__visual {
     min-width: 0;
+  }
+
+  @keyframes hero-enter {
+    from {
+      opacity: 0;
+      transform: translateY(18px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .hero__text {
+      animation: hero-enter 0.65s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+
+    .hero__visual {
+      animation: hero-enter 0.75s cubic-bezier(0.22, 1, 0.36, 1) 0.1s both;
+    }
   }
 
   .hero__actions {
@@ -112,11 +159,21 @@ revenue = (
     line-height: 1.1;
     color: var(--cobalt);
     letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums;
   }
 
   .stats__note {
     margin-top: 16px;
     margin-bottom: 0;
+  }
+
+  @keyframes mark-float {
+    0%, 100% {
+      transform: translateY(-50%) rotate(0deg) scale(1);
+    }
+    50% {
+      transform: translateY(-53%) rotate(1.5deg) scale(1.03);
+    }
   }
 
   /* decorative mark behind the code window; clipped by .hero so it never scrolls the page */
@@ -126,8 +183,10 @@ revenue = (
     top: 50%;
     right: -120px;
     transform: translateY(-50%);
-    opacity: 0.07;
+    opacity: 0.08;
     pointer-events: none;
+    animation: mark-float 10s ease-in-out infinite;
+    --animation-reduced: none;
   }
 
   .hero__visual {
@@ -137,17 +196,25 @@ revenue = (
   .window {
     position: relative;
     background: var(--night);
+    border: 1px solid var(--night-rule);
     border-radius: var(--radius-lg);
     overflow: hidden;
-    box-shadow: 0 18px 48px rgba(14, 26, 43, 0.22);
+    box-shadow: 0 20px 52px rgba(14, 26, 43, 0.24);
+    transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.3s ease;
+  }
+
+  .window:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 26px 60px rgba(14, 26, 43, 0.3);
   }
 
   .window__bar {
     display: flex;
     align-items: center;
     gap: 8px;
-    height: 36px;
+    height: 38px;
     padding: 0 16px;
+    background: rgba(21, 36, 58, 0.65);
     border-bottom: 1px solid var(--night-rule);
   }
 
@@ -158,16 +225,106 @@ revenue = (
     background: var(--night-rule);
   }
 
+  .window__dot--1 { background: #3b4f6b; }
+  .window__dot--2 { background: #2e5d99; }
+  .window__dot--3 { background: var(--azure); }
+
   .window__name {
-    margin-left: 10px;
+    margin-left: 8px;
     font-family: var(--font-mono);
     font-size: 0.8rem;
-    color: var(--night-dim);
+    color: var(--night-ink);
+  }
+
+  .window__badge {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--sky);
+    background: rgba(74, 143, 224, 0.14);
+    border: 1px solid rgba(127, 178, 240, 0.24);
+    padding: 2px 8px;
+    border-radius: 999px;
   }
 
   .window pre.code {
     border-radius: 0;
     font-size: 0.8rem;
+  }
+
+  .window__foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 9px 16px;
+    background: var(--night-2);
+    border-top: 1px solid var(--night-rule);
+    font-family: var(--font-mono);
+    font-size: 0.74rem;
+    color: var(--night-dim);
+  }
+
+  .window__status {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--night-ink);
+  }
+
+  @keyframes status-pulse {
+    0%, 100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 0.45;
+      transform: scale(0.85);
+    }
+  }
+
+  .window__pulse {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #5ad48c;
+    box-shadow: 0 0 8px rgba(90, 212, 140, 0.6);
+    animation: status-pulse 2.4s ease-in-out infinite;
+    --animation-reduced: none;
+  }
+
+  .window__cores {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 2px;
+  }
+
+  @keyframes core-wave {
+    0%, 100% {
+      transform: scaleY(0.55);
+      opacity: 0.65;
+    }
+    50% {
+      transform: scaleY(1);
+      opacity: 1;
+    }
+  }
+
+  .window__core {
+    width: 3px;
+    height: 11px;
+    border-radius: 1px;
+    background: var(--sky);
+    transform-origin: center bottom;
+    animation: core-wave 1.8s ease-in-out infinite;
+    animation-delay: calc(var(--core-i) * 90ms);
+    --animation-reduced: none;
+  }
+
+  .window__cores-label {
+    margin-left: 6px;
+    font-size: 0.72rem;
+    color: var(--night-dim);
   }
 
   @media (max-width: 899px) {
@@ -183,8 +340,13 @@ revenue = (
       font-size: 0.74rem;
     }
 
+    .window__badge {
+      display: none;
+    }
+
     .hero__mark {
       right: -180px;
     }
   }
 </style>
+

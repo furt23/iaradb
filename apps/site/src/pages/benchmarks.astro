@@ -2,114 +2,231 @@
 import Base from '../layouts/Base.astro';
 import BenchBars from '../components/BenchBars.astro';
 import { GITHUB_URL } from '../config';
+import { suites, names, summary, chartRows, ok, realistic } from '../data/bench';
 
-const fmt = (v: number, unit: string) => (unit === 'ms' ? Math.round(v).toString() : v.toFixed(v < 10 ? 2 : 1));
+const panels = [
+  { key: 'tpch_sf100', tab: 'TPC-H SF100', title: 'TPC-H SF100 (100 GB)', capMax: undefined },
+  { key: 'tpch_sf10', tab: 'TPC-H SF10', title: 'TPC-H SF10 (10 GB)', capMax: undefined },
+  { key: 'clickbench', tab: 'ClickBench', title: 'ClickBench (hits, 100M rows)', capMax: undefined },
+] as const;
 
-const totals = [
-  { label: 'TPC-H SF10, sum of 22 queries', unit: 's', values: [5.88, 7.69, 8.11] },
-  { label: 'TPC-H SF10, geometric mean', unit: 'ms', values: [224, 293, 248] },
-  { label: 'TPC-H SF100, sum of 22 queries', unit: 's', values: [60.6, 82.1, 90.0] },
-  { label: 'TPC-H SF100, geometric mean', unit: 's', values: [2.2, 3.07, 2.51] },
-  { label: 'ClickBench, sum of 32 queries', unit: 's', values: [17.6, 18.0, 20.3] },
-  { label: 'ClickBench, geometric mean', unit: 'ms', values: [229, 338, 259] },
-];
+const available = panels.filter((p) => suites[p.key]);
+const engines = suites.tpch_sf10?.engines ?? Object.keys(names);
+const versions = suites.tpch_sf10?.meta.versions ?? {};
+const others = engines.filter((e) => e !== 'iara');
+const engineList = others.map((e) => `${names[e]} ${versions[e] ?? ''}`.trim());
 
-// [query, Iara ms, DuckDB ms, Polars ms] at SF100
-const queries: [string, number, number, number][] = [
-  ['Q1', 3730, 3542, 4766],
-  ['Q2', 735, 912, 368],
-  ['Q3', 2410, 3350, 2849],
-  ['Q4', 1137, 1998, 1464],
-  ['Q5', 3250, 4148, 3288],
-  ['Q6', 1248, 1759, 1270],
-  ['Q7', 3310, 4432, 6857],
-  ['Q8', 3880, 5492, 3848],
-  ['Q9', 6173, 8382, 6617],
-  ['Q10', 3403, 3870, 3771],
-  ['Q11', 615, 892, 733],
-  ['Q12', 1109, 2243, 1278],
-  ['Q13', 3250, 4387, 4499],
-  ['Q14', 2032, 2813, 2041],
-  ['Q15', 1995, 2859, 2097],
-  ['Q16', 807, 1156, 785],
-  ['Q17', 3244, 4495, 1865],
-  ['Q18', 5731, 5585, 4459],
-  ['Q19', 2960, 3789, 2733],
-  ['Q20', 2747, 3747, 4200],
-  ['Q21', 6152, 10885, 29426],
-  ['Q22', 637, 1334, 779],
-];
-const perQuery = queries.map(([label, iara, duckdb, polars]) => ({ label, iara, duckdb, polars }));
+const cell = (q: { ms: Record<string, number | null>; notes: Record<string, string> }, e: string) => {
+  const v = q.ms[e];
+  if (v == null) return q.notes[e]?.startsWith('timeout') ? 'timeout' : 'n/a';
+  return Math.round(v).toLocaleString('en-US') + (q.notes[e] ? ' †' : '');
+};
+const bestOf = (q: { ms: Record<string, number | null>; notes: Record<string, string> }, es: string[]) =>
+  Math.min(...es.filter((e) => ok(q as never, e)).map((e) => q.ms[e] as number));
+
+const realEngines = realistic.length ? Object.keys(realistic[0]).filter((k) => k !== 'name') : [];
+const pretty = (w: string) => w.replace(/_/g, ' ');
 ---
 
-<Base
-  title="Benchmarks · Iara"
-  description="TPC-H and ClickBench results for Iara, DuckDB and Polars."
->
+<Base title="Benchmarks · Iara" description={`TPC-H and ClickBench results for Iara, ${engineList.map((s) => s.split(' ')[0]).join(', ')}.`}>
   <section class="section">
     <div class="container page">
-      <header class="page-head">
+      <header class="page-head" data-reveal>
         <span class="eyebrow">Benchmarks</span>
         <h1>Benchmarks</h1>
         <p class="lede">
-          TPC-H (all 22 queries) and ClickBench run on the same Parquet files in Iara, DuckDB 1.5.6 and Polars 2.0.0:
-          TPC-H data comes from tpchgen-cli with DECIMAL(15,2) prices, and ClickBench uses the single-file hits.parquet.
-          Each figure is the median wall-clock time after a warm-up run, and TPC-H results are checked against DuckDB.
-          The machine is an AWS m7i.4xlarge (16 vCPUs, Xeon 8488C, 64 GB RAM) on Amazon Linux 2023, with Python 3.12
-          and the engine built with <code>-C target-cpu=native</code>.
+          TPC-H (all 22 queries, SF10 and SF100) and ClickBench (43 queries) on the same Parquet files, in Iara,
+          {' '}{engineList.slice(0, -1).join(', ')} and {engineList[engineList.length - 1]}. Every engine runs from Python
+          with its default settings, in its own process, on an AWS m7i.4xlarge (16 vCPUs, Xeon 8488C, 64 GB RAM) on
+          Amazon Linux 2023. Spark runs in local mode with 75% of the RAM for the driver.
+        </p>
+        <p class="muted">
+          Each figure is the median of 3 runs after a warm-up run (one run when the warm-up takes over 30 s). A query that
+          fails or runs past the time limit (10 min at SF10 and ClickBench, 15 min at SF100) shows as n/a or timeout.
+          TPC-H results are compared with DuckDB's; a dagger (†) marks a result that differs. Totals add up only the
+          queries every engine ran correctly. Measured {suites.tpch_sf10?.meta.date}.
         </p>
       </header>
 
-      <h2>Totals</h2>
-      <div class="table-wrap">
-        <table class="table">
-          <thead>
-            <tr>
-              <th scope="col">Metric</th>
-              <th scope="col" class="num">Iara</th>
-              <th scope="col" class="num">DuckDB</th>
-              <th scope="col" class="num">Polars</th>
-            </tr>
-          </thead>
-          <tbody>
-            {totals.map((t) => {
-              const best = Math.min(...t.values);
-              return (
-                <tr>
-                  <th scope="row">{t.label}</th>
-                  {t.values.map((v) => {
-                    const text = `${fmt(v, t.unit)} ${t.unit}`;
-                    return <td class="num">{v === best ? <strong>{text}</strong> : text}</td>;
+      <div class="section-split" data-reveal>
+        <h2 data-suite-heading>{available[0]?.title}</h2>
+        <div class="sf-tabs" role="tablist" aria-label="Benchmark">
+          {available.map((p, i) => (
+            <button type="button" role="tab" class={`sf-tab ${i === 0 ? 'is-active' : ''}`} aria-selected={i === 0 ? 'true' : 'false'} data-sf-tab={p.key} data-title={p.title}>
+              {p.tab}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {available.map((p, i) => {
+        const s = suites[p.key];
+        const sum = summary(s);
+        const half = Math.ceil(s.queries.length / 2);
+        return (
+          <div data-sf-panel={p.key} hidden={i !== 0}>
+            <div class="table-wrap" data-reveal>
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th scope="col">Engine</th>
+                    <th scope="col" class="num">Queries run</th>
+                    <th scope="col" class="num">Sum of {sum.shared} shared</th>
+                    <th scope="col" class="num">Geometric mean</th>
+                    <th scope="col" class="num">Iara faster by</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sum.engines.map((e) => {
+                    const bestSum = Math.min(...sum.engines.map((x) => x.sumS));
+                    return (
+                      <tr>
+                        <th scope="row">
+                          {e.name} <span class="muted small">{e.version}</span>
+                        </th>
+                        <td class="num">{e.completed} / {sum.of}</td>
+                        <td class={`num ${e.sumS === bestSum ? 'cell-best' : ''}`}>{e.sumS.toFixed(e.sumS < 10 ? 2 : 1)} s</td>
+                        <td class="num">{e.geomeanMs < 10000 ? `${Math.round(e.geomeanMs)} ms` : `${(e.geomeanMs / 1000).toFixed(1)} s`}</td>
+                        <td class="num">{e.key === 'iara' ? '' : `${e.vsIara.toFixed(2)}×`}</td>
+                      </tr>
+                    );
                   })}
+                </tbody>
+              </table>
+            </div>
+            <p class="muted small table-note">
+              "Iara faster by" is the geometric mean of the per-query time ratios over the queries both engines ran
+              correctly; below 1× the other engine is faster.
+            </p>
+
+            <div class="chart" data-reveal="scale">
+              <BenchBars title={`${p.title}, per query`} unit="ms" engines={s.engines} names={names} rows={chartRows(s)} capMax={p.capMax} />
+            </div>
+
+            <div class="query-matrix" data-reveal>
+              <div class="table-wrap">
+                <table class="table table--compact">
+                  <thead>
+                    <tr>
+                      <th scope="col">Query (ms)</th>
+                      {s.engines.map((e) => <th scope="col" class="num">{names[e]}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {s.queries.map((q) => {
+                      const best = bestOf(q, s.engines);
+                      return (
+                        <tr>
+                          <th scope="row">{q.label}</th>
+                          {s.engines.map((e) => (
+                            <td class={`num ${ok(q, e) && q.ms[e] === best ? 'cell-best' : ''} ${q.ms[e] == null ? 'cell-na' : ''}`} title={q.notes[e] ?? ''}>
+                              {cell(q, e)}
+                            </td>
+                          ))}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+
+      {realistic.length > 0 && (
+        <>
+          <h2 data-reveal>DataFrame workloads</h2>
+          <p class="muted" data-reveal>
+            Nineteen everyday DataFrame jobs (reading CSV and JSON, writing Parquet, window functions, string work, an
+            eager notebook session) on TPC-H SF100 tables and ClickBench, written once against the Polars-style API that
+            Iara shares with Polars; Polars uses its streaming engine. Each job runs in a fresh process, best of two
+            runs, with the peak private memory of the process.
+          </p>
+          <div class="table-wrap" data-reveal>
+            <table class="table table--compact">
+              <thead>
+                <tr>
+                  <th scope="col">Workload</th>
+                  {realEngines.map((e) => (
+                    <>
+                      <th scope="col" class="num">{names[e]} (s)</th>
+                      <th scope="col" class="num">{names[e]} (MB)</th>
+                    </>
+                  ))}
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
+              </thead>
+              <tbody>
+                {realistic.map((r) => {
+                  const times = realEngines.map((e) => (r[e] as { s: number } | null)?.s ?? Infinity);
+                  const best = Math.min(...times);
+                  return (
+                    <tr>
+                      <th scope="row">{pretty(r.name)}</th>
+                      {realEngines.map((e) => {
+                        const v = r[e] as { s: number; mb: number } | null;
+                        return v ? (
+                          <>
+                            <td class={`num ${v.s === best ? 'cell-best' : ''}`}>{v.s.toFixed(2)}</td>
+                            <td class="num">{v.mb.toLocaleString('en-US')}</td>
+                          </>
+                        ) : (
+                          <>
+                            <td class="num cell-na">failed</td>
+                            <td class="num cell-na" />
+                          </>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      <div class="grid grid--2 bottom-notes" data-reveal-stagger>
+        <div class="card">
+          <h2>Notes</h2>
+          <!-- NOTES -->
+        </div>
+
+        <div class="card">
+          <h2>Reproduce</h2>
+          <p class="muted">
+            The scripts and query definitions are in the <a href={`${GITHUB_URL}/tree/master/benchmarks`}>benchmarks/ folder</a> of the repository.
+          </p>
+          <pre class="code-mini">python benchmarks/bench_tpch.py data/sf100 --validate --json sf100.json
+python benchmarks/prepare_hits.py hits.parquet hits_typed.parquet
+python benchmarks/bench_clickbench.py hits_typed.parquet</pre>
+        </div>
       </div>
-
-      <h2>TPC-H SF100, per query</h2>
-      <div class="chart">
-        <BenchBars title="TPC-H SF100, per query" unit="ms" rows={perQuery} />
-      </div>
-      <p class="muted small">
-        Polars runs its own DataFrame versions of the queries (<code>benchmarks/tpch_polars.py</code>); for Q2, Q17 and Q18
-        they read <code>partsupp</code> or <code>lineitem</code> once where the SQL plans read them twice.
-      </p>
-
-      <h2>Where Iara is slower</h2>
-      <p>
-        In ClickBench, Iara is slowest on <code>GROUP BY URL</code> (Q33 and Q34, about 2.1-2.4 s against DuckDB's 1.8 s)
-        and on grouped <code>COUNT(DISTINCT ...)</code> (Q8 and Q9). Against Polars, Iara is slower on TPC-H Q2, Q17 and Q18.
-      </p>
-
-      <h2>Reproduce</h2>
-      <p>
-        The scripts are in the <a href={`${GITHUB_URL}/tree/master/benchmarks`}>benchmarks/ folder</a> of the repository.
-      </p>
     </div>
   </section>
 </Base>
+
+<script is:inline>
+  (() => {
+    const btns = Array.from(document.querySelectorAll('[data-sf-tab]'));
+    const panels = Array.from(document.querySelectorAll('[data-sf-panel]'));
+    const heading = document.querySelector('[data-suite-heading]');
+    btns.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const target = btn.getAttribute('data-sf-tab');
+        btns.forEach((b) => {
+          const active = b === btn;
+          b.classList.toggle('is-active', active);
+          b.setAttribute('aria-selected', active ? 'true' : 'false');
+        });
+        panels.forEach((p) => {
+          p.hidden = p.getAttribute('data-sf-panel') !== target;
+        });
+        if (heading) heading.textContent = btn.getAttribute('data-title');
+      });
+    });
+  })();
+</script>
 
 <style>
   .page-head {
@@ -119,6 +236,48 @@ const perQuery = queries.map(([label, iara, duckdb, polars]) => ({ label, iara, 
 
   .page h2 {
     margin: 72px 0 24px;
+  }
+
+  .section-split {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin: 72px 0 24px;
+  }
+
+  .section-split h2 {
+    margin: 0;
+  }
+
+  .sf-tabs {
+    display: inline-flex;
+    background: var(--parchment-2);
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    padding: 3px;
+    gap: 2px;
+  }
+
+  .sf-tab {
+    appearance: none;
+    border: none;
+    background: transparent;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--ink-2);
+    padding: 6px 14px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+
+  .sf-tab.is-active {
+    background: var(--vellum);
+    color: var(--cobalt);
+    font-weight: 600;
+    box-shadow: 0 1px 3px rgba(29, 42, 54, 0.08);
   }
 
   .table-wrap {
@@ -144,6 +303,33 @@ const perQuery = queries.map(([label, iara, duckdb, polars]) => ({ label, iara, 
     white-space: nowrap;
   }
 
+  .table--compact {
+    font-size: 0.84rem;
+    min-width: 640px;
+  }
+
+  .table--compact th,
+  .table--compact td {
+    padding: 8px 14px;
+  }
+
+  .col-sep {
+    border-left: 1px solid var(--rule);
+  }
+
+  .cell-na {
+    color: var(--ink-3);
+  }
+
+  .table-note {
+    margin: 10px 0 40px;
+  }
+
+  .cell-best {
+    font-weight: 700;
+    color: var(--cobalt);
+  }
+
   .table tbody tr:last-child th,
   .table tbody tr:last-child td {
     border-bottom: none;
@@ -166,7 +352,35 @@ const perQuery = queries.map(([label, iara, duckdb, polars]) => ({ label, iara, 
   }
 
   .chart {
-    max-width: 760px;
+    width: 100%;
+    margin-bottom: 20px;
+  }
+
+  .query-matrix {
     margin-bottom: 16px;
+  }
+
+  .bottom-notes {
+    margin-top: 64px;
+  }
+
+  .bottom-notes h2 {
+    margin: 0 0 12px;
+    font-size: 1.5rem;
+  }
+
+  .bottom-notes p:last-child {
+    margin-bottom: 0;
+  }
+
+  .code-mini {
+    margin: 14px 0 0;
+    padding: 10px 14px;
+    background: var(--night);
+    color: var(--night-ink);
+    border-radius: 8px;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    overflow-x: auto;
   }
 </style>

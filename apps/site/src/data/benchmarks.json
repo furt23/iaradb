@@ -1,0 +1,345 @@
+{
+ "names": {
+  "iara": "Iara",
+  "duckdb": "DuckDB",
+  "polars": "Polars",
+  "datafusion": "DataFusion",
+  "chdb": "chDB",
+  "spark": "Spark",
+  "daft": "Daft"
+ },
+ "suites": {
+  "tpch_sf10": {
+   "meta": {
+    "benchmark": "tpch",
+    "data": "/home/ec2-user/data/sf10",
+    "runs": 3,
+    "timeout": 600,
+    "date": "2026-10-18",
+    "machine": "x86_64",
+    "cpus": 16,
+    "ram_gb": 61.8,
+    "python": "3.12.14",
+    "versions": {
+     "duckdb": "1.5.6",
+     "iara": "0.1.0",
+     "polars": "2.0.0",
+     "datafusion": "55.0.0",
+     "chdb": "4.4.0",
+     "spark": "4.2.0",
+     "daft": "0.7.26"
+    }
+   },
+   "engines": [
+    "iara",
+    "duckdb",
+    "polars",
+    "datafusion",
+    "chdb",
+    "spark",
+    "daft"
+   ],
+   "queries": [
+    {
+     "label": "Q1",
+     "ms": {
+      "iara": 312.4,
+      "duckdb": 294.0,
+      "polars": 409.3,
+      "datafusion": 459.9,
+      "chdb": 499.9,
+      "spark": 8640.0,
+      "daft": null
+     },
+     "notes": {
+      "daft": "InvalidSQLException: Daft error: DaftError::External Unable to create logical plan node."
+     }
+    },
+    {
+     "label": "Q2",
+     "ms": {
+      "iara": 70.5,
+      "duckdb": 73.4,
+      "polars": 50.2,
+      "datafusion": 117.1,
+      "chdb": 130.3,
+      "spark": 937.4,
+      "daft": 187.9
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q3",
+     "ms": {
+      "iara": 176.6,
+      "duckdb": 232.3,
+      "polars": 178.2,
+      "datafusion": 279.3,
+      "chdb": 579.4,
+      "spark": 2519.6,
+      "daft": 411.6
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q4",
+     "ms": {
+      "iara": 89.5,
+      "duckdb": 162.8,
+      "polars": 105.1,
+      "datafusion": 145.2,
+      "chdb": 214.7,
+      "spark": 1881.1,
+      "daft": 430.2
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q5",
+     "ms": {
+      "iara": 190.3,
+      "duckdb": 269.1,
+      "polars": 193.5,
+      "datafusion": 429.7,
+      "chdb": 502.4,
+      "spark": 3968.1,
+      "daft": 344.9
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q6",
+     "ms": {
+      "iara": 132.2,
+      "duckdb": 116.7,
+      "polars": 88.4,
+      "datafusion": 164.0,
+      "chdb": 188.3,
+      "spark": 535.4,
+      "daft": 1330.8
+     },
+     "notes": {
+      "chdb": "wrong result: row 0: (752448391.6111,) != (1230113636.0101,)",
+      "daft": "wrong result: row 0: (752448391.6111,) != (1230113636.0101,)"
+     }
+    },
+    {
+     "label": "Q7",
+     "ms": {
+      "iara": 204.8,
+      "duckdb": 243.1,
+      "polars": 410.8,
+      "datafusion": 637.9,
+      "chdb": 456.4,
+      "spark": 3695.2,
+      "daft": 346.5
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q8",
+     "ms": {
+      "iara": 223.9,
+      "duckdb": 326.3,
+      "polars": 217.9,
+      "datafusion": 489.0,
+      "chdb": 1207.5,
+      "spark": 1754.8,
+      "daft": null
+     },
+     "notes": {
+      "daft": "InvalidSQLException: Daft error: DaftError::External Unable to create logical plan node."
+     }
+    },
+    {
+     "label": "Q9",
+     "ms": {
+      "iara": 444.0,
+      "duckdb": 549.1,
+      "polars": 356.1,
+      "datafusion": 759.2,
+      "chdb": 1384.5,
+      "spark": 3485.2,
+      "daft": null
+     },
+     "notes": {
+      "daft": "InvalidSQLException: Daft error: DaftError::External Unable to create logical plan node."
+     }
+    },
+    {
+     "label": "Q10",
+     "ms": {
+      "iara": 314.8,
+      "duckdb": 292.7,
+      "polars": 259.8,
+      "datafusion": 378.9,
+      "chdb": 605.1,
+      "spark": 2037.7,
+      "daft": 1852.9
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q11",
+     "ms": {
+      "iara": 53.0,
+      "duckdb": 52.5,
+      "polars": 59.9,
+      "datafusion": 97.9,
+      "chdb": 99.9,
+      "spark": 418.4,
+      "daft": 200.5
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q12",
+     "ms": {
+      "iara": 95.8,
+      "duckdb": 163.7,
+      "polars": 102.9,
+      "datafusion": 243.4,
+      "chdb": 429.7,
+      "spark": 1260.7,
+      "daft": 2012.6
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q13",
+     "ms": {
+      "iara": 221.8,
+      "duckdb": 357.0,
+      "polars": 272.5,
+      "datafusion": 305.2,
+      "chdb": 407.9,
+      "spark": 2477.0,
+      "daft": 730.6
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q14",
+     "ms": {
+      "iara": 116.6,
+      "duckdb": 188.4,
+      "polars": 123.5,
+      "datafusion": 177.4,
+      "chdb": 215.0,
+      "spark": 860.5,
+      "daft": null
+     },
+     "notes": {
+      "daft": "InvalidSQLException: Daft error: DaftError::External Unable to create logical plan node."
+     }
+    },
+    {
+     "label": "Q15",
+     "ms": {
+      "iara": 132.2,
+      "duckdb": 156.5,
+      "polars": 120.8,
+      "datafusion": 337.2,
+      "chdb": 399.3,
+      "spark": 1782.8,
+      "daft": 371.8
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q16",
+     "ms": {
+      "iara": 89.6,
+      "duckdb": 91.2,
+      "polars": 90.0,
+      "datafusion": 77.7,
+      "chdb": 117.0,
+      "spark": 803.2,
+      "daft": 213.8
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q17",
+     "ms": {
+      "iara": 204.7,
+      "duckdb": 285.9,
+      "polars": 123.1,
+      "datafusion": 740.4,
+      "chdb": 442.1,
+      "spark": 5750.9,
+      "daft": 1485.9
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q18",
+     "ms": {
+      "iara": 396.0,
+      "duckdb": 405.2,
+      "polars": 346.9,
+      "datafusion": 1017.6,
+      "chdb": 390.2,
+      "spark": 6504.7,
+      "daft": 837.9
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q19",
+     "ms": {
+      "iara": 255.7,
+      "duckdb": 274.4,
+      "polars": 170.2,
+      "datafusion": 274.8,
+      "chdb": 445.5,
+      "spark": 1021.8,
+      "daft": 2238.8
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q20",
+     "ms": {
+      "iara": 204.2,
+      "duckdb": 224.9,
+      "polars": 260.3,
+      "datafusion": 307.5,
+      "chdb": 484.6,
+      "spark": 976.3,
+      "daft": 483.9
+     },
+     "notes": {}
+    },
+    {
+     "label": "Q21",
+     "ms": {
+      "iara": 336.2,
+      "duckdb": 756.0,
+      "polars": 2131.7,
+      "datafusion": 932.0,
+      "chdb": 1461.0,
+      "spark": 6490.5,
+      "daft": null
+     },
+     "notes": {
+      "daft": "DaftCoreException: DaftError::ValueError Failed to bind predicate for row group pruning on '/home/ec2-user/data/sf10/lineitem/lineitem.parquet': DaftError::InternalError Outer reference columns cannot be bound: col(l1.l"
+     }
+    },
+    {
+     "label": "Q22",
+     "ms": {
+      "iara": 69.2,
+      "duckdb": 104.2,
+      "polars": 59.4,
+      "datafusion": 70.0,
+      "chdb": 123.3,
+      "spark": 900.7,
+      "daft": 120.8
+     },
+     "notes": {}
+    }
+   ]
+  }
+ }
+}

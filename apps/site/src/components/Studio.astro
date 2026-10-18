@@ -1,96 +1,564 @@
 ---
 import LogoMark from './LogoMark.astro';
 
-const points = [
-  'Reactive Python notebooks in the marimo format',
-  'SQL files with parameters',
-  'A data catalog with Delta table history',
-  'Query profiles and charts',
-  'Scheduled jobs with task dependencies',
-  'On-demand clusters on AWS',
+const tabs = [
+  {
+    id: 'notebook',
+    label: 'Reactive Notebooks',
+    badge: '.py · marimo',
+    caption: 'Mix Python LazyFrames and SQL in one reactive graph. Plain .py files diff cleanly in Git.',
+  },
+  {
+    id: 'wrangler',
+    label: 'Data Wrangler',
+    badge: '13 recipe steps',
+    caption: 'Build visual cleaning recipes over all rows in the kernel and export clean DataFrame or SQL code.',
+  },
+  {
+    id: 'analyze',
+    label: 'Catalog & Analyze',
+    badge: 'Delta · Profiler',
+    caption: 'Browse multi-catalog schemas, time-travel Delta Lake commits, and inspect per-operator profiles.',
+  },
+  {
+    id: 'jobs',
+    label: 'Jobs & AWS Compute',
+    badge: 'DAGs · EC2 Spot',
+    caption: 'Schedule multi-task TOML pipelines on cron and spin up ephemeral EC2 Spot clusters over SSH.',
+  },
 ];
 
 const priorities = [
-  { n: '1', name: '1-URGENT', count: '300,343', value: 300343 },
-  { n: '2', name: '2-HIGH', count: '300,091', value: 300091 },
-  { n: '3', name: '3-MEDIUM', count: '298,723', value: 298723 },
-  { n: '4', name: '4-NOT SPECIFIED', count: '300,254', value: 300254 },
+  { short: 'URGENT', name: '1-URGENT', count: '300,343', rev: '$42.8M', value: 300343 },
+  { short: 'HIGH', name: '2-HIGH', count: '300,091', rev: '$42.6M', value: 300091 },
+  { short: 'MEDIUM', name: '3-MEDIUM', count: '298,723', rev: '$42.1M', value: 298723 },
+  { short: 'LOW', name: '4-NOT SPEC', count: '300,254', rev: '$42.5M', value: 300254 },
+  { short: 'NONE', name: '5-LOW', count: '300,589', rev: '$42.9M', value: 300589 },
 ];
-const maxCount = Math.max(...priorities.map((p) => p.value));
-const bars = priorities.map((p) => ({ ...p, width: ((p.value / maxCount) * 100).toFixed(1) }));
+const maxPriority = Math.max(...priorities.map((p) => p.value));
+const priorityCols = priorities.map((p) => ({
+  ...p,
+  pct: ((p.value / maxPriority) * 100).toFixed(1),
+}));
 
-const railIcons = [0, 1, 2, 3, 4];
+const studioPillars = [
+  {
+    eyebrow: 'notebooks/*.py',
+    title: 'Git-native marimo notebooks',
+    text: 'Every cell is a pure Python function stored in a plain .py file. Run dependent cells automatically or mark them stale until triggered, with Jedi autocomplete and live SQL diagnostics.',
+  },
+  {
+    eyebrow: 'Python ⇄ SQL',
+    title: 'One shared namespace',
+    text: 'Query any Python LazyFrame by variable name inside a SQL cell, and read any SQL cell result as a DataFrame in downstream Python cells. Named widgets bind directly to :param placeholders.',
+  },
+  {
+    eyebrow: '/wrangle/<table>',
+    title: 'Visual Data Wrangler',
+    text: 'Filter, impute nulls, deduplicate, trim, regex replace, split, cast and one-hot encode. Steps compile into one kernel query with full-column histograms and export to Python or SQL.',
+  },
+  {
+    eyebrow: '.iara/catalog.toml',
+    title: 'Multi-catalog & Delta history',
+    text: 'Mount local directories and s3:// buckets side by side, auto-discover schema folders, inspect Parquet statistics, and query or restore prior Delta Lake table commits.',
+  },
+  {
+    eyebrow: '/analyze',
+    title: 'Live profiles & spooled results',
+    text: 'Page through results larger than RAM (spooled to disk above 128 MB), build kernel-aggregated charts, and open operator DAGs with row counts, timings and spilled bytes.',
+  },
+  {
+    eyebrow: 'jobs/*.toml · EC2',
+    title: 'Cron DAGs & AWS Spot clusters',
+    text: 'Define multi-task DAGs with retries, parameter overrides and webhook alerts. Attach notebooks or jobs to on-demand or Spot EC2 clusters with custom pip libraries and time limits.',
+  },
+];
+
+const railSections = [
+  { name: 'Workspace', key: 'notebook' },
+  { name: 'Data', key: 'analyze' },
+  { name: 'Wrangler', key: 'wrangler' },
+  { name: 'SQL', key: 'notebook' },
+  { name: 'Analyze', key: 'analyze' },
+  { name: 'Jobs', key: 'jobs' },
+  { name: 'Compute', key: 'jobs' },
+  { name: 'Git', key: 'notebook' },
+];
 ---
 
 <section class="section" id="studio">
   <div class="container">
-    <div class="grid grid--2 studio">
-      <div class="studio__text">
+    <div class="studio-head" data-reveal>
+      <div>
         <span class="eyebrow">Iara Studio</span>
-        <h2>A workspace for notebooks and SQL.</h2>
-        <p class="lede">Iara Studio runs in the browser. Notebooks are reactive and saved as plain .py files, so they diff and review like any other code.</p>
-
-        <ul class="features">
-          {points.map((text) => (
-            <li>
-              <svg class="check" viewBox="0 0 16 16" width="100%" role="img" aria-label="Included">
-                <path d="M3.5 8.5l3 3 6-6.5" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-              <span>{text}</span>
-            </li>
-          ))}
-        </ul>
+        <h2>A full analytics workspace, right on your files.</h2>
+        <p class="lede">
+          Iara Studio runs in the browser over a local folder or a shared S3 bucket. Notebooks stay plain <code>.py</code> files,
+          queries stay <code>.sql</code> files, and jobs stay <code>.toml</code> files — so everything diffs and reviews in Git while
+          queries execute in the Rust engine.
+        </p>
       </div>
 
-      <div class="window" aria-hidden="true">
+      <div class="studio-cli" aria-label="Launch Iara Studio from the terminal">
+        <div class="studio-cli__top">
+          <span class="studio-cli__label">Terminal</span>
+          <span class="studio-cli__port">http://localhost:3870</span>
+        </div>
+        <pre class="studio-cli__code"><code><span class="prompt">$</span> iara serve examples/workspace</code></pre>
+      </div>
+    </div>
+
+    <!-- Interactive Studio Workspace Explorer -->
+    <div class="studio-explorer" data-reveal="scale" data-studio-explorer>
+      <div class="studio-tabs" role="tablist" aria-label="Iara Studio views">
+        {tabs.map((t, idx) => (
+          <button
+            type="button"
+            role="tab"
+            class={`studio-tab ${idx === 0 ? 'is-active' : ''}`}
+            aria-selected={idx === 0 ? 'true' : 'false'}
+            aria-controls={`studio-panel-${t.id}`}
+            id={`studio-tab-${t.id}`}
+            data-studio-tab={t.id}
+          >
+            <span class="studio-tab__top">
+              <span class="studio-tab__title">{t.label}</span>
+              <span class="studio-tab__badge">{t.badge}</span>
+            </span>
+            <span class="studio-tab__desc">{t.caption}</span>
+          </button>
+        ))}
+      </div>
+
+      <div class="window">
+        <!-- 48px Studio App Bar -->
         <div class="window__bar">
-          <LogoMark size={20} />
-          <span class="window__name">Iara</span>
-          <span class="window__path"> / tpch-demo</span>
+          <div class="window__brand">
+            <LogoMark size={20} />
+            <span class="window__name">Iara</span>
+            <span class="window__path">/ tpch-demo</span>
+          </div>
+          <div class="window__search" aria-hidden="true">
+            <span>Search notebooks, queries and tables</span>
+            <kbd>Ctrl K</kbd>
+          </div>
+          <div class="window__meta" aria-hidden="true">
+            <span class="cluster-pill">
+              <span class="cluster-pill__dot"></span>
+              m7i.4xlarge · 16 vCPUs
+            </span>
+          </div>
         </div>
 
         <div class="window__body">
-          <div class="rail">
-            {railIcons.map((i) => (
-              <span class={i === 0 ? 'rail__item rail__item--active' : 'rail__item'}></span>
+          <!-- Left Navigation Rail -->
+          <div class="rail" aria-hidden="true">
+            {railSections.map((item, i) => (
+              <div class={`rail__item ${i === 0 ? 'rail__item--active' : ''}`} data-rail-target={item.key} title={item.name}>
+                <span class="rail__dot"></span>
+                <span class="rail__label">{item.name}</span>
+              </div>
             ))}
           </div>
 
-          <div class="main">
-            <div class="cell">
-              <pre class="code-line">orders = iara.scan_parquet("data/orders")</pre>
+          <!-- Panel 1: Reactive Notebooks -->
+          <div
+            class="studio-panel is-active"
+            role="tabpanel"
+            id="studio-panel-notebook"
+            aria-labelledby="studio-tab-notebook"
+            data-studio-panel="notebook"
+          >
+            <div class="notebook-layout">
+              <div class="notebook-main">
+                <!-- Tab strip & Widget bar -->
+                <div class="workbench-strip">
+                  <span class="tab-chip tab-chip--active">notebooks/revenue.py</span>
+                  <span class="tab-chip">queries/regional_kpi.sql</span>
+                  <span class="workbench-strip__right">Kernel · idle · 4 panes max</span>
+                </div>
+
+                <div class="widget-bar">
+                  <span class="widget-bar__tag">Widgets</span>
+                  <div class="widget-pill">
+                    <span class="widget-pill__label">region</span>
+                    <span class="widget-pill__val">AMERICA ▾</span>
+                  </div>
+                  <div class="widget-pill">
+                    <span class="widget-pill__label">segment</span>
+                    <span class="widget-pill__val">BUILDING ▾</span>
+                  </div>
+                  <div class="widget-pill">
+                    <span class="widget-pill__label">min_acctbal</span>
+                    <span class="widget-pill__val">1,000</span>
+                  </div>
+                </div>
+
+                <!-- Cell 1: Python LazyFrame -->
+                <div class="cell">
+                  <div class="cell__head">
+                    <span class="cell__lang">Python · cell_1</span>
+                    <span class="cell__status">defined orders · 2 ms</span>
+                  </div>
+                  <pre class="code-line"><span class="kw">from</span> iara <span class="kw">import</span> functions <span class="kw">as</span> F
+orders = ws.table(<span class="str">"orders"</span>).filter(F.col(<span class="str">"o_orderdate"</span>) &gt;= <span class="str">"1995-01-01"</span>)</pre>
+                  <div class="frame-line">
+                    <span class="frame-line__name">orders</span>
+                    <span class="frame-line__kind">LazyFrame · 9 columns</span>
+                    <span class="frame-line__cols">[o_orderkey: integer, o_custkey: integer, o_orderpriority: text, o_totalprice: decimal(15,2), …]</span>
+                  </div>
+                </div>
+
+                <!-- Cell 2: SQL Cell sharing Python variable & widget parameter -->
+                <div class="cell cell--active">
+                  <div class="cell__head">
+                    <span class="cell__lang cell__lang--sql">SQL · cell_2 → by_priority</span>
+                    <span class="cell__status cell__status--ok">5 rows · 38 ms · 0 B spilled</span>
+                  </div>
+                  <pre class="code-line"><span class="kw">select</span> o_orderpriority, <span class="fn">count</span>(*) <span class="kw">as</span> orders, <span class="fn">sum</span>(o_totalprice) <span class="kw">as</span> revenue
+<span class="kw">from</span> orders <span class="kw">where</span> o_mktsegment = <span class="num">:segment</span>
+<span class="kw">group by</span> 1 <span class="kw">order by</span> 1</pre>
+
+                  <div class="out-tabs">
+                    <span class="out-tab out-tab--active">Table · 5 rows</span>
+                    <span class="out-tab">Chart · Horizontal</span>
+                    <span class="out-tab">Profile · 38 ms</span>
+                    <span class="out-tab">Wrangle</span>
+                  </div>
+
+                  <div class="cell__out">
+                    <table class="table">
+                      <thead>
+                        <tr>
+                          <th scope="col">o_orderpriority <span class="th-type">text</span></th>
+                          <th scope="col" class="num">orders <span class="th-type">integer</span></th>
+                          <th scope="col" class="num">revenue <span class="th-type">decimal</span></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {priorities.map((p) => (
+                          <tr>
+                            <td>{p.name}</td>
+                            <td class="num">{p.count}</td>
+                            <td class="num">{p.rev}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+
+                    <!-- Horizontal Column Chart inside Studio output -->
+                    <div class="studio-hchart" aria-label="Order counts by priority">
+                      <div class="studio-hchart__title">Orders by priority (kernel-aggregated)</div>
+                      <div class="studio-hchart__cols">
+                        {priorityCols.map((c) => (
+                          <div class="studio-hchart__col">
+                            <div class="studio-hchart__track">
+                              <span class="studio-hchart__bar hchart__col-bar" style={`height: ${c.pct}%`}></span>
+                            </div>
+                            <span class="studio-hchart__label">{c.short}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Right Side Panel: Outline & Variables -->
+              <aside class="notebook-side" aria-hidden="true">
+                <div class="side-block">
+                  <div class="side-block__title">Variables (3)</div>
+                  <div class="var-row">
+                    <code>segment</code>
+                    <span>"BUILDING"</span>
+                  </div>
+                  <div class="var-row">
+                    <code>orders</code>
+                    <span>LazyFrame · 9 cols</span>
+                  </div>
+                  <div class="var-row">
+                    <code>by_priority</code>
+                    <span>DataFrame · 5×3</span>
+                  </div>
+                </div>
+                <div class="side-block">
+                  <div class="side-block__title">Pipeline profile</div>
+                  <div class="prof-row">
+                    <span>Scan + Filter</span>
+                    <span>14 ms</span>
+                  </div>
+                  <div class="prof-row">
+                    <span>HashAggregate</span>
+                    <span>24 ms</span>
+                  </div>
+                  <div class="prof-row prof-row--muted">
+                    <span>Peak memory</span>
+                    <span>94 MB / 8 GB</span>
+                  </div>
+                </div>
+              </aside>
+            </div>
+          </div>
+
+          <!-- Panel 2: Data Wrangler -->
+          <div
+            class="studio-panel"
+            role="tabpanel"
+            id="studio-panel-wrangler"
+            aria-labelledby="studio-tab-wrangler"
+            data-studio-panel="wrangler"
+            hidden
+          >
+            <div class="wrangler-toolbar">
+              <code class="wrangler-table-name">main.customer</code>
+              <span class="wrangler-btn">Filter</span>
+              <span class="wrangler-btn">Clean and impute</span>
+              <span class="wrangler-btn">Text</span>
+              <span class="wrangler-btn">Columns</span>
+              <span class="wrangler-count">29,984 of 150,000 rows × 8 cols</span>
+              <span class="wrangler-btn wrangler-btn--primary">Export code</span>
             </div>
 
-            <div class="cell cell--active">
-              <pre class="code-line">iara.sql("select o_orderpriority, count(*) from orders group by 1")</pre>
+            <div class="wrangler-layout">
+              <div class="wrangler-steps">
+                <div class="side-block__title">STEPS (4)</div>
+                <div class="step-item">Source · main.customer</div>
+                <div class="step-item">1. Filter c_mktsegment = "AUTOMOBILE"</div>
+                <div class="step-item">2. Trim whitespace · c_name</div>
+                <div class="step-item">3. Fill nulls · c_acctbal → 0.00</div>
+                <div class="step-item step-item--active">4. Sort c_acctbal descending</div>
+              </div>
 
-              <div class="cell__out">
-                <table class="table">
+              <div class="wrangler-main">
+                <table class="table wrangler-grid">
                   <thead>
                     <tr>
-                      <th scope="col">o_orderpriority</th>
-                      <th scope="col" class="num">count</th>
+                      <th>
+                        <div>c_custkey <span class="th-type">integer</span></div>
+                        <div class="qbar"><span style="width: 100%"></span></div>
+                        <div class="qmeta">100% valid · 29.9k distinct</div>
+                      </th>
+                      <th>
+                        <div>c_name <span class="th-type">text</span></div>
+                        <div class="qbar"><span style="width: 100%"></span></div>
+                        <div class="qmeta">trimmed · 0 nulls</div>
+                      </th>
+                      <th>
+                        <div>c_nation <span class="th-type">text</span></div>
+                        <div class="qbar"><span style="width: 98%"></span></div>
+                        <div class="qmeta">25 distinct · top: US (14%)</div>
+                      </th>
+                      <th class="num">
+                        <div>c_acctbal <span class="th-type">decimal(15,2)</span></div>
+                        <div class="qbar"><span style="width: 100%"></span></div>
+                        <div class="qmeta">min 0.00 · max 9,999.99</div>
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
-                    {priorities.map((p) => (
-                      <tr>
-                        <td>{p.name}</td>
-                        <td class="num">{p.count}</td>
-                      </tr>
-                    ))}
+                    <tr>
+                      <td class="num">148201</td>
+                      <td>Customer#000148201</td>
+                      <td>UNITED STATES</td>
+                      <td class="num">9,998.72</td>
+                    </tr>
+                    <tr>
+                      <td class="num">91408</td>
+                      <td>Customer#000091408</td>
+                      <td>BRAZIL</td>
+                      <td class="num">9,994.15</td>
+                    </tr>
+                    <tr>
+                      <td class="num">32019</td>
+                      <td>Customer#000032019</td>
+                      <td>GERMANY</td>
+                      <td class="num">9,991.40</td>
+                    </tr>
                   </tbody>
                 </table>
 
-                <div class="mini-chart">
-                  {bars.map((b) => (
-                    <div class="mini-chart__row">
-                      <span class="mini-chart__label">{b.n}</span>
-                      <span class="mini-chart__track">
-                        <span class="mini-chart__bar" style={`width: ${b.width}%`}></span>
-                      </span>
+                <div class="wrangler-export">
+                  <div class="wrangler-export__head">
+                    <span>Exported Python DataFrame recipe</span>
+                    <span>Runs over all rows in kernel</span>
+                  </div>
+                  <pre class="code-line"><span class="kw">from</span> iara <span class="kw">import</span> functions <span class="kw">as</span> F
+wrangled = (
+    ws.table(<span class="str">"customer"</span>)
+    .filter(F.col(<span class="str">"c_mktsegment"</span>) == <span class="str">"AUTOMOBILE"</span>)
+    .with_columns(c_name=F.col(<span class="str">"c_name"</span>).str.strip_chars(), c_acctbal=F.col(<span class="str">"c_acctbal"</span>).fill_null(<span class="num">0.0</span>))
+    .sort(<span class="str">"c_acctbal"</span>, descending=<span class="kw">True</span>)
+)</pre>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Panel 3: Catalog & Query Analyzer -->
+          <div
+            class="studio-panel"
+            role="tabpanel"
+            id="studio-panel-analyze"
+            aria-labelledby="studio-tab-analyze"
+            data-studio-panel="analyze"
+            hidden
+          >
+            <div class="analyze-layout">
+              <div class="catalog-pane">
+                <div class="side-block__title">Catalogs &amp; Delta History</div>
+                <div class="catalog-tree">
+                  <div class="catalog-node catalog-node--root">▾ tpch (default)</div>
+                  <div class="catalog-node catalog-node--schema">▾ main · s3://warehouse/tpch</div>
+                  <div class="catalog-node catalog-node--table is-selected">orders · Delta · 1.5M rows</div>
+                  <div class="catalog-node catalog-node--table">lineitem · Parquet · 6.0M rows</div>
+                  <div class="catalog-node catalog-node--table">customer · Parquet · 150k rows</div>
+                  <div class="catalog-node catalog-node--root">▸ sales · s3://bucket/sales</div>
+                </div>
+
+                <div class="delta-commits">
+                  <div class="side-block__title">Delta History · main.orders</div>
+                  <div class="commit-row">
+                    <span class="commit-ver">v18</span>
+                    <span class="commit-op">MERGE INTO · +14,200 rows</span>
+                    <span class="commit-act">Current</span>
+                  </div>
+                  <div class="commit-row">
+                    <span class="commit-ver">v17</span>
+                    <span class="commit-op">DELETE WHERE status = 'X'</span>
+                    <span class="commit-act commit-act--link">Restore</span>
+                  </div>
+                  <div class="commit-row">
+                    <span class="commit-ver">v16</span>
+                    <span class="commit-op">CREATE TABLE AS SELECT</span>
+                    <span class="commit-act commit-act--link">Query @v16</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="analyze-main">
+                <div class="analyze-header">
+                  <div>
+                    <span class="side-block__title">Query Analyze · /analyze/9f3a8c12</span>
+                    <div class="analyze-title">Pipeline timeline &amp; operator graph (16 cores)</div>
+                  </div>
+                  <span class="cell__status cell__status--ok">43 ms total · 412 MB peak · 0 B spilled</span>
+                </div>
+
+                <!-- Horizontal Operator Timeline -->
+                <div class="op-bars">
+                  <div class="op-row">
+                    <span class="op-name">1. ParquetScan (lineitem)</span>
+                    <div class="op-track">
+                      <span class="op-fill" style="width: 33%"></span>
                     </div>
-                  ))}
+                    <span class="op-stat">6.0M rows · 14 ms</span>
+                  </div>
+                  <div class="op-row">
+                    <span class="op-name">2. Filter (l_shipdate)</span>
+                    <div class="op-track">
+                      <span class="op-fill" style="left: 25%; width: 12%"></span>
+                    </div>
+                    <span class="op-stat">1.5M rows · 5 ms</span>
+                  </div>
+                  <div class="op-row">
+                    <span class="op-name">3. HashJoin (build: orders)</span>
+                    <div class="op-track">
+                      <span class="op-fill op-fill--cobalt" style="left: 34%; width: 44%"></span>
+                    </div>
+                    <span class="op-stat">1.5M rows · 19 ms</span>
+                  </div>
+                  <div class="op-row">
+                    <span class="op-name">4. HashAggregate (group by)</span>
+                    <div class="op-track">
+                      <span class="op-fill" style="left: 78%; width: 22%"></span>
+                    </div>
+                    <span class="op-stat">5 rows · 5 ms</span>
+                  </div>
+                </div>
+
+                <div class="op-dag">
+                  <span class="op-node">ParquetScan · 6.0M</span>
+                  <span class="op-arrow">→</span>
+                  <span class="op-node">Filter · 1.5M</span>
+                  <span class="op-arrow">→</span>
+                  <span class="op-node op-node--active">HashJoin (DP ordered) · 1.5M</span>
+                  <span class="op-arrow">→</span>
+                  <span class="op-node">HashAggregate · 5</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Panel 4: Jobs & AWS Compute -->
+          <div
+            class="studio-panel"
+            role="tabpanel"
+            id="studio-panel-jobs"
+            aria-labelledby="studio-tab-jobs"
+            data-studio-panel="jobs"
+            hidden
+          >
+            <div class="jobs-layout">
+              <div class="jobs-pane">
+                <div class="analyze-header">
+                  <div>
+                    <span class="side-block__title">Scheduled Job · jobs/nightly_sales.toml</span>
+                    <div class="analyze-title">Nightly sales mart · <code>0 6 * * *</code> UTC</div>
+                  </div>
+                  <span class="cell__status cell__status--ok">Run #48 · all_success · 14.2 s</span>
+                </div>
+
+                <!-- Horizontal Task DAG -->
+                <div class="dag-flow">
+                  <div class="dag-task dag-task--ok">
+                    <span class="dag-task__status">✓ 4.1 s</span>
+                    <strong>load_raw</strong>
+                    <span>notebooks/load.py</span>
+                  </div>
+                  <span class="op-arrow">→</span>
+                  <div class="dag-task dag-task--ok">
+                    <span class="dag-task__status">✓ 6.8 s</span>
+                    <strong>transform_orders</strong>
+                    <span>notebooks/enrich.py</span>
+                  </div>
+                  <span class="op-arrow">→</span>
+                  <div class="dag-task dag-task--ok">
+                    <span class="dag-task__status">✓ 3.3 s</span>
+                    <strong>publish_report</strong>
+                    <span>queries/report.sql</span>
+                  </div>
+                </div>
+
+                <pre class="code-line">name = <span class="str">"Nightly sales"</span>
+schedule = <span class="str">"0 6 * * *"</span>
+cluster = <span class="str">"job"</span>
+
+[[task]]
+key = <span class="str">"publish_report"</span>
+target = <span class="str">"queries/report.sql"</span>
+depends_on = [<span class="str">"transform_orders"</span>]
+run_if = <span class="str">"all_success"</span>
+max_retries = <span class="num">2</span></pre>
+              </div>
+
+              <div class="compute-pane">
+                <div class="side-block__title">AWS EC2 Compute Clusters</div>
+                <div class="cluster-card">
+                  <div class="cluster-card__head">
+                    <strong>analytics-xl</strong>
+                    <span class="cluster-badge cluster-badge--spot">spot · default</span>
+                    <span class="cluster-badge cluster-badge--run">running</span>
+                  </div>
+                  <div class="cluster-card__specs">
+                    <span>m7i.4xlarge · 16 vCPUs · 64 GB RAM</span>
+                    <span>Limit: 2 h · terminates at 23:00</span>
+                    <span>Libraries: polars, rich==13.9.4, pyarrow</span>
+                  </div>
+                  <div class="cluster-card__log">
+                    <code>[boot] ssh kernel tunnel ready (unprivileged user)</code>
+                    <code>[pip] 3 libraries installed in 4.2s</code>
+                    <code>[kernel] iara-core 0.1.0 initialized (16 threads)</code>
+                  </div>
                 </div>
               </div>
             </div>
@@ -98,62 +566,225 @@ const railIcons = [0, 1, 2, 3, 4];
         </div>
       </div>
     </div>
+
+    <!-- 6 Expanded Studio Capability Cards -->
+    <div class="grid grid--3 studio-pillars" data-reveal-stagger>
+      {studioPillars.map((p) => (
+        <article class="card pillar-card">
+          <span class="pillar-card__eyebrow">{p.eyebrow}</span>
+          <h3>{p.title}</h3>
+          <p class="muted small">{p.text}</p>
+        </article>
+      ))}
+    </div>
   </div>
 </section>
 
+<script is:inline>
+  (() => {
+    const explorer = document.querySelector('[data-studio-explorer]');
+    if (!explorer) return;
+    const tabButtons = Array.from(explorer.querySelectorAll('[data-studio-tab]'));
+    const panels = Array.from(explorer.querySelectorAll('[data-studio-panel]'));
+    const railItems = Array.from(explorer.querySelectorAll('[data-rail-target]'));
+
+    function activateTab(id) {
+      tabButtons.forEach((btn) => {
+        const active = btn.getAttribute('data-studio-tab') === id;
+        btn.classList.toggle('is-active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      panels.forEach((panel) => {
+        const active = panel.getAttribute('data-studio-panel') === id;
+        panel.classList.toggle('is-active', active);
+        panel.hidden = !active;
+      });
+      let highlighted = false;
+      railItems.forEach((item) => {
+        const match = !highlighted && item.getAttribute('data-rail-target') === id;
+        if (match) highlighted = true;
+        item.classList.toggle('rail__item--active', match);
+      });
+    }
+
+    tabButtons.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-studio-tab');
+        if (id) activateTab(id);
+      });
+    });
+
+    railItems.forEach((item) => {
+      item.addEventListener('click', () => {
+        const id = item.getAttribute('data-rail-target');
+        if (id) activateTab(id);
+      });
+    });
+  })();
+</script>
+
 <style>
-  .studio > * {
-    min-width: 0;
+  .studio-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+    gap: 36px;
+    align-items: end;
+    margin-bottom: 40px;
   }
 
-  .studio__text h2 {
+  .studio-head h2 {
     margin-top: 0;
   }
 
-  .features {
-    list-style: none;
-    padding: 0;
-    margin: 28px 0 0;
-    display: grid;
-    gap: 12px;
+  .studio-head .lede {
+    margin-bottom: 0;
   }
 
-  .features li {
+  .studio-cli {
+    background: var(--night);
+    border: 1px solid var(--night-rule);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    box-shadow: var(--shadow);
+  }
+
+  .studio-cli__top {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 14px;
+    background: var(--night-2);
+    border-bottom: 1px solid var(--night-rule);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--night-dim);
+  }
+
+  .studio-cli__port {
+    color: var(--sky);
+  }
+
+  .studio-cli__code {
+    margin: 0;
+    padding: 14px 16px;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    color: var(--night-ink);
+    overflow-x: auto;
+  }
+
+  .studio-cli__code .prompt {
+    color: var(--sky);
+    margin-right: 6px;
+    user-select: none;
+  }
+
+  /* Interactive Tab Selector Bar */
+  .studio-tabs {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 12px;
+    margin-bottom: 18px;
+  }
+
+  .studio-tab {
+    appearance: none;
+    text-align: left;
+    background: var(--vellum);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    cursor: pointer;
+    font-family: inherit;
+    color: var(--ink);
+    transition:
+      border-color 0.2s ease,
+      background 0.2s ease,
+      transform 0.2s cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 0.2s ease;
+  }
+
+  .studio-tab:hover {
+    border-color: var(--rule-strong);
+    transform: translateY(-2px);
+  }
+
+  .studio-tab.is-active {
+    background: var(--vellum);
+    border-color: var(--cobalt);
+    box-shadow: 0 0 0 1px var(--cobalt), var(--shadow);
+  }
+
+  .studio-tab__top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+
+  .studio-tab__title {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 0.95rem;
     color: var(--ink);
   }
 
-  .check {
-    flex: 0 0 16px;
-    width: 16px;
-    height: 16px;
-    margin-top: 5px;
+  .studio-tab.is-active .studio-tab__title {
+    color: var(--cobalt);
   }
 
-  .check path {
-    stroke: var(--cobalt);
+  .studio-tab__badge {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    color: var(--ink-2);
+    background: var(--parchment-2);
+    border: 1px solid var(--rule);
+    padding: 1px 7px;
+    border-radius: 999px;
+    white-space: nowrap;
   }
 
-  /* illustration of the Studio UI, paper look */
+  .studio-tab.is-active .studio-tab__badge {
+    color: var(--cobalt);
+    background: var(--mist-2);
+    border-color: var(--mist);
+  }
+
+  .studio-tab__desc {
+    display: block;
+    font-size: 0.8rem;
+    line-height: 1.45;
+    color: var(--ink-2);
+  }
+
+  /* Studio Window Frame */
   .window {
     min-width: 0;
     max-width: 100%;
     background: var(--vellum);
-    border: 1px solid var(--rule);
+    border: 1px solid var(--rule-strong);
     border-radius: var(--radius-lg);
-    box-shadow: var(--shadow);
+    box-shadow: 0 2px 0 rgba(29, 42, 54, 0.04), 0 18px 42px rgba(29, 42, 54, 0.09);
     overflow: hidden;
   }
 
   .window__bar {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 10px 14px;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 16px;
+    background: var(--parchment);
     border-bottom: 1px solid var(--rule);
     font-size: 13px;
+  }
+
+  .window__brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
   }
 
   .window__name {
@@ -164,11 +795,55 @@ const railIcons = [0, 1, 2, 3, 4];
   }
 
   .window__path {
-    color: var(--ink-3);
-    font-size: 13px;
+    color: var(--ink-2);
+    font-family: var(--font-mono);
+    font-size: 12px;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  }
+
+  .window__search {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 4px 12px;
+    background: var(--vellum);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    font-size: 12px;
+    color: var(--ink-3);
+    min-width: 260px;
+  }
+
+  .window__search kbd {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--ink-2);
+    background: var(--parchment);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+
+  .cluster-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--ink-2);
+    background: var(--vellum);
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    padding: 3px 10px;
+    white-space: nowrap;
+  }
+
+  .cluster-pill__dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #2f9e66;
   }
 
   .window__body {
@@ -177,46 +852,211 @@ const railIcons = [0, 1, 2, 3, 4];
   }
 
   .rail {
-    flex: 0 0 44px;
+    flex: 0 0 84px;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 12px;
-    padding: 14px 0;
+    gap: 4px;
+    padding: 12px 6px;
     background: var(--parchment);
     border-right: 1px solid var(--rule);
   }
 
   .rail__item {
-    width: 16px;
-    height: 16px;
-    border-radius: 4px;
-    background: var(--rule);
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--ink-2);
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+
+  .rail__item:hover {
+    background: var(--parchment-2);
+    color: var(--ink);
   }
 
   .rail__item--active {
+    background: var(--mist-2);
+    color: var(--cobalt);
+    font-weight: 600;
+  }
+
+  .rail__dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 2px;
+    background: var(--rule-strong);
+    flex-shrink: 0;
+  }
+
+  .rail__item--active .rail__dot {
     background: var(--cobalt);
   }
 
-  .main {
+  .rail__label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .studio-panel {
     flex: 1;
     min-width: 0;
+  }
+
+  @keyframes panel-fade {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .studio-panel.is-active {
+    animation: panel-fade 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  /* Panel 1: Notebook Layout */
+  .notebook-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 220px;
+    min-width: 0;
+  }
+
+  .notebook-main {
     display: flex;
     flex-direction: column;
     gap: 12px;
-    padding: 14px;
+    padding: 14px 16px;
+    min-width: 0;
+  }
+
+  .workbench-strip {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--rule);
+    font-size: 11.5px;
+  }
+
+  .tab-chip {
+    font-family: var(--font-mono);
+    padding: 3px 10px;
+    border-radius: 6px;
+    background: var(--parchment);
+    border: 1px solid var(--rule);
+    color: var(--ink-2);
+  }
+
+  .tab-chip--active {
+    background: var(--vellum);
+    border-color: var(--cobalt);
+    color: var(--cobalt);
+    font-weight: 600;
+  }
+
+  .workbench-strip__right {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    color: var(--ink-3);
+    font-size: 11px;
+  }
+
+  .widget-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 10px;
+    background: var(--parchment);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    font-size: 11.5px;
+  }
+
+  .widget-bar__tag {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--cobalt);
+    font-weight: 600;
+    margin-right: 4px;
+  }
+
+  .widget-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--vellum);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 2px 8px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .widget-pill__label {
+    color: var(--ink-3);
+  }
+
+  .widget-pill__val {
+    color: var(--ink);
+    font-weight: 600;
   }
 
   .cell {
     min-width: 0;
-    padding: 10px;
+    padding: 10px 12px;
     background: var(--vellum);
     border: 1px solid var(--rule);
     border-radius: 10px;
   }
 
   .cell--active {
-    border-left: 2px solid var(--cobalt);
+    border-left: 3px solid var(--cobalt);
+  }
+
+  .cell__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .cell__lang {
+    color: var(--ink-2);
+    font-weight: 600;
+  }
+
+  .cell__lang--sql {
+    color: var(--cobalt);
+  }
+
+  .cell__status {
+    color: var(--ink-3);
+  }
+
+  .cell__status--ok {
+    color: #26784b;
+    background: rgba(47, 158, 102, 0.1);
+    border: 1px solid rgba(47, 158, 102, 0.25);
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-family: var(--font-mono);
+    font-size: 11px;
   }
 
   .code-line {
@@ -225,26 +1065,85 @@ const railIcons = [0, 1, 2, 3, 4];
     background: var(--parchment-2);
     border-radius: 6px;
     font-family: var(--font-mono);
-    font-size: 12px;
-    line-height: 1.5;
+    font-size: 11.5px;
+    line-height: 1.55;
     color: var(--ink);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
 
-  .cell__out {
+  .code-line .kw { color: var(--cobalt); font-weight: 600; }
+  .code-line .str { color: #266b44; }
+  .code-line .num { color: var(--ochre); font-weight: 600; }
+  .code-line .fn { color: #2e5d99; }
+
+  .frame-line {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 7px;
+    padding: 4px 8px;
+    background: var(--parchment);
+    border-radius: 5px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .frame-line__name {
+    font-weight: 700;
+    color: var(--ink);
+  }
+
+  .frame-line__kind {
+    color: var(--cobalt);
+  }
+
+  .frame-line__cols {
+    color: var(--ink-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+  }
+
+  .out-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--rule);
+    font-size: 11px;
+    font-family: var(--font-mono);
+  }
+
+  .out-tab {
+    padding: 2px 8px;
+    border-radius: 5px;
+    color: var(--ink-2);
+  }
+
+  .out-tab--active {
+    background: var(--mist-2);
+    color: var(--cobalt);
+    font-weight: 600;
+  }
+
+  .cell__out {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+    align-items: stretch;
     gap: 14px;
     margin-top: 10px;
     min-width: 0;
   }
 
   .table {
-    flex: 1 1 auto;
+    width: 100%;
     min-width: 0;
     border-collapse: collapse;
-    font-size: 12px;
+    font-size: 11.5px;
   }
 
   .table th,
@@ -259,6 +1158,15 @@ const railIcons = [0, 1, 2, 3, 4];
     font-family: var(--font-mono);
     font-weight: 600;
     color: var(--ink-2);
+    border-top: 1px solid var(--ink-3);
+    border-bottom: 1px solid var(--ink-3);
+  }
+
+  .th-type {
+    font-weight: 400;
+    color: var(--ink-3);
+    font-size: 10px;
+    margin-left: 3px;
   }
 
   .table tbody td {
@@ -271,51 +1179,609 @@ const railIcons = [0, 1, 2, 3, 4];
     font-variant-numeric: tabular-nums;
   }
 
-  .mini-chart {
-    flex: 0 0 38%;
-    min-width: 0;
+  /* Horizontal Column Chart inside Studio Notebook output */
+  .studio-hchart {
     display: flex;
     flex-direction: column;
-    gap: 7px;
-    padding-top: 4px;
+    justify-content: space-between;
+    padding: 8px 10px;
+    background: var(--parchment);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    min-width: 0;
   }
 
-  .mini-chart__row {
-    display: grid;
-    grid-template-columns: 14px minmax(0, 1fr);
-    align-items: center;
-    gap: 6px;
+  .studio-hchart__title {
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: 10.5px;
+    color: var(--ink-2);
+    margin-bottom: 8px;
+  }
+
+  .studio-hchart__cols {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 8px;
+    align-items: end;
+    height: 82px;
+  }
+
+  .studio-hchart__col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    height: 100%;
+  }
+
+  .studio-hchart__track {
+    flex: 1;
+    width: 100%;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    border-bottom: 1px solid var(--rule-strong);
+    padding: 0 3px;
+  }
+
+  .studio-hchart__bar {
+    display: block;
+    width: 100%;
+    max-width: 24px;
+    border-radius: 3px 3px 0 0;
+    background: linear-gradient(180deg, var(--cobalt), var(--azure));
+  }
+
+  .studio-hchart__label {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    color: var(--ink-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+
+  .notebook-side {
+    background: var(--parchment);
+    border-left: 1px solid var(--rule);
+    padding: 14px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    font-size: 11.5px;
+  }
+
+  .side-block__title {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--ink-2);
+    margin-bottom: 8px;
+  }
+
+  .var-row,
+  .prof-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 4px 0;
+    border-bottom: 1px dashed var(--rule);
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .var-row span,
+  .prof-row--muted {
     color: var(--ink-3);
   }
 
-  .mini-chart__track {
+  /* Panel 2: Wrangler */
+  .wrangler-toolbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 14px;
+    background: var(--parchment);
+    border-bottom: 1px solid var(--rule);
+    font-size: 12px;
+  }
+
+  .wrangler-table-name {
+    font-weight: 600;
+    color: var(--ink);
+    background: var(--vellum);
+    border: 1px solid var(--rule);
+    padding: 2px 8px;
+    border-radius: 6px;
+  }
+
+  .wrangler-btn {
+    padding: 3px 10px;
+    border: 1px solid var(--rule-strong);
+    border-radius: 6px;
+    background: var(--vellum);
+    font-size: 11.5px;
+    color: var(--ink);
+  }
+
+  .wrangler-btn--primary {
+    background: var(--cobalt);
+    border-color: var(--cobalt);
+    color: #fff;
+    font-weight: 600;
+  }
+
+  .wrangler-count {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--ink-2);
+  }
+
+  .wrangler-layout {
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr);
     min-width: 0;
   }
 
-  .mini-chart__bar {
-    display: block;
-    height: 10px;
+  .wrangler-steps {
+    padding: 14px 12px;
+    background: var(--parchment);
+    border-right: 1px solid var(--rule);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .step-item {
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: var(--vellum);
+    border: 1px solid var(--rule);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--ink-2);
+  }
+
+  .step-item--active {
+    border-color: var(--cobalt);
+    color: var(--cobalt);
+    font-weight: 600;
+    background: var(--mist-2);
+  }
+
+  .wrangler-main {
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-width: 0;
+    overflow-x: auto;
+  }
+
+  .qbar {
+    height: 4px;
+    background: var(--parchment-2);
     border-radius: 2px;
+    margin: 4px 0 2px;
+    overflow: hidden;
+  }
+
+  .qbar span {
+    display: block;
+    height: 100%;
+    background: var(--cobalt);
+  }
+
+  .qmeta {
+    font-size: 10px;
+    font-weight: 400;
+    color: var(--ink-3);
+  }
+
+  .wrangler-export {
+    background: var(--parchment);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 10px;
+  }
+
+  .wrangler-export__head {
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--ink-2);
+    margin-bottom: 6px;
+  }
+
+  /* Panel 3: Catalog & Analyze */
+  .analyze-layout {
+    display: grid;
+    grid-template-columns: 270px minmax(0, 1fr);
+    min-width: 0;
+  }
+
+  .catalog-pane {
+    padding: 14px 12px;
+    background: var(--parchment);
+    border-right: 1px solid var(--rule);
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .catalog-tree {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .catalog-node {
+    padding: 4px 6px;
+    border-radius: 5px;
+    color: var(--ink-2);
+  }
+
+  .catalog-node--root {
+    font-weight: 600;
+    color: var(--ink);
+  }
+
+  .catalog-node--schema {
+    padding-left: 14px;
+  }
+
+  .catalog-node--table {
+    padding-left: 24px;
+  }
+
+  .catalog-node.is-selected {
+    background: var(--mist-2);
+    color: var(--cobalt);
+    font-weight: 600;
+  }
+
+  .delta-commits {
+    border-top: 1px solid var(--rule);
+    padding-top: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .commit-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    padding: 4px 6px;
+    background: var(--vellum);
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+  }
+
+  .commit-ver {
+    font-weight: 700;
+    color: var(--cobalt);
+  }
+
+  .commit-op {
+    color: var(--ink-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .commit-act--link {
+    color: var(--cobalt);
+    text-decoration: underline;
+  }
+
+  .analyze-main {
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-width: 0;
+  }
+
+  .analyze-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .analyze-title {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--ink);
+  }
+
+  .op-bars {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    background: var(--parchment);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+  }
+
+  .op-row {
+    display: grid;
+    grid-template-columns: 170px minmax(0, 1fr) 120px;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .op-name {
+    color: var(--ink);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .op-track {
+    position: relative;
+    height: 12px;
+    background: var(--parchment-2);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .op-fill {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
     background: var(--azure);
+    border-radius: 3px;
   }
 
-  @media (max-width: 900px) {
-    .studio {
+  .op-fill--cobalt {
+    background: var(--cobalt);
+  }
+
+  .op-stat {
+    text-align: right;
+    color: var(--ink-2);
+    white-space: nowrap;
+  }
+
+  .op-dag {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .op-node {
+    padding: 6px 10px;
+    background: var(--parchment);
+    border: 1px solid var(--rule-strong);
+    border-radius: 6px;
+    color: var(--ink);
+  }
+
+  .op-node--active {
+    background: var(--mist-2);
+    border-color: var(--cobalt);
+    color: var(--cobalt);
+    font-weight: 600;
+  }
+
+  .op-arrow {
+    color: var(--ink-3);
+  }
+
+  /* Panel 4: Jobs & Compute */
+  .jobs-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+    min-width: 0;
+  }
+
+  .jobs-pane {
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .dag-flow {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .dag-task {
+    flex: 1 1 130px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 10px;
+    background: var(--parchment);
+    border: 1px solid var(--rule-strong);
+    border-left: 3px solid #2f9e66;
+    border-radius: 8px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .dag-task__status {
+    color: #26784b;
+    font-size: 10px;
+    font-weight: 600;
+  }
+
+  .dag-task span:last-child {
+    color: var(--ink-3);
+    font-size: 10.5px;
+  }
+
+  .compute-pane {
+    padding: 14px 16px;
+    background: var(--parchment);
+    border-left: 1px solid var(--rule);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .cluster-card {
+    background: var(--vellum);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .cluster-card__head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .cluster-badge {
+    font-size: 10px;
+    padding: 1px 7px;
+    border-radius: 999px;
+  }
+
+  .cluster-badge--spot {
+    background: var(--ochre-soft);
+    color: var(--ochre);
+  }
+
+  .cluster-badge--run {
+    margin-left: auto;
+    background: rgba(47, 158, 102, 0.12);
+    color: #26784b;
+    font-weight: 600;
+  }
+
+  .cluster-card__specs {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    color: var(--ink-2);
+  }
+
+  .cluster-card__log {
+    background: var(--night);
+    color: var(--night-ink);
+    padding: 8px 10px;
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 10.5px;
+    overflow-x: auto;
+  }
+
+  /* Studio Pillars Grid */
+  .studio-pillars {
+    margin-top: 32px;
+  }
+
+  .pillar-card__eyebrow {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 0.74rem;
+    color: var(--cobalt);
+    background: var(--mist-2);
+    padding: 2px 8px;
+    border-radius: 5px;
+    margin-bottom: 12px;
+  }
+
+  .pillar-card h3 {
+    font-size: 1.15rem;
+    margin-bottom: 8px;
+  }
+
+  .pillar-card p {
+    margin-bottom: 0;
+  }
+
+  @media (max-width: 980px) {
+    .studio-head {
       grid-template-columns: minmax(0, 1fr);
-      gap: 48px;
+      gap: 20px;
+    }
+
+    .studio-tabs {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .notebook-layout,
+    .wrangler-layout,
+    .analyze-layout,
+    .jobs-layout {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .notebook-side,
+    .compute-pane {
+      border-left: none;
+      border-top: 1px solid var(--rule);
+    }
+
+    .wrangler-steps,
+    .catalog-pane {
+      border-right: none;
+      border-bottom: 1px solid var(--rule);
+    }
+
+    .window__search {
+      display: none;
     }
   }
 
-  @media (max-width: 500px) {
-    .cell__out {
-      flex-direction: column;
+  @media (max-width: 680px) {
+    .studio-tabs {
+      grid-template-columns: minmax(0, 1fr);
     }
 
-    .mini-chart {
-      flex: none;
-      width: 100%;
+    .rail {
+      display: none;
+    }
+
+    .cell__out {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .op-row {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 4px;
+    }
+
+    .op-stat {
+      text-align: left;
     }
   }
 </style>

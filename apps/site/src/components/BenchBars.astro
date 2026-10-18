@@ -1,74 +1,299 @@
 ---
 /**
- * Grouped horizontal bars: Iara, DuckDB and Polars per row, scaled to the largest value in the set.
- * Plain HTML and CSS, so the text keeps its size in narrow cards and on phones.
+ * Benchmark chart component, for any number of engines (Iara is always the first).
+ * - One row (`rows.length === 1`): grouped horizontal bars, used by the summary cards.
+ * - Many rows (per-query results): vertical grouped bars per query, with scale modes
+ *   (Detail capped / Full linear / Relative to Iara) and a query inspector.
+ * A missing value (`null`) is a query the engine could not run (error or timeout);
+ * a note on a value that is present marks a result that did not match DuckDB's.
  */
 interface Row {
   label: string;
-  iara: number;
-  duckdb: number;
-  polars: number;
+  values: Record<string, number | null>;
+  notes?: Record<string, string>;
 }
 
 interface Props {
   title: string;
   unit: string;
+  engines: string[];
+  names: Record<string, string>;
   rows: Row[];
   lowerIsBetter?: boolean;
-  /** Hide the legend when several charts sit side by side under one shared legend. */
   legend?: boolean;
+  /** Optional cap for the default 'detail' scale on multi-query charts */
+  capMax?: number;
 }
 
-const { title, unit, rows, lowerIsBetter = true, legend = true } = Astro.props;
+const { title, unit, engines: keys, names, rows, lowerIsBetter = true, legend = true, capMax } = Astro.props;
 
-const max = Math.max(1, ...rows.flatMap((r) => [r.iara, r.duckdb, r.polars]));
-const pct = (v: number) => `${((v / max) * 100).toFixed(2)}%`;
-const fmt = (v: number) => (unit === 'ms' ? v.toLocaleString('en-US') : v.toFixed(v < 10 ? 2 : 1));
+const engines = keys.map((key) => ({ key, name: names[key] ?? key }));
+const isHorizontalGraph = rows.length > 3;
+const REL_MAX = 4;
 
-const engines = [
-  { key: 'iara', name: 'Iara' },
-  { key: 'duckdb', name: 'DuckDB' },
-  { key: 'polars', name: 'Polars' },
-] as const;
+const valid = (r: Row, k: string) => r.values[k] != null && !r.notes?.[k];
+const bestOf = (r: Row) => Math.min(...keys.filter((k) => valid(r, k)).map((k) => r.values[k] as number));
+const allVals = rows.flatMap((r) => keys.map((k) => r.values[k]).filter((v): v is number => v != null));
+const rawMax = Math.max(1, ...allVals);
+// Default detail cap: 1.5x the largest per-query median, so one slow engine does not flatten the rest
+const median = (xs: number[]) => {
+  const v = [...xs].sort((a, b) => a - b);
+  return v.length ? (v[(v.length - 1) >> 1] + v[v.length >> 1]) / 2 : 0;
+};
+const medianMax = Math.max(1, ...rows.map((r) => median(keys.map((k) => r.values[k]).filter((v): v is number => v != null))));
+const niceStep = medianMax * 1.5 >= 2000 ? 500 : 50;
+const detailMax = capMax ?? Math.min(rawMax, Math.ceil((medianMax * 1.5) / niceStep) * niceStep);
+
+const pct = (v: number, m = rawMax) => `${Math.min(100, (v / m) * 100).toFixed(2)}%`;
+const fmt = (v: number) => (unit === 'ms' ? Math.round(v).toLocaleString('en-US') : v.toFixed(v < 10 ? 2 : 1));
+
+const iaraWins = rows.filter((r) => valid(r, 'iara') && r.values.iara === bestOf(r)).length;
+
+// Y-axis ticks for the multi-query chart (5 ticks from 100% down to 0%)
+const detailTicks = [1, 0.75, 0.5, 0.25, 0].map((f) => {
+  const val = detailMax * f;
+  const label = unit === 'ms' && detailMax >= 2000 ? `${(val / 1000).toFixed(val % 1000 === 0 ? 0 : 1)}s` : `${Math.round(val)} ${unit}`;
+  return { f, label };
+});
+const plotMinWidth = Math.max(780, rows.length * (engines.length * 7 + 10));
 ---
 
-<figure class="bb" aria-label={title}>
-  {
-    legend && (
-      <figcaption class="bb__legend">
-        {engines.map((e) => (
-          <span class="bb__key">
-            <span class={`bb__swatch bb__swatch--${e.key}`} />
-            {e.name}
-          </span>
-        ))}
-        <span class="bb__note">{lowerIsBetter ? 'Lower is better' : 'Higher is better'}</span>
-      </figcaption>
-    )
-  }
-  <div class="bb__rows">
-    {
-      rows.map((r) => {
-        const best = Math.min(r.iara, r.duckdb, r.polars);
-        return (
-          <div class="bb__row">
-            <div class="bb__label">{r.label}</div>
-            <div class="bb__bars">
-              {engines.map((e) => (
-                <div class="bb__line">
-                  <span class={`bb__bar bb__bar--${e.key}`} style={`width: ${pct(r[e.key])}`} />
-                  <span class={`bb__value ${e.key === 'iara' ? 'bb__value--iara' : ''} ${r[e.key] === best ? 'bb__value--best' : ''}`}>
-                    {fmt(r[e.key])} {unit}
-                  </span>
-                </div>
-              ))}
+{
+  !isHorizontalGraph ? (
+    <figure class="bb" aria-label={title}>
+      {legend && (
+        <figcaption class="bb__legend">
+          <span class="bb__note">{lowerIsBetter ? 'Lower is better' : 'Higher is better'}</span>
+        </figcaption>
+      )}
+      <div class="bb__rows">
+        {rows.map((r) => {
+          const best = bestOf(r);
+          return (
+            <div class="bb__row">
+              <div class="bb__label">{r.label}</div>
+              <div class="bb__bars">
+                {engines.map((e) => {
+                  const v = r.values[e.key];
+                  return (
+                    <div class="bb__line">
+                      <span class={`bb__name ${e.key === 'iara' ? 'bb__name--iara' : ''}`}>{e.name}</span>
+                      {v == null ? (
+                        <span class="bb__value bb__value--na">{r.notes?.[e.key] ?? 'n/a'}</span>
+                      ) : (
+                        <>
+                          <span class={`bb__bar bb__bar--${e.key}`} style={`width: ${pct(v)}`} />
+                          <span
+                            class={`bb__value ${e.key === 'iara' ? 'bb__value--iara' : ''} ${v === best ? 'bb__value--best' : ''}`}
+                          >
+                            {fmt(v)} {unit}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
+          );
+        })}
+      </div>
+    </figure>
+  ) : (
+    <figure
+      class="hchart card"
+      aria-label={title}
+      data-hchart
+      data-raw-max={rawMax}
+      data-detail-max={detailMax}
+      data-unit={unit}
+      data-names={JSON.stringify(Object.fromEntries(engines.map((e) => [e.key, e.name])))}
+    >
+      <div class="hchart__top">
+        <div class="hchart__legend">
+          {engines.map((e) => (
+            <span class="bb__key">
+              <span class={`bb__swatch bb__swatch--${e.key}`} />
+              <strong>{e.name}</strong>
+            </span>
+          ))}
+          <span class="hchart__win-pill">Iara fastest in {iaraWins} / {rows.length} queries</span>
+        </div>
+
+        <div class="hchart__controls" role="group" aria-label="Chart scale">
+          <button type="button" class="hchart__mode is-active" data-scale-mode="detail">
+            Detail scale
+          </button>
+          <button type="button" class="hchart__mode" data-scale-mode="linear">
+            Full linear
+          </button>
+          <button type="button" class="hchart__mode" data-scale-mode="relative">
+            Relative (Iara = 1×)
+          </button>
+        </div>
+      </div>
+
+      <div class="hchart__inspector" data-hchart-inspector>
+        <span class="hchart__insp-query" data-insp-label>Hover or tap a query to see every engine's time</span>
+        <div class="hchart__insp-stats" data-insp-stats />
+      </div>
+
+      <div class="hchart__scroller">
+        <div class="hchart__plot" style={`min-width: ${plotMinWidth}px`}>
+          <div class="hchart__grid" aria-hidden="true">
+            {detailTicks.map((t, idx) => (
+              <div class="hchart__grid-row" style={`top: ${(1 - t.f) * 100}%`}>
+                <span class="hchart__axis-label" data-axis-tick={idx} data-tick-frac={t.f}>
+                  {t.label}
+                </span>
+                <span class="hchart__grid-line" />
+              </div>
+            ))}
           </div>
+
+          <div class="hchart__columns" role="list" style={`grid-template-columns: repeat(${rows.length}, minmax(0, 1fr))`}>
+            {rows.map((r, idx) => {
+              const best = bestOf(r);
+              const iaraWon = valid(r, 'iara') && r.values.iara === best;
+              const iara = r.values.iara;
+              return (
+                <div
+                  class={`hchart__group ${iaraWon ? 'hchart__group--iara-best' : ''}`}
+                  role="listitem"
+                  tabindex="0"
+                  data-q-label={r.label}
+                  data-q={JSON.stringify({ values: r.values, notes: r.notes ?? {} })}
+                  aria-label={`${r.label}: ${engines.map((e) => `${e.name} ${r.values[e.key] == null ? 'n/a' : `${fmt(r.values[e.key] as number)} ${unit}`}`).join(', ')}`}
+                >
+                  <div class="hchart__bars-wrap" style={`grid-template-columns: repeat(${engines.length}, minmax(0, 1fr))`}>
+                    {engines.map((e) => {
+                      const val = r.values[e.key];
+                      if (val == null) {
+                        return (
+                          <div class="hchart__col">
+                            <span class="hchart__na" title={`${e.name}: ${r.notes?.[e.key] ?? 'n/a'}`}>×</span>
+                          </div>
+                        );
+                      }
+                      const capped = val > detailMax;
+                      const heightPct = Math.min(100, (val / detailMax) * 100).toFixed(2);
+                      const linearPct = Math.min(100, (val / rawMax) * 100).toFixed(2);
+                      const relPct = iara == null ? '0' : Math.min(100, (val / Math.max(1, iara) / REL_MAX) * 100).toFixed(2);
+                      return (
+                        <div class="hchart__col">
+                          <span
+                            class={`hchart__col-bar hchart__col-bar--${e.key} ${val === best && valid(r, e.key) ? 'is-best' : ''} ${capped ? 'is-capped' : ''} ${r.notes?.[e.key] ? 'is-flagged' : ''}`}
+                            style={`height: ${heightPct}%; --bar-delay: ${idx * 18}ms`}
+                            data-bar-engine={e.key}
+                            data-h-detail={heightPct}
+                            data-h-linear={linearPct}
+                            data-h-relative={relPct}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div class="hchart__x-label">
+                    <span>{r.label}</span>
+                    {iaraWon && <span class="hchart__win-dot" title="Iara fastest on this query" />}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      <div class="hchart__foot">
+        <span class="hchart__foot-note">
+          {lowerIsBetter ? 'Lower is better' : 'Higher is better'} · Cobalt dot (<span class="hchart__inline-dot" />) marks queries where Iara is fastest ·
+          × marks a query the engine could not run · faded bars are results that did not match DuckDB's.
+        </span>
+        <span class="hchart__scroll-hint">Swipe horizontally to see all {rows.length} queries →</span>
+      </div>
+    </figure>
+  )
+}
+
+<script is:inline>
+  (() => {
+    const REL_MAX = 4;
+    document.querySelectorAll('[data-hchart]').forEach((chart) => {
+      if (chart.hasAttribute('data-hchart-bound')) return;
+      chart.setAttribute('data-hchart-bound', 'true');
+
+      const rawMax = Number(chart.getAttribute('data-raw-max') || 30000);
+      const detailMax = Number(chart.getAttribute('data-detail-max') || 11000);
+      const unit = chart.getAttribute('data-unit') || 'ms';
+      const names = JSON.parse(chart.getAttribute('data-names') || '{}');
+
+      const modeBtns = Array.from(chart.querySelectorAll('[data-scale-mode]'));
+      const bars = Array.from(chart.querySelectorAll('[data-bar-engine]'));
+      const ticks = Array.from(chart.querySelectorAll('[data-axis-tick]'));
+      const groups = Array.from(chart.querySelectorAll('.hchart__group'));
+      const inspLabel = chart.querySelector('[data-insp-label]');
+      const inspStats = chart.querySelector('[data-insp-stats]');
+
+      const fmtVal = (v) => (unit === 'ms' ? `${Math.round(v).toLocaleString('en-US')} ms` : `${v.toFixed(2)} ${unit}`);
+
+      function setMode(mode) {
+        modeBtns.forEach((b) => b.classList.toggle('is-active', b.getAttribute('data-scale-mode') === mode));
+        bars.forEach((bar) => {
+          bar.style.height = `${bar.getAttribute(`data-h-${mode}`)}%`;
+          bar.classList.toggle('is-capped', mode === 'detail' && bar.getAttribute('data-h-detail') === '100.00');
+        });
+        ticks.forEach((tick) => {
+          const frac = Number(tick.getAttribute('data-tick-frac') || 0);
+          if (mode === 'relative') {
+            tick.textContent = `${(frac * REL_MAX).toFixed(0)}×`;
+          } else {
+            const maxVal = mode === 'linear' ? rawMax : detailMax;
+            const val = maxVal * frac;
+            tick.textContent =
+              unit === 'ms' && maxVal >= 2000
+                ? `${(val / 1000).toFixed(val % 1000 === 0 ? 0 : 1)}s`
+                : `${Math.round(val)} ${unit}`;
+          }
+        });
+      }
+
+      modeBtns.forEach((btn) => {
+        btn.addEventListener('click', () => setMode(btn.getAttribute('data-scale-mode')));
+      });
+
+      function inspectGroup(group) {
+        groups.forEach((g) => g.classList.toggle('is-focused', g === group));
+        const { values, notes } = JSON.parse(group.getAttribute('data-q'));
+        const ok = Object.keys(names).filter((k) => values[k] != null && !notes[k]);
+        const best = ok.reduce((b, k) => (b == null || values[k] < values[b] ? k : b), null);
+        const iara = values.iara;
+        inspLabel.innerHTML = `<strong>${group.getAttribute('data-q-label')}</strong>${best ? ` · ${names[best]} is fastest` : ''}`;
+        inspStats.replaceChildren(
+          ...Object.keys(names).map((k) => {
+            const item = document.createElement('span');
+            item.className = `hchart__insp-item${k === 'iara' ? ' hchart__insp-item--iara' : ''}`;
+            const v = values[k];
+            let text = `${names[k]}: `;
+            if (v == null) text += notes[k] && notes[k].startsWith('timeout') ? 'timeout' : 'n/a';
+            else {
+              text += fmtVal(v);
+              if (k !== 'iara' && iara != null) text += ` (${(v / Math.max(1, iara)).toFixed(2)}×)`;
+              if (notes[k]) text += ' · wrong result';
+            }
+            item.textContent = text;
+            return item;
+          }),
         );
-      })
-    }
-  </div>
-</figure>
+      }
+
+      groups.forEach((g) => {
+        g.addEventListener('mouseenter', () => inspectGroup(g));
+        g.addEventListener('focus', () => inspectGroup(g));
+        g.addEventListener('click', () => inspectGroup(g));
+      });
+    });
+  })();
+</script>
 
 <style>
   .bb {
@@ -135,22 +360,76 @@ const engines = [
     height: 12px;
     border-radius: 0 4px 4px 0;
     flex: 0 0 auto;
-    max-width: calc(100% - 92px);
+    max-width: calc(100% - 172px);
   }
 
   .bb__bar--iara,
-  .bb__swatch--iara {
+  .bb__swatch--iara,
+  .hchart__col-bar--iara {
     background: var(--engine-iara);
   }
 
   .bb__bar--duckdb,
-  .bb__swatch--duckdb {
+  .bb__swatch--duckdb,
+  .hchart__col-bar--duckdb {
     background: var(--engine-duckdb);
   }
 
   .bb__bar--polars,
-  .bb__swatch--polars {
+  .bb__swatch--polars,
+  .hchart__col-bar--polars {
     background: var(--engine-polars);
+  }
+
+  .bb__bar--datafusion,
+  .bb__swatch--datafusion,
+  .hchart__col-bar--datafusion {
+    background: var(--engine-datafusion);
+  }
+
+  .bb__bar--chdb,
+  .bb__swatch--chdb,
+  .hchart__col-bar--chdb {
+    background: var(--engine-chdb);
+  }
+
+  .bb__bar--spark,
+  .bb__swatch--spark,
+  .hchart__col-bar--spark {
+    background: var(--engine-spark);
+  }
+
+  .bb__bar--daft,
+  .bb__swatch--daft,
+  .hchart__col-bar--daft {
+    background: var(--engine-daft);
+  }
+
+  .bb__name {
+    flex: 0 0 76px;
+    font-size: 0.74rem;
+    color: var(--ink-2);
+  }
+
+  .bb__name--iara {
+    color: var(--cobalt);
+    font-weight: 600;
+  }
+
+  .bb__value--na {
+    color: var(--ink-3);
+  }
+
+  .hchart__na {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    line-height: 1;
+    color: var(--ink-3);
+    padding-bottom: 2px;
+  }
+
+  .hchart__col-bar.is-flagged {
+    opacity: 0.35;
   }
 
   .bb__value {
@@ -176,5 +455,277 @@ const engines = [
 
   .bb__rows:has(> .bb__row:only-child) .bb__bar {
     height: 18px;
+  }
+
+  /* ---------- Horizontal Multi-Query Column Graph ---------- */
+
+  .hchart {
+    margin: 0;
+    padding: 24px 24px 20px;
+    width: 100%;
+    max-width: 100%;
+    overflow: hidden;
+  }
+
+  .hchart__top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px 20px;
+    margin-bottom: 16px;
+  }
+
+  .hchart__legend {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 18px;
+    font-size: 0.86rem;
+    color: var(--ink-2);
+  }
+
+  .hchart__win-pill {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--cobalt);
+    background: var(--mist-2);
+    border: 1px solid var(--mist);
+    padding: 2px 10px;
+    border-radius: 999px;
+  }
+
+  .hchart__controls {
+    display: inline-flex;
+    background: var(--parchment);
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    padding: 3px;
+    gap: 2px;
+  }
+
+  .hchart__mode {
+    appearance: none;
+    border: none;
+    background: transparent;
+    font-family: var(--font-mono);
+    font-size: 0.74rem;
+    color: var(--ink-2);
+    padding: 5px 12px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+
+  .hchart__mode:hover {
+    color: var(--ink);
+  }
+
+  .hchart__mode.is-active {
+    background: var(--cobalt);
+    color: #fff;
+    font-weight: 600;
+  }
+
+  .hchart__inspector {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    padding: 10px 14px;
+    background: var(--parchment);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    margin-bottom: 20px;
+    font-size: 0.84rem;
+  }
+
+  .hchart__insp-query {
+    color: var(--ink);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+  }
+
+  .hchart__insp-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 18px;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--ink-2);
+  }
+
+  .hchart__insp-item--iara {
+    color: var(--cobalt);
+  }
+
+  .hchart__scroller {
+    width: 100%;
+    overflow-x: auto;
+    padding-bottom: 6px;
+  }
+
+  .hchart__plot {
+    position: relative;
+    min-width: 780px;
+    padding-left: 48px;
+    padding-top: 22px;
+  }
+
+  .hchart__grid {
+    position: absolute;
+    top: 22px;
+    left: 0;
+    right: 0;
+    bottom: 34px;
+    pointer-events: none;
+  }
+
+  .hchart__grid-row {
+    position: absolute;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: center;
+    transform: translateY(-50%);
+  }
+
+  .hchart__axis-label {
+    width: 42px;
+    padding-right: 8px;
+    text-align: right;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--ink-3);
+    flex-shrink: 0;
+  }
+
+  .hchart__grid-line {
+    flex: 1;
+    height: 1px;
+    background: var(--rule);
+    opacity: 0.75;
+  }
+
+  .hchart__columns {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    gap: 6px;
+    align-items: end;
+  }
+
+  .hchart__group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 4px 2px 0;
+    border-radius: 6px;
+    cursor: pointer;
+    outline: none;
+    transition: background 0.15s ease;
+  }
+
+  .hchart__group:hover,
+  .hchart__group:focus-visible,
+  .hchart__group.is-focused {
+    background: rgba(30, 91, 184, 0.08);
+  }
+
+  .hchart__bars-wrap {
+    height: 230px;
+    width: 100%;
+    display: grid;
+    gap: 1px;
+    align-items: end;
+    border-bottom: 1.5px solid var(--rule-strong);
+    padding: 0 2px;
+  }
+
+  .hchart__col {
+    position: relative;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: center;
+  }
+
+  .hchart__col-bar {
+    display: block;
+    width: 100%;
+    min-height: 3px;
+    border-radius: 3px 3px 0 0;
+    transition: height 0.35s cubic-bezier(0.22, 1, 0.36, 1), filter 0.15s ease;
+  }
+
+  .hchart__group:hover .hchart__col-bar {
+    filter: brightness(1.06);
+  }
+
+  .hchart__col-bar.is-capped {
+    border-top: 2px dashed var(--vellum);
+  }
+
+
+  .hchart__x-label {
+    height: 32px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--ink-2);
+  }
+
+  .hchart__group--iara-best .hchart__x-label {
+    color: var(--ink);
+    font-weight: 600;
+  }
+
+  .hchart__win-dot,
+  .hchart__inline-dot {
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--cobalt);
+  }
+
+  .hchart__inline-dot {
+    vertical-align: middle;
+    margin: 0 2px;
+  }
+
+  .hchart__foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+    font-size: 0.78rem;
+    color: var(--ink-3);
+  }
+
+  .hchart__scroll-hint {
+    display: none;
+    font-family: var(--font-mono);
+    font-size: 0.74rem;
+    color: var(--cobalt);
+  }
+
+  @media (max-width: 860px) {
+    .hchart {
+      padding: 18px 16px;
+    }
+
+    .hchart__scroll-hint {
+      display: inline;
+    }
   }
 </style>

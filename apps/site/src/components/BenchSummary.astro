@@ -1,36 +1,55 @@
 ---
 import BenchBars from './BenchBars.astro';
+import { suites, names, summary } from '../data/bench';
 
-const cards = [
-  { title: 'TPC-H SF10', label: 'sum of 22 queries', iara: 5.88, duckdb: 7.69, polars: 8.11, unit: 's' },
-  { title: 'TPC-H SF100', label: 'sum of 22 queries', iara: 60.6, duckdb: 82.1, polars: 90.0, unit: 's' },
-  { title: 'ClickBench', label: 'sum of 32 queries', iara: 17.6, duckdb: 18.0, polars: 20.3, unit: 's' },
-];
+const cards = (
+  [
+    ['tpch_sf10', 'TPC-H SF10'],
+    ['tpch_sf100', 'TPC-H SF100'],
+    ['clickbench', 'ClickBench'],
+  ] as const
+)
+  .filter(([key]) => suites[key])
+  .map(([key, title]) => {
+    const sum = summary(suites[key]);
+    const ranked = [...sum.engines].sort((a, b) => a.sumS - b.sumS);
+    const iara = sum.engines.find((e) => e.key === 'iara')!;
+    const rank = ranked.indexOf(iara);
+    const next = ranked[rank === 0 ? 1 : 0];
+    const badge = rank === 0 ? `${(next.sumS / iara.sumS).toFixed(2)}× vs ${next.name}` : `#${rank + 1} of ${ranked.length}`;
+    return {
+      title,
+      badge,
+      label: `sum of ${sum.shared} queries all engines ran`,
+      engines: sum.engines.map((e) => e.key),
+      values: Object.fromEntries(sum.engines.map((e) => [e.key, e.sumS])),
+    };
+  });
+const others = (suites.tpch_sf10?.engines ?? []).filter((e) => e !== 'iara').map((e) => names[e]);
 ---
 
 <section class="section section--alt" id="benchmarks">
   <div class="container">
-    <div class="section-head">
+    <div class="section-head" data-reveal>
       <span class="eyebrow">Benchmarks</span>
-      <h2>Measured against DuckDB and Polars.</h2>
-      <p class="lede">TPC-H (all 22 queries) and ClickBench on the same Parquet files, on an AWS m7i.4xlarge with 16 vCPUs and 64 GB of RAM. Lower is better.</p>
+      <h2>Measured against {others.length} other engines.</h2>
+      <p class="lede">TPC-H and ClickBench on the same Parquet files in Iara, {others.slice(0, -1).join(', ')} and {others[others.length - 1]}, on an AWS m7i.4xlarge with 16 vCPUs and 64 GB of RAM. Lower is better.</p>
     </div>
 
-    <div class="grid grid--3">
+    <div class="grid grid--3" data-reveal-stagger>
       {cards.map((c) => (
         <div class="card bench-card">
-          <h3>{c.title}</h3>
-          <BenchBars
-            title={c.title}
-            unit={c.unit}
-            rows={[{ label: c.label, iara: c.iara, duckdb: c.duckdb, polars: c.polars }]}
-          />
+          <div class="bench-card__head">
+            <h3>{c.title}</h3>
+            <span class="bench-card__badge">{c.badge}</span>
+          </div>
+          <BenchBars title={c.title} unit="s" engines={c.engines} names={names} rows={[{ label: c.label, values: c.values }]} />
         </div>
       ))}
     </div>
 
-    <div class="bench-more">
-      <a class="button button--ghost" href="/benchmarks/">Per-query results</a>
+    <div class="bench-more" data-reveal>
+      <a class="button button--ghost" href="/benchmarks/">Explore the per-query results →</a>
     </div>
   </div>
 </section>
@@ -40,11 +59,33 @@ const cards = [
     min-width: 0;
   }
 
+  .bench-card__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
   .bench-card h3 {
     font-size: 1.1rem;
+    margin: 0;
+  }
+
+  .bench-card__badge {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--cobalt);
+    background: var(--mist-2);
+    border: 1px solid var(--mist);
+    padding: 2px 9px;
+    border-radius: 999px;
+    white-space: nowrap;
   }
 
   .bench-more {
     margin-top: 40px;
   }
 </style>
+
