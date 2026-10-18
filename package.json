@@ -4,7 +4,9 @@
   "description": "Iara Studio: a workspace for the Iara engine (notebooks, catalog, SQL, Git)",
   "packageManager": "pnpm@11.13.0",
   "scripts": {
-    "dev": "pnpm --filter @iara/web dev",
+    "dev:studio": "pnpm --filter @iara/web dev",
+    "dev:site": "pnpm --filter @iara/site dev",
+    "dev:docs": "pnpm --filter @iara/docs dev",
     "build": "pnpm -r build",
     "build:engine": "uv run --no-sync python scripts/build_engine.py",
     "build:images": "docker compose build",
