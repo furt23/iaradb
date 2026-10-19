@@ -14,6 +14,7 @@ interface Props {
 
 const { title, description } = Astro.props;
 const year = new Date().getFullYear();
+const pathname = Astro.url.pathname;
 ---
 
 <!doctype html>
@@ -34,8 +35,8 @@ const year = new Date().getFullYear();
         </a>
         <nav class="nav__links" aria-label="Main">
           <a href="/#engine">Engine</a>
-          <a href="/benchmarks/">Benchmarks</a>
-          <a href="/#studio">Studio</a>
+          <a href="/benchmarks/" class={pathname.startsWith('/benchmarks') ? 'is-active' : ''}>Benchmarks</a>
+          <a href="/studio/" class={pathname.startsWith('/studio') ? 'is-active' : ''}>Studio</a>
           <a href={GITHUB_URL}>GitHub</a>
           <a class="button button--primary nav__cta" href={DOCS_URL}>Docs</a>
         </nav>
@@ -56,6 +57,7 @@ const year = new Date().getFullYear();
         <nav class="footer__links" aria-label="Footer">
           <a href={DOCS_URL}>Documentation</a>
           <a href="/benchmarks/">Benchmarks</a>
+          <a href="/studio/">Studio</a>
           <a href={GITHUB_URL}>GitHub</a>
         </nav>
         <p class="footer__note">Apache-2.0 · {year}</p>
@@ -158,11 +160,14 @@ const year = new Date().getFullYear();
     transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
   }
 
-  .nav__links a:not(.button):hover {
+  .nav__links a:not(.button):hover,
+  .nav__links a:not(.button).is-active {
     color: var(--ink);
+    font-weight: 600;
   }
 
-  .nav__links a:not(.button):hover::after {
+  .nav__links a:not(.button):hover::after,
+  .nav__links a:not(.button).is-active::after {
     transform: scaleX(1);
   }
 
@@ -204,7 +209,7 @@ const year = new Date().getFullYear();
       gap: 16px;
     }
 
-    .nav__links a:not(.button):not([href='/benchmarks/']) {
+    .nav__links a:not(.button):not([href='/benchmarks/']):not([href='/studio/']) {
       display: none;
     }
   }

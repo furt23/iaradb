@@ -1,0 +1,47 @@
+---
+import Base from '../layouts/Base.astro';
+import Studio from '../components/Studio.astro';
+import LogoMark from '../components/LogoMark.astro';
+import { DOCS_URL, GITHUB_URL } from '../config';
+---
+
+<Base
+  title="Studio · Iara"
+  description="Iara Studio is a browser-based analytics workspace over local files and S3 buckets. Reactive marimo notebooks, visual Data Wrangler, catalog inspector, live profiles, and compute clusters."
+>
+  <Studio />
+
+  <section class="section section--alt closing">
+    <div class="container closing__inner" data-reveal>
+      <LogoMark size={56} />
+      <h2>Start your workspace in seconds.</h2>
+      <p class="lede">Run Iara Studio locally with <code>iara serve</code> or connect to cloud storage.</p>
+      <div class="closing__actions">
+        <a class="button button--primary" href={`${DOCS_URL}/quickstart/`}>Get started</a>
+        <a class="button button--ghost" href={GITHUB_URL}>Source on GitHub</a>
+      </div>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .closing__inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+
+  .closing__inner :global(svg) {
+    margin-bottom: 20px;
+  }
+
+  .closing__actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 12px;
+    margin-top: 8px;
+  }
+</style>
+

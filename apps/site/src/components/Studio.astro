@@ -43,31 +43,37 @@ const priorityCols = priorities.map((p) => ({
 
 const studioPillars = [
   {
+    jump: 'workspace',
     eyebrow: 'notebooks/*.py',
     title: 'Git-native marimo notebooks',
     text: 'Every cell is a pure Python function stored in a plain .py file. Run dependent cells automatically or mark them stale until triggered, with Jedi autocomplete and live SQL diagnostics.',
   },
   {
+    jump: 'sql',
     eyebrow: 'Python ⇄ SQL',
     title: 'One shared namespace',
     text: 'Query any Python LazyFrame by variable name inside a SQL cell, and read any SQL cell result as a DataFrame in downstream Python cells. Named widgets bind directly to :param placeholders.',
   },
   {
+    jump: 'wrangler',
     eyebrow: '/wrangle/<table>',
     title: 'Visual Data Wrangler',
     text: 'Filter, impute nulls, deduplicate, trim, regex replace, split, cast and one-hot encode. Steps compile into one kernel query with full-column histograms and export to Python or SQL.',
   },
   {
+    jump: 'data',
     eyebrow: '.iara/catalog.toml',
     title: 'Multi-catalog & Delta history',
     text: 'Mount local directories and s3:// buckets side by side, auto-discover schema folders, inspect Parquet statistics, and query or restore prior Delta Lake table commits.',
   },
   {
+    jump: 'analyze',
     eyebrow: '/analyze',
     title: 'Live profiles & spooled results',
     text: 'Page through results larger than RAM (spooled to disk above 128 MB), build kernel-aggregated charts, and open operator DAGs with row counts, timings and spilled bytes.',
   },
   {
+    jump: 'jobs',
     eyebrow: 'jobs/*.toml · EC2',
     title: 'Cron DAGs & AWS Spot clusters',
     text: 'Define multi-task DAGs with retries, parameter overrides and webhook alerts. Attach notebooks or jobs to on-demand or Spot EC2 clusters with custom pip libraries and time limits.',
@@ -75,14 +81,14 @@ const studioPillars = [
 ];
 
 const railSections = [
-  { name: 'Workspace', key: 'notebook' },
-  { name: 'Data', key: 'analyze' },
-  { name: 'Wrangler', key: 'wrangler' },
-  { name: 'SQL', key: 'notebook' },
-  { name: 'Analyze', key: 'analyze' },
-  { name: 'Jobs', key: 'jobs' },
-  { name: 'Compute', key: 'jobs' },
-  { name: 'Git', key: 'notebook' },
+  { name: 'Workspace', key: 'workspace', tab: 'notebook' },
+  { name: 'Data', key: 'data', tab: 'analyze' },
+  { name: 'Wrangler', key: 'wrangler', tab: 'wrangler' },
+  { name: 'SQL', key: 'sql', tab: 'notebook' },
+  { name: 'Analyze', key: 'analyze', tab: 'analyze' },
+  { name: 'Jobs', key: 'jobs', tab: 'jobs' },
+  { name: 'Compute', key: 'compute', tab: 'jobs' },
+  { name: 'Git', key: 'git', tab: 'notebook' },
 ];
 ---
 
@@ -91,7 +97,7 @@ const railSections = [
     <div class="studio-head" data-reveal>
       <div>
         <span class="eyebrow">Iara Studio</span>
-        <h2>A full analytics workspace, right on your files.</h2>
+        <h1>A full analytics workspace, right on your files.</h1>
         <p class="lede">
           Iara Studio runs in the browser over a local folder or a shared S3 bucket. Notebooks stay plain <code>.py</code> files,
           queries stay <code>.sql</code> files, and jobs stay <code>.toml</code> files — so everything diffs and reviews in Git while
@@ -131,6 +137,71 @@ const railSections = [
       </div>
 
       <div class="window">
+        <!-- Interactive Toast Notification -->
+        <div class="studio-toast" data-studio-toast hidden style="display: none;" role="status" aria-live="polite">
+          <span class="studio-toast__text" data-studio-toast-text></span>
+          <button type="button" class="studio-toast__close" data-studio-toast-close aria-label="Dismiss">✕</button>
+        </div>
+
+        <!-- Search & Command Palette Modal -->
+        <div class="search-modal" data-search-modal hidden style="display: none;">
+          <div class="search-modal__backdrop" data-search-close></div>
+          <div class="search-modal__dialog" role="dialog" aria-modal="true" aria-label="Quick Search">
+            <div class="search-modal__header">
+              <input
+                type="text"
+                class="search-modal__input"
+                placeholder="Jump to a notebook, table, query, or cluster..."
+                data-search-input
+                aria-label="Filter navigation targets"
+              />
+              <button type="button" class="search-modal__close" data-search-close aria-label="Close search">✕</button>
+            </div>
+            <div class="search-modal__list">
+              <button type="button" class="search-modal__item" data-search-target="workspace">
+                <span class="search-modal__badge">Workspace</span>
+                <strong>notebooks/revenue.py</strong>
+                <span class="muted small">marimo reactive graph</span>
+              </button>
+              <button type="button" class="search-modal__item" data-search-target="data">
+                <span class="search-modal__badge">Data</span>
+                <strong>main.orders</strong>
+                <span class="muted small">Delta Lake table v18</span>
+              </button>
+              <button type="button" class="search-modal__item" data-search-target="wrangler">
+                <span class="search-modal__badge">Wrangler</span>
+                <strong>main.customer</strong>
+                <span class="muted small">clean &amp; filter recipe</span>
+              </button>
+              <button type="button" class="search-modal__item" data-search-target="sql">
+                <span class="search-modal__badge">SQL</span>
+                <strong>queries/regional_kpi.sql</strong>
+                <span class="muted small">analytical query with parameters</span>
+              </button>
+              <button type="button" class="search-modal__item" data-search-target="analyze">
+                <span class="search-modal__badge">Analyze</span>
+                <strong>Query Analyze /analyze/9f3a8c12</strong>
+                <span class="muted small">operator DAG timeline</span>
+              </button>
+              <button type="button" class="search-modal__item" data-search-target="jobs">
+                <span class="search-modal__badge">Jobs</span>
+                <strong>jobs/nightly_sales.toml</strong>
+                <span class="muted small">cron scheduled DAG</span>
+              </button>
+              <button type="button" class="search-modal__item" data-search-target="compute">
+                <span class="search-modal__badge">Compute</span>
+                <strong>analytics-xl</strong>
+                <span class="muted small">m7i.4xlarge EC2 Spot</span>
+              </button>
+              <button type="button" class="search-modal__item" data-search-target="git">
+                <span class="search-modal__badge">Git</span>
+                <strong>Git Status &amp; Diff</strong>
+                <span class="muted small">branch main (2 modified)</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
         <!-- 48px Studio App Bar -->
         <div class="window__bar">
           <div class="window__brand">
@@ -138,28 +209,35 @@ const railSections = [
             <span class="window__name">Iara</span>
             <span class="window__path">/ tpch-demo</span>
           </div>
-          <div class="window__search" aria-hidden="true">
+          <button type="button" class="window__search" data-search-trigger aria-label="Search notebooks, queries and tables">
             <span>Search notebooks, queries and tables</span>
             <kbd>Ctrl K</kbd>
-          </div>
-          <div class="window__meta" aria-hidden="true">
-            <span class="cluster-pill">
+          </button>
+          <div class="window__meta">
+            <button type="button" class="cluster-pill" data-cluster-pill title="Inspect EC2 compute cluster">
               <span class="cluster-pill__dot"></span>
               m7i.4xlarge · 16 vCPUs
-            </span>
+            </button>
           </div>
         </div>
 
         <div class="window__body">
           <!-- Left Navigation Rail -->
-          <div class="rail" aria-hidden="true">
+          <nav class="rail" aria-label="Studio tools">
             {railSections.map((item, i) => (
-              <div class={`rail__item ${i === 0 ? 'rail__item--active' : ''}`} data-rail-target={item.key} title={item.name}>
+              <button
+                type="button"
+                class={`rail__item ${i === 0 ? 'rail__item--active' : ''}`}
+                data-rail-target={item.key}
+                data-tab-parent={item.tab}
+                title={item.name}
+                aria-pressed={i === 0 ? 'true' : 'false'}
+              >
                 <span class="rail__dot"></span>
                 <span class="rail__label">{item.name}</span>
-              </div>
+              </button>
             ))}
-          </div>
+          </nav>
 
           <!-- Panel 1: Reactive Notebooks -->
           <div
@@ -172,92 +250,209 @@ const railSections = [
             <div class="notebook-layout">
               <div class="notebook-main">
                 <!-- Tab strip & Widget bar -->
-                <div class="workbench-strip">
-                  <span class="tab-chip tab-chip--active">notebooks/revenue.py</span>
-                  <span class="tab-chip">queries/regional_kpi.sql</span>
-                  <span class="workbench-strip__right">Kernel · idle · 4 panes max</span>
+                <div class="workbench-strip" role="tablist" aria-label="Open files">
+                  <button type="button" class="tab-chip tab-chip--active" data-file-tab="revenue" role="tab" aria-selected="true">notebooks/revenue.py</button>
+                  <button type="button" class="tab-chip" data-file-tab="sql" role="tab" aria-selected="false">queries/regional_kpi.sql</button>
+                  <button type="button" class="tab-chip" data-file-tab="git" role="tab" aria-selected="false">Git Status</button>
+                  <span class="workbench-strip__right">Kernel · idle · 16 cores</span>
                 </div>
 
-                <div class="widget-bar">
-                  <span class="widget-bar__tag">Widgets</span>
-                  <div class="widget-pill">
-                    <span class="widget-pill__label">region</span>
-                    <span class="widget-pill__val">AMERICA ▾</span>
+                <!-- View 1: notebooks/revenue.py -->
+                <div class="file-view" data-file-view="revenue">
+                  <div class="widget-bar">
+                    <span class="widget-bar__tag">Widgets</span>
+                    <div class="widget-pill">
+                      <span class="widget-pill__label">region</span>
+                      <span class="widget-pill__val">AMERICA ▾</span>
+                    </div>
+                    <div class="widget-pill">
+                      <span class="widget-pill__label">segment</span>
+                      <span class="widget-pill__val">BUILDING ▾</span>
+                    </div>
+                    <div class="widget-pill">
+                      <span class="widget-pill__label">min_acctbal</span>
+                      <span class="widget-pill__val">1,000</span>
+                    </div>
                   </div>
-                  <div class="widget-pill">
-                    <span class="widget-pill__label">segment</span>
-                    <span class="widget-pill__val">BUILDING ▾</span>
-                  </div>
-                  <div class="widget-pill">
-                    <span class="widget-pill__label">min_acctbal</span>
-                    <span class="widget-pill__val">1,000</span>
-                  </div>
-                </div>
 
-                <!-- Cell 1: Python LazyFrame -->
-                <div class="cell">
-                  <div class="cell__head">
-                    <span class="cell__lang">Python · cell_1</span>
-                    <span class="cell__status">defined orders · 2 ms</span>
-                  </div>
-                  <pre class="code-line"><span class="kw">from</span> iara <span class="kw">import</span> functions <span class="kw">as</span> F
+                  <!-- Cell 1: Python LazyFrame -->
+                  <div class="cell">
+                    <div class="cell__head">
+                      <span class="cell__lang">Python · cell_1</span>
+                      <span class="cell__status">defined orders · 2 ms</span>
+                    </div>
+                    <pre class="code-line"><span class="kw">from</span> iara <span class="kw">import</span> functions <span class="kw">as</span> F
 orders = ws.table(<span class="str">"orders"</span>).filter(F.col(<span class="str">"o_orderdate"</span>) &gt;= <span class="str">"1995-01-01"</span>)</pre>
-                  <div class="frame-line">
-                    <span class="frame-line__name">orders</span>
-                    <span class="frame-line__kind">LazyFrame · 9 columns</span>
-                    <span class="frame-line__cols">[o_orderkey: integer, o_custkey: integer, o_orderpriority: text, o_totalprice: decimal(15,2), …]</span>
+                    <div class="frame-line">
+                      <span class="frame-line__name">orders</span>
+                      <span class="frame-line__kind">LazyFrame · 9 columns</span>
+                      <span class="frame-line__cols">[o_orderkey: integer, o_custkey: integer, o_orderpriority: text, o_totalprice: decimal(15,2), …]</span>
+                    </div>
                   </div>
-                </div>
 
-                <!-- Cell 2: SQL Cell sharing Python variable & widget parameter -->
-                <div class="cell cell--active">
-                  <div class="cell__head">
-                    <span class="cell__lang cell__lang--sql">SQL · cell_2 → by_priority</span>
-                    <span class="cell__status cell__status--ok">5 rows · 38 ms · 0 B spilled</span>
-                  </div>
-                  <pre class="code-line"><span class="kw">select</span> o_orderpriority, <span class="fn">count</span>(*) <span class="kw">as</span> orders, <span class="fn">sum</span>(o_totalprice) <span class="kw">as</span> revenue
+                  <!-- Cell 2: SQL Cell sharing Python variable & widget parameter -->
+                  <div class="cell cell--active">
+                    <div class="cell__head">
+                      <span class="cell__lang cell__lang--sql">SQL · cell_2 → by_priority</span>
+                      <span class="cell__status cell__status--ok">5 rows · 38 ms · 0 B spilled</span>
+                    </div>
+                    <pre class="code-line"><span class="kw">select</span> o_orderpriority, <span class="fn">count</span>(*) <span class="kw">as</span> orders, <span class="fn">sum</span>(o_totalprice) <span class="kw">as</span> revenue
 <span class="kw">from</span> orders <span class="kw">where</span> o_mktsegment = <span class="num">:segment</span>
 <span class="kw">group by</span> 1 <span class="kw">order by</span> 1</pre>
 
-                  <div class="out-tabs">
-                    <span class="out-tab out-tab--active">Table · 5 rows</span>
-                    <span class="out-tab">Chart · Horizontal</span>
-                    <span class="out-tab">Profile · 38 ms</span>
-                    <span class="out-tab">Wrangle</span>
-                  </div>
+                    <div class="out-tabs" role="tablist" aria-label="Output views">
+                      <button type="button" class="out-tab out-tab--active" data-out-tab="table" role="tab" aria-selected="true">Table · 5 rows</button>
+                      <button type="button" class="out-tab" data-out-tab="chart" role="tab" aria-selected="false">Chart · Horizontal</button>
+                      <button type="button" class="out-tab" data-out-tab="profile" role="tab" aria-selected="false">Profile · 38 ms</button>
+                      <button type="button" class="out-tab out-tab--action" data-out-tab="wrangle" title="Open in Data Wrangler">Wrangle →</button>
+                    </div>
 
-                  <div class="cell__out">
-                    <table class="table">
-                      <thead>
-                        <tr>
-                          <th scope="col">o_orderpriority <span class="th-type">text</span></th>
-                          <th scope="col" class="num">orders <span class="th-type">integer</span></th>
-                          <th scope="col" class="num">revenue <span class="th-type">decimal</span></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {priorities.map((p) => (
-                          <tr>
-                            <td>{p.name}</td>
-                            <td class="num">{p.count}</td>
-                            <td class="num">{p.rev}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                    <div class="cell__out">
+                      <!-- Table View -->
+                      <div class="out-view" data-out-view="table">
+                        <table class="table">
+                          <thead>
+                            <tr>
+                              <th scope="col">o_orderpriority <span class="th-type">text</span></th>
+                              <th scope="col" class="num">orders <span class="th-type">integer</span></th>
+                              <th scope="col" class="num">revenue <span class="th-type">decimal</span></th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {priorities.map((p) => (
+                              <tr>
+                                <td>{p.name}</td>
+                                <td class="num">{p.count}</td>
+                                <td class="num">{p.rev}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
 
-                    <!-- Horizontal Column Chart inside Studio output -->
-                    <div class="studio-hchart" aria-label="Order counts by priority">
-                      <div class="studio-hchart__title">Orders by priority (kernel-aggregated)</div>
-                      <div class="studio-hchart__cols">
-                        {priorityCols.map((c) => (
-                          <div class="studio-hchart__col">
-                            <div class="studio-hchart__track">
-                              <span class="studio-hchart__bar hchart__col-bar" style={`height: ${c.pct}%`}></span>
-                            </div>
-                            <span class="studio-hchart__label">{c.short}</span>
+                      <!-- Chart View -->
+                      <div class="out-view" data-out-view="chart" hidden>
+                        <div class="studio-hchart" aria-label="Order counts by priority">
+                          <div class="studio-hchart__title">Orders by priority (kernel-aggregated)</div>
+                          <div class="studio-hchart__cols">
+                            {priorityCols.map((c) => (
+                              <div class="studio-hchart__col">
+                                <div class="studio-hchart__track">
+                                  <span class="studio-hchart__bar hchart__col-bar" style={`height: ${c.pct}%`}></span>
+                                </div>
+                                <span class="studio-hchart__label">{c.short}</span>
+                              </div>
+                            ))}
                           </div>
-                        ))}
+                        </div>
+                      </div>
+
+                      <!-- Profile View -->
+                      <div class="out-view" data-out-view="profile" hidden>
+                        <div class="cell-profile-card">
+                          <div class="side-block__title">Operator breakdown</div>
+                          <div class="prof-row"><span>ParquetScan (orders.parquet)</span><span class="num">14 ms · 1.5M rows</span></div>
+                          <div class="prof-row"><span>Filter (o_mktsegment = :segment)</span><span class="num">4 ms · 300,091 rows</span></div>
+                          <div class="prof-row"><span>HashAggregate (group by 1)</span><span class="num">20 ms · 5 rows</span></div>
+                          <div class="prof-row prof-row--muted"><span>Memory pool</span><span class="num">94 MB peak · 0 B spilled</span></div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- View 2: queries/regional_kpi.sql -->
+                <div class="file-view" data-file-view="sql" hidden>
+                  <div class="cell cell--active">
+                    <div class="cell__head">
+                      <span class="cell__lang cell__lang--sql">SQL File · queries/regional_kpi.sql</span>
+                      <span class="cell__status cell__status--ok">5 rows · 34 ms · read_parquet pushdown</span>
+                    </div>
+                    <pre class="code-line"><span class="kw">select</span>
+    o_orderpriority,
+    <span class="fn">count</span>(*) <span class="kw">as</span> orders,
+    <span class="fn">sum</span>(o_totalprice) <span class="kw">as</span> revenue
+<span class="kw">from</span> <span class="fn">read_parquet</span>(<span class="str">'s3://warehouse/tpch/orders'</span>)
+<span class="kw">where</span> o_orderdate &gt;= <span class="str">'1995-01-01'</span>
+  <span class="kw">and</span> o_mktsegment = <span class="num">:segment</span>
+<span class="kw">group by</span> <span class="num">1</span>
+<span class="kw">order by</span> <span class="num">1</span></pre>
+
+                    <div class="out-tabs" role="tablist">
+                      <button type="button" class="out-tab out-tab--active" data-sql-tab="table">Table · 5 rows</button>
+                      <button type="button" class="out-tab" data-sql-tab="chart">Chart · Horizontal</button>
+                    </div>
+
+                    <div class="cell__out">
+                      <div class="sql-out-view" data-sql-view="table">
+                        <table class="table">
+                          <thead>
+                            <tr>
+                              <th scope="col">o_orderpriority <span class="th-type">text</span></th>
+                              <th scope="col" class="num">orders <span class="th-type">integer</span></th>
+                              <th scope="col" class="num">revenue <span class="th-type">decimal</span></th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {priorities.map((p) => (
+                              <tr>
+                                <td>{p.name}</td>
+                                <td class="num">{p.count}</td>
+                                <td class="num">{p.rev}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <div class="sql-out-view" data-sql-view="chart" hidden>
+                        <div class="studio-hchart" aria-label="Order counts by priority">
+                          <div class="studio-hchart__title">Orders by priority (kernel-aggregated)</div>
+                          <div class="studio-hchart__cols">
+                            {priorityCols.map((c) => (
+                              <div class="studio-hchart__col">
+                                <div class="studio-hchart__track">
+                                  <span class="studio-hchart__bar hchart__col-bar" style={`height: ${c.pct}%`}></span>
+                                </div>
+                                <span class="studio-hchart__label">{c.short}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- View 3: Git Status -->
+                <div class="file-view" data-file-view="git" hidden>
+                  <div class="cell cell--active">
+                    <div class="cell__head">
+                      <span class="cell__lang">Git · Branch main · Clean origin/main sync</span>
+                      <span class="cell__status cell__status--ok">2 tracked files modified</span>
+                    </div>
+                    <div class="git-box">
+                      <div class="git-box__files">
+                        <div class="git-file git-file--staged">
+                          <span class="git-pill git-pill--staged">staged</span>
+                          <code>queries/regional_kpi.sql</code>
+                          <span class="muted small">+8 lines</span>
+                        </div>
+                        <div class="git-file git-file--modified">
+                          <span class="git-pill git-pill--mod">modified</span>
+                          <code>notebooks/revenue.py</code>
+                          <span class="muted small">+12, -4 lines</span>
+                        </div>
+                      </div>
+                      <div class="git-diff-card">
+                        <div class="side-block__title">Git Diff · Plain Python file</div>
+                        <pre class="code-mini"><span class="diff-ctx">@@ -18,4 +18,6 @@</span>
+<span class="diff-del">- orders = ws.table("orders")</span>
+<span class="diff-add">+ orders = ws.table("orders").filter(F.col("o_orderdate") &gt;= "1995-01-01")</span>
+<span class="diff-ctx"> # marimo reactive graph diffs cleanly in git</span></pre>
+                        <div class="git-actions">
+                          <button type="button" class="button button--primary button--sm" data-git-commit>Commit to main</button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -265,7 +460,7 @@ orders = ws.table(<span class="str">"orders"</span>).filter(F.col(<span class="s
               </div>
 
               <!-- Right Side Panel: Outline & Variables -->
-              <aside class="notebook-side" aria-hidden="true">
+              <aside class="notebook-side">
                 <div class="side-block">
                   <div class="side-block__title">Variables (3)</div>
                   <div class="var-row">
@@ -311,22 +506,22 @@ orders = ws.table(<span class="str">"orders"</span>).filter(F.col(<span class="s
           >
             <div class="wrangler-toolbar">
               <code class="wrangler-table-name">main.customer</code>
-              <span class="wrangler-btn">Filter</span>
-              <span class="wrangler-btn">Clean and impute</span>
-              <span class="wrangler-btn">Text</span>
-              <span class="wrangler-btn">Columns</span>
-              <span class="wrangler-count">29,984 of 150,000 rows × 8 cols</span>
-              <span class="wrangler-btn wrangler-btn--primary">Export code</span>
+              <button type="button" class="wrangler-btn is-active" data-wrangler-tool="filter">Filter</button>
+              <button type="button" class="wrangler-btn" data-wrangler-tool="clean">Clean and impute</button>
+              <button type="button" class="wrangler-btn" data-wrangler-tool="text">Text</button>
+              <button type="button" class="wrangler-btn" data-wrangler-tool="columns">Columns</button>
+              <span class="wrangler-count" data-wrangler-count>29,984 of 150,000 rows × 8 cols</span>
+              <button type="button" class="wrangler-btn wrangler-btn--primary" data-wrangler-export>Export code</button>
             </div>
 
             <div class="wrangler-layout">
               <div class="wrangler-steps">
                 <div class="side-block__title">STEPS (4)</div>
-                <div class="step-item">Source · main.customer</div>
-                <div class="step-item">1. Filter c_mktsegment = "AUTOMOBILE"</div>
-                <div class="step-item">2. Trim whitespace · c_name</div>
-                <div class="step-item">3. Fill nulls · c_acctbal → 0.00</div>
-                <div class="step-item step-item--active">4. Sort c_acctbal descending</div>
+                <button type="button" class="step-item" data-wrangler-step="0">Source · main.customer</button>
+                <button type="button" class="step-item" data-wrangler-step="1">1. Filter c_mktsegment = "AUTOMOBILE"</button>
+                <button type="button" class="step-item" data-wrangler-step="2">2. Trim whitespace · c_name</button>
+                <button type="button" class="step-item" data-wrangler-step="3">3. Fill nulls · c_acctbal → 0.00</button>
+                <button type="button" class="step-item step-item--active" data-wrangler-step="4">4. Sort c_acctbal descending</button>
               </div>
 
               <div class="wrangler-main">
@@ -379,16 +574,27 @@ orders = ws.table(<span class="str">"orders"</span>).filter(F.col(<span class="s
 
                 <div class="wrangler-export">
                   <div class="wrangler-export__head">
-                    <span>Exported Python DataFrame recipe</span>
+                    <div class="export-tabs" role="tablist">
+                      <button type="button" class="export-tab is-active" data-export-tab="python">Python DataFrame</button>
+                      <button type="button" class="export-tab" data-export-tab="sql">SQL Query</button>
+                    </div>
                     <span>Runs over all rows in kernel</span>
                   </div>
-                  <pre class="code-line"><span class="kw">from</span> iara <span class="kw">import</span> functions <span class="kw">as</span> F
+                  <pre class="code-line" data-export-view="python"><span class="kw">from</span> iara <span class="kw">import</span> functions <span class="kw">as</span> F
 wrangled = (
     ws.table(<span class="str">"customer"</span>)
     .filter(F.col(<span class="str">"c_mktsegment"</span>) == <span class="str">"AUTOMOBILE"</span>)
     .with_columns(c_name=F.col(<span class="str">"c_name"</span>).str.strip_chars(), c_acctbal=F.col(<span class="str">"c_acctbal"</span>).fill_null(<span class="num">0.0</span>))
     .sort(<span class="str">"c_acctbal"</span>, descending=<span class="kw">True</span>)
 )</pre>
+                  <pre class="code-line" data-export-view="sql" hidden><span class="kw">select</span>
+    c_custkey,
+    <span class="fn">trim</span>(c_name) <span class="kw">as</span> c_name,
+    c_nation,
+    <span class="fn">coalesce</span>(c_acctbal, <span class="num">0.0</span>) <span class="kw">as</span> c_acctbal
+<span class="kw">from</span> main.customer
+<span class="kw">where</span> c_mktsegment = <span class="str">'AUTOMOBILE'</span>
+<span class="kw">order by</span> c_acctbal <span class="kw">desc</span></pre>
                 </div>
               </div>
             </div>
@@ -409,13 +615,14 @@ wrangled = (
                 <div class="catalog-tree">
                   <div class="catalog-node catalog-node--root">▾ tpch (default)</div>
                   <div class="catalog-node catalog-node--schema">▾ main · s3://warehouse/tpch</div>
-                  <div class="catalog-node catalog-node--table is-selected">orders · Delta · 1.5M rows</div>
-                  <div class="catalog-node catalog-node--table">lineitem · Parquet · 6.0M rows</div>
-                  <div class="catalog-node catalog-node--table">customer · Parquet · 150k rows</div>
+                  <button type="button" class="catalog-node catalog-node--table is-selected" data-table-select="orders">orders · Delta · 1.5M rows</button>
+                  <button type="button" class="catalog-node catalog-node--table" data-table-select="lineitem">lineitem · Parquet · 6.0M rows</button>
+                  <button type="button" class="catalog-node catalog-node--table" data-table-select="customer">customer · Parquet · 150k rows</button>
                   <div class="catalog-node catalog-node--root">▸ sales · s3://bucket/sales</div>
                 </div>
 
-                <div class="delta-commits">
+                <!-- Table details for orders (Delta) -->
+                <div class="delta-commits" data-table-history="orders">
                   <div class="side-block__title">Delta History · main.orders</div>
                   <div class="commit-row">
                     <span class="commit-ver">v18</span>
@@ -425,12 +632,32 @@ wrangled = (
                   <div class="commit-row">
                     <span class="commit-ver">v17</span>
                     <span class="commit-op">DELETE WHERE status = 'X'</span>
-                    <span class="commit-act commit-act--link">Restore</span>
+                    <button type="button" class="commit-act commit-act--link" data-delta-restore>Restore</button>
                   </div>
                   <div class="commit-row">
                     <span class="commit-ver">v16</span>
                     <span class="commit-op">CREATE TABLE AS SELECT</span>
-                    <span class="commit-act commit-act--link">Query @v16</span>
+                    <button type="button" class="commit-act commit-act--link" data-delta-query>Query @v16</button>
+                  </div>
+                </div>
+
+                <!-- Table details for lineitem (Parquet) -->
+                <div class="delta-commits" data-table-history="lineitem" hidden>
+                  <div class="side-block__title">Parquet Details · main.lineitem</div>
+                  <div class="commit-row"><span class="commit-ver">Rows</span><span class="commit-op">6,001,215</span></div>
+                  <div class="commit-row"><span class="commit-ver">Groups</span><span class="commit-op">4 row groups (LZ4)</span></div>
+                  <div class="commit-row"><span class="commit-ver">Sort</span><span class="commit-op">l_shipdate ASC</span></div>
+                  <div class="commit-row">
+                    <button type="button" class="commit-act commit-act--link" data-catalog-query-lineitem>Query table in SQL →</button>
+                  </div>
+                </div>
+
+                <!-- Table details for customer (Parquet) -->
+                <div class="delta-commits" data-table-history="customer" hidden>
+                  <div class="side-block__title">Table Actions · main.customer</div>
+                  <div class="commit-row"><span class="commit-ver">Rows</span><span class="commit-op">150,000 × 8 cols</span></div>
+                  <div class="commit-row">
+                    <button type="button" class="commit-act commit-act--link" data-catalog-to-wrangler>Open in Data Wrangler →</button>
                   </div>
                 </div>
               </div>
@@ -476,14 +703,19 @@ wrangled = (
                   </div>
                 </div>
 
-                <div class="op-dag">
-                  <span class="op-node">ParquetScan · 6.0M</span>
+                <div class="op-dag" role="tablist" aria-label="Operators">
+                  <button type="button" class="op-node" data-op-select="scan">ParquetScan · 6.0M</button>
                   <span class="op-arrow">→</span>
-                  <span class="op-node">Filter · 1.5M</span>
+                  <button type="button" class="op-node" data-op-select="filter">Filter · 1.5M</button>
                   <span class="op-arrow">→</span>
-                  <span class="op-node op-node--active">HashJoin (DP ordered) · 1.5M</span>
+                  <button type="button" class="op-node op-node--active" data-op-select="join">HashJoin (DP ordered) · 1.5M</button>
                   <span class="op-arrow">→</span>
-                  <span class="op-node">HashAggregate · 5</span>
+                  <button type="button" class="op-node" data-op-select="agg">HashAggregate · 5</button>
+                </div>
+
+                <div class="op-detail-box">
+                  <span class="op-detail-tag">Active Operator</span>
+                  <p class="op-detail-text" data-op-detail>HashJoin: dynamic programming join ordering selected orders as build side (1.5M keys in memory pool, 0 B spilled).</p>
                 </div>
               </div>
             </div>
@@ -509,27 +741,27 @@ wrangled = (
                 </div>
 
                 <!-- Horizontal Task DAG -->
-                <div class="dag-flow">
-                  <div class="dag-task dag-task--ok">
+                <div class="dag-flow" role="tablist">
+                  <button type="button" class="dag-task dag-task--ok" data-dag-task="load_raw">
                     <span class="dag-task__status">✓ 4.1 s</span>
                     <strong>load_raw</strong>
                     <span>notebooks/load.py</span>
-                  </div>
+                  </button>
                   <span class="op-arrow">→</span>
-                  <div class="dag-task dag-task--ok">
+                  <button type="button" class="dag-task dag-task--ok" data-dag-task="transform_orders">
                     <span class="dag-task__status">✓ 6.8 s</span>
                     <strong>transform_orders</strong>
                     <span>notebooks/enrich.py</span>
-                  </div>
+                  </button>
                   <span class="op-arrow">→</span>
-                  <div class="dag-task dag-task--ok">
+                  <button type="button" class="dag-task dag-task--ok dag-task--selected" data-dag-task="publish_report">
                     <span class="dag-task__status">✓ 3.3 s</span>
                     <strong>publish_report</strong>
                     <span>queries/report.sql</span>
-                  </div>
+                  </button>
                 </div>
 
-                <pre class="code-line">name = <span class="str">"Nightly sales"</span>
+                <pre class="code-line" data-dag-code>name = <span class="str">"Nightly sales"</span>
 schedule = <span class="str">"0 6 * * *"</span>
 cluster = <span class="str">"job"</span>
 
@@ -554,6 +786,10 @@ max_retries = <span class="num">2</span></pre>
                     <span>Limit: 2 h · terminates at 23:00</span>
                     <span>Libraries: polars, rich==13.9.4, pyarrow</span>
                   </div>
+                  <div class="cluster-card__actions">
+                    <button type="button" class="cluster-action-btn" data-cluster-stream>Stream Logs</button>
+                    <button type="button" class="cluster-action-btn" data-cluster-ssh>SSH Terminal</button>
+                  </div>
                   <div class="cluster-card__log">
                     <code>[boot] ssh kernel tunnel ready (unprivileged user)</code>
                     <code>[pip] 3 libraries installed in 4.2s</code>
@@ -570,7 +806,7 @@ max_retries = <span class="num">2</span></pre>
     <!-- 6 Expanded Studio Capability Cards -->
     <div class="grid grid--3 studio-pillars" data-reveal-stagger>
       {studioPillars.map((p) => (
-        <article class="card pillar-card">
+        <article class="card pillar-card" role="button" tabindex="0" data-pillar-jump={p.jump}>
           <span class="pillar-card__eyebrow">{p.eyebrow}</span>
           <h3>{p.title}</h3>
           <p class="muted small">{p.text}</p>
@@ -584,29 +820,96 @@ max_retries = <span class="num">2</span></pre>
   (() => {
     const explorer = document.querySelector('[data-studio-explorer]');
     if (!explorer) return;
+
     const tabButtons = Array.from(explorer.querySelectorAll('[data-studio-tab]'));
     const panels = Array.from(explorer.querySelectorAll('[data-studio-panel]'));
     const railItems = Array.from(explorer.querySelectorAll('[data-rail-target]'));
 
-    function activateTab(id) {
+    // Toast notifications
+    const toast = explorer.querySelector('[data-studio-toast]');
+    const toastText = explorer.querySelector('[data-studio-toast-text]');
+    const toastClose = explorer.querySelector('[data-studio-toast-close]');
+    let toastTimeout;
+
+    function showToast(msg) {
+      if (!toast || !toastText) return;
+      toastText.textContent = msg;
+      toast.hidden = false;
+      toast.classList.add('is-visible');
+      toast.style.display = 'flex';
+      clearTimeout(toastTimeout);
+      toastTimeout = setTimeout(() => {
+        toast.classList.remove('is-visible');
+        toast.hidden = true;
+        toast.style.display = 'none';
+      }, 4000);
+    }
+
+    toastClose?.addEventListener('click', (e) => {
+      e.preventDefault();
+      clearTimeout(toastTimeout);
+      if (toast) {
+        toast.classList.remove('is-visible');
+        toast.hidden = true;
+        toast.style.display = 'none';
+      }
+    });
+
+    // Main Tab Activation
+    function activateTab(tabId, railKey) {
       tabButtons.forEach((btn) => {
-        const active = btn.getAttribute('data-studio-tab') === id;
+        const active = btn.getAttribute('data-studio-tab') === tabId;
         btn.classList.toggle('is-active', active);
         btn.setAttribute('aria-selected', active ? 'true' : 'false');
       });
       panels.forEach((panel) => {
-        const active = panel.getAttribute('data-studio-panel') === id;
+        const active = panel.getAttribute('data-studio-panel') === tabId;
         panel.classList.toggle('is-active', active);
         panel.hidden = !active;
       });
-      let highlighted = false;
+
+      // Synchronize sidebar rail
+      const targetKey = railKey || (tabId === 'notebook' ? 'workspace' : tabId === 'analyze' ? 'data' : tabId === 'jobs' ? 'jobs' : tabId);
       railItems.forEach((item) => {
-        const match = !highlighted && item.getAttribute('data-rail-target') === id;
-        if (match) highlighted = true;
-        item.classList.toggle('rail__item--active', match);
+        const active = item.getAttribute('data-rail-target') === targetKey;
+        item.classList.toggle('rail__item--active', active);
+        item.setAttribute('aria-pressed', active ? 'true' : 'false');
       });
     }
 
+    // Direct Rail Navigation
+    function activateRailItem(key) {
+      if (key === 'workspace') {
+        activateTab('notebook', 'workspace');
+        switchFileView('revenue');
+      } else if (key === 'sql') {
+        activateTab('notebook', 'sql');
+        switchFileView('sql');
+      } else if (key === 'git') {
+        activateTab('notebook', 'git');
+        switchFileView('git');
+      } else if (key === 'wrangler') {
+        activateTab('wrangler', 'wrangler');
+      } else if (key === 'data') {
+        activateTab('analyze', 'data');
+        const catalogPane = explorer.querySelector('.catalog-pane');
+        if (catalogPane) catalogPane.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      } else if (key === 'analyze') {
+        activateTab('analyze', 'analyze');
+        const analyzeMain = explorer.querySelector('.analyze-main');
+        if (analyzeMain) analyzeMain.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      } else if (key === 'jobs') {
+        activateTab('jobs', 'jobs');
+        const jobsPane = explorer.querySelector('.jobs-pane');
+        if (jobsPane) jobsPane.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      } else if (key === 'compute') {
+        activateTab('jobs', 'compute');
+        const computePane = explorer.querySelector('.compute-pane');
+        if (computePane) computePane.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }
+
+    // Top Tabs event listeners
     tabButtons.forEach((btn) => {
       btn.addEventListener('click', () => {
         const id = btn.getAttribute('data-studio-tab');
@@ -614,10 +917,316 @@ max_retries = <span class="num">2</span></pre>
       });
     });
 
+    // Rail event listeners
     railItems.forEach((item) => {
       item.addEventListener('click', () => {
-        const id = item.getAttribute('data-rail-target');
-        if (id) activateTab(id);
+        const key = item.getAttribute('data-rail-target');
+        if (key) activateRailItem(key);
+      });
+    });
+
+    // File Tabs switching (revenue vs sql vs git)
+    const fileTabs = Array.from(explorer.querySelectorAll('[data-file-tab]'));
+    const fileViews = Array.from(explorer.querySelectorAll('[data-file-view]'));
+
+    function switchFileView(targetView) {
+      fileTabs.forEach((tab) => {
+        const active = tab.getAttribute('data-file-tab') === targetView;
+        tab.classList.toggle('tab-chip--active', active);
+        tab.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      fileViews.forEach((view) => {
+        const active = view.getAttribute('data-file-view') === targetView;
+        view.hidden = !active;
+      });
+      if (targetView === 'sql') {
+        railItems.forEach((r) => r.classList.toggle('rail__item--active', r.getAttribute('data-rail-target') === 'sql'));
+      } else if (targetView === 'git') {
+        railItems.forEach((r) => r.classList.toggle('rail__item--active', r.getAttribute('data-rail-target') === 'git'));
+      } else if (targetView === 'revenue') {
+        railItems.forEach((r) => r.classList.toggle('rail__item--active', r.getAttribute('data-rail-target') === 'workspace'));
+      }
+    }
+
+    fileTabs.forEach((tab) => {
+      tab.addEventListener('click', () => {
+        const view = tab.getAttribute('data-file-tab');
+        if (view) switchFileView(view);
+      });
+    });
+
+    // Output tabs in Cell 2 (Table vs Chart vs Profile vs Wrangle)
+    const outTabs = Array.from(explorer.querySelectorAll('[data-out-tab]'));
+    const outViews = Array.from(explorer.querySelectorAll('[data-out-view]'));
+    outTabs.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const target = btn.getAttribute('data-out-tab');
+        if (target === 'wrangle') {
+          activateTab('wrangler', 'wrangler');
+          showToast('Loaded table into Visual Data Wrangler');
+          return;
+        }
+        outTabs.forEach((b) => {
+          const active = b === btn;
+          b.classList.toggle('out-tab--active', active);
+          b.setAttribute('aria-selected', active ? 'true' : 'false');
+        });
+        outViews.forEach((v) => {
+          v.hidden = v.getAttribute('data-out-view') !== target;
+        });
+      });
+    });
+
+    // SQL standalone out tabs
+    const sqlTabs = Array.from(explorer.querySelectorAll('[data-sql-tab]'));
+    const sqlViews = Array.from(explorer.querySelectorAll('[data-sql-view]'));
+    sqlTabs.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const target = btn.getAttribute('data-sql-tab');
+        sqlTabs.forEach((b) => b.classList.toggle('out-tab--active', b === btn));
+        sqlViews.forEach((v) => {
+          v.hidden = v.getAttribute('data-sql-view') !== target;
+        });
+      });
+    });
+
+    // Catalog Table selection & Delta History
+    const catalogTables = Array.from(explorer.querySelectorAll('[data-table-select]'));
+    const catalogPanes = Array.from(explorer.querySelectorAll('[data-table-history]'));
+    catalogTables.forEach((tableBtn) => {
+      tableBtn.addEventListener('click', () => {
+        const name = tableBtn.getAttribute('data-table-select');
+        catalogTables.forEach((b) => b.classList.toggle('is-selected', b === tableBtn));
+        catalogPanes.forEach((p) => {
+          p.hidden = p.getAttribute('data-table-history') !== name;
+        });
+      });
+    });
+
+    // Delta History Actions
+    explorer.querySelector('[data-delta-restore]')?.addEventListener('click', () => {
+      showToast('✓ Restored main.orders to commit v17 (DELETE rolled back)');
+    });
+    explorer.querySelector('[data-delta-query]')?.addEventListener('click', () => {
+      activateRailItem('sql');
+      showToast('Querying main.orders VERSION AS OF 16');
+    });
+    explorer.querySelector('[data-catalog-query-lineitem]')?.addEventListener('click', () => {
+      activateRailItem('sql');
+      showToast('Opened main.lineitem in SQL editor');
+    });
+    explorer.querySelector('[data-catalog-to-wrangler]')?.addEventListener('click', () => {
+      activateTab('wrangler', 'wrangler');
+      showToast('Opened main.customer in Data Wrangler');
+    });
+
+    // Wrangler Tools & Step Items
+    const wranglerSteps = Array.from(explorer.querySelectorAll('[data-wrangler-step]'));
+    const wranglerCount = explorer.querySelector('[data-wrangler-count]');
+    const stepCounts = ['150,000 rows × 8 cols', '30,000 rows × 8 cols', '30,000 rows × 8 cols', '29,984 rows × 8 cols', '29,984 rows × 8 cols'];
+    wranglerSteps.forEach((step) => {
+      step.addEventListener('click', () => {
+        wranglerSteps.forEach((s) => s.classList.toggle('step-item--active', s === step));
+        const idx = parseInt(step.getAttribute('data-wrangler-step') || '0', 10);
+        if (wranglerCount && stepCounts[idx]) {
+          wranglerCount.textContent = `${stepCounts[idx]} (at step ${idx})`;
+        }
+      });
+    });
+
+    const wranglerTools = Array.from(explorer.querySelectorAll('[data-wrangler-tool]'));
+    wranglerTools.forEach((tool) => {
+      tool.addEventListener('click', () => {
+        wranglerTools.forEach((t) => t.classList.toggle('is-active', t === tool));
+        const toolName = tool.getAttribute('data-wrangler-tool');
+        showToast(`Applied ${toolName} transformation step`);
+      });
+    });
+
+    // Wrangler Export Code Toggle
+    const exportTabs = Array.from(explorer.querySelectorAll('[data-export-tab]'));
+    const exportViews = Array.from(explorer.querySelectorAll('[data-export-view]'));
+    exportTabs.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const target = btn.getAttribute('data-export-tab');
+        exportTabs.forEach((b) => b.classList.toggle('is-active', b === btn));
+        exportViews.forEach((v) => {
+          v.hidden = v.getAttribute('data-export-view') !== target;
+        });
+      });
+    });
+    explorer.querySelector('[data-wrangler-export]')?.addEventListener('click', () => {
+      const exportBox = explorer.querySelector('.wrangler-export');
+      if (exportBox) {
+        exportBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        showToast('Exported cleaning recipe to Python LazyFrame & SQL');
+      }
+    });
+
+    // Operator DAG Nodes in Analyze
+    const opNodes = Array.from(explorer.querySelectorAll('[data-op-select]'));
+    const opDetailText = explorer.querySelector('[data-op-detail]');
+    const opDetails = {
+      scan: 'ParquetScan: read s3://warehouse/tpch/lineitem.parquet across 16 threads (4 row groups, pushdown filter applied on l_shipdate).',
+      filter: 'Filter: vectorized SIMD evaluation of predicate (l_shipdate <= \'1998-12-01\'), dropped 4.5M rows.',
+      join: 'HashJoin: dynamic programming join ordering selected orders as build side (1.5M keys in memory pool, 0 B spilled).',
+      agg: 'HashAggregate: vectorized hash grouping over 5 orderpriority groups in 5 ms.'
+    };
+    opNodes.forEach((node) => {
+      node.addEventListener('click', () => {
+        opNodes.forEach((n) => n.classList.toggle('op-node--active', n === node));
+        const opKey = node.getAttribute('data-op-select');
+        if (opDetailText && opDetails[opKey]) {
+          opDetailText.textContent = opDetails[opKey];
+        }
+      });
+    });
+
+    // Scheduled Job DAG Tasks
+    const dagTasks = Array.from(explorer.querySelectorAll('[data-dag-task]'));
+    const dagCode = explorer.querySelector('[data-dag-code]');
+    const dagSnippets = {
+      load_raw: '[[task]]\nkey = "load_raw"\ntarget = "notebooks/load.py"\nmax_retries = 3\ntimeout_seconds = 300',
+      transform_orders: '[[task]]\nkey = "transform_orders"\ntarget = "notebooks/enrich.py"\ndepends_on = ["load_raw"]\nrun_if = "all_success"',
+      publish_report: '[[task]]\nkey = "publish_report"\ntarget = "queries/report.sql"\ndepends_on = ["transform_orders"]\nrun_if = "all_success"\nmax_retries = 2'
+    };
+    dagTasks.forEach((task) => {
+      task.addEventListener('click', () => {
+        dagTasks.forEach((t) => t.classList.toggle('dag-task--selected', t === task));
+        const key = task.getAttribute('data-dag-task');
+        if (dagCode && dagSnippets[key]) {
+          dagCode.textContent = dagSnippets[key];
+        }
+      });
+    });
+
+    // Compute Cluster Action Buttons
+    explorer.querySelector('[data-cluster-stream]')?.addEventListener('click', () => {
+      const logs = explorer.querySelector('.cluster-card__log');
+      if (logs) {
+        const time = new Date().toLocaleTimeString();
+        const line = document.createElement('code');
+        line.textContent = `[${time}] worker-pool healthy · 16 threads active · 0 B spilled`;
+        logs.appendChild(line);
+        showToast('Streamed cluster telemetry heartbeat');
+      }
+    });
+    explorer.querySelector('[data-cluster-ssh]')?.addEventListener('click', () => {
+      showToast('Opening unprivileged SSH kernel tunnel on port 3870...');
+    });
+    explorer.querySelector('[data-cluster-pill]')?.addEventListener('click', () => {
+      activateRailItem('compute');
+    });
+
+    // Git Actions
+    explorer.querySelector('[data-git-commit]')?.addEventListener('click', () => {
+      showToast('✓ Committed changes to branch main (marimo pure .py diff)');
+    });
+
+    // Pillar capability cards jumping
+    const pillarCards = Array.from(document.querySelectorAll('[data-pillar-jump]'));
+    pillarCards.forEach((card) => {
+      card.addEventListener('click', () => {
+        const target = card.getAttribute('data-pillar-jump');
+        if (target) {
+          activateRailItem(target);
+          explorer.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      });
+      card.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          const target = card.getAttribute('data-pillar-jump');
+          if (target) {
+            activateRailItem(target);
+            explorer.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
+        }
+      });
+    });
+
+    // Search / Command Palette
+    const searchModal = explorer.querySelector('[data-search-modal]');
+    const searchTrigger = explorer.querySelector('[data-search-trigger]');
+    const searchInput = explorer.querySelector('[data-search-input]');
+    const searchCloseButtons = Array.from(explorer.querySelectorAll('[data-search-close]'));
+    const searchItems = Array.from(explorer.querySelectorAll('[data-search-target]'));
+
+    function openSearch() {
+      if (!searchModal) return;
+      searchModal.hidden = false;
+      searchModal.classList.add('is-open');
+      searchModal.style.display = 'flex';
+      const searchList = searchModal.querySelector('.search-modal__list');
+      if (searchList) searchList.scrollTop = 0;
+      if (searchInput) {
+        searchInput.value = '';
+        searchItems.forEach((item) => (item.hidden = false));
+        setTimeout(() => searchInput.focus(), 30);
+      }
+    }
+
+    function closeSearch() {
+      if (!searchModal) return;
+      searchModal.hidden = true;
+      searchModal.classList.remove('is-open');
+      searchModal.style.display = 'none';
+    }
+
+    searchTrigger?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openSearch();
+    });
+
+    searchCloseButtons.forEach((b) => {
+      b.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        closeSearch();
+      });
+    });
+
+    // Explicit backdrop click listener
+    const searchBackdrop = searchModal?.querySelector('.search-modal__backdrop');
+    searchBackdrop?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      closeSearch();
+    });
+
+    document.addEventListener('keydown', (e) => {
+      const isCmdK = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k';
+      const isEsc = e.key === 'Escape';
+      const isOpen = searchModal && (!searchModal.hidden || searchModal.classList.contains('is-open') || searchModal.style.display === 'flex');
+
+      if (isCmdK) {
+        e.preventDefault();
+        if (isOpen) {
+          closeSearch();
+        } else {
+          openSearch();
+        }
+      } else if (isEsc && isOpen) {
+        e.preventDefault();
+        closeSearch();
+      }
+    });
+
+    searchItems.forEach((item) => {
+      item.addEventListener('click', (e) => {
+        e.preventDefault();
+        const target = item.getAttribute('data-search-target');
+        closeSearch();
+        if (target) activateRailItem(target);
+      });
+    });
+
+    searchInput?.addEventListener('input', (e) => {
+      const q = (e.target.value || '').toLowerCase().trim();
+      searchItems.forEach((item) => {
+        const txt = item.textContent?.toLowerCase() || '';
+        item.hidden = q !== '' && !txt.includes(q);
       });
     });
   })();
@@ -760,6 +1369,7 @@ max_retries = <span class="num">2</span></pre>
 
   /* Studio Window Frame */
   .window {
+    position: relative;
     min-width: 0;
     max-width: 100%;
     background: var(--vellum);
@@ -1719,6 +2329,21 @@ max_retries = <span class="num">2</span></pre>
     margin-bottom: 12px;
   }
 
+  .pillar-card {
+    cursor: pointer;
+    transition:
+      transform 0.22s cubic-bezier(0.22, 1, 0.36, 1),
+      border-color 0.22s ease,
+      box-shadow 0.22s ease;
+  }
+
+  .pillar-card:hover,
+  .pillar-card:focus-visible {
+    transform: translateY(-3px);
+    border-color: var(--cobalt);
+    box-shadow: 0 4px 16px rgba(30, 91, 184, 0.12);
+  }
+
   .pillar-card h3 {
     font-size: 1.15rem;
     margin-bottom: 8px;
@@ -1726,6 +2351,482 @@ max_retries = <span class="num">2</span></pre>
 
   .pillar-card p {
     margin-bottom: 0;
+  }
+
+  /* Accessible Interactive Elements inside Studio Window */
+  .rail__item {
+    border: none;
+    background: none;
+    width: 100%;
+    text-align: left;
+    font-family: inherit;
+  }
+
+  button.tab-chip {
+    border: 1px solid var(--rule);
+    font: inherit;
+    font-family: var(--font-mono);
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  }
+
+  button.tab-chip:hover {
+    background: var(--parchment-2);
+    border-color: var(--ink-3);
+    color: var(--ink);
+  }
+
+  button.out-tab {
+    border: none;
+    background: none;
+    font: inherit;
+    font-family: var(--font-mono);
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+
+  button.out-tab:hover {
+    background: var(--parchment-2);
+    color: var(--ink);
+  }
+
+  .out-tab--action {
+    color: var(--cobalt) !important;
+    font-weight: 600;
+    margin-left: auto;
+  }
+
+  button.catalog-node--table {
+    border: none;
+    background: none;
+    font: inherit;
+    width: 100%;
+    text-align: left;
+    cursor: pointer;
+    border-radius: 4px;
+    padding: 3px 6px;
+    transition: background 0.15s ease;
+  }
+
+  button.catalog-node--table:hover {
+    background: var(--parchment-2);
+  }
+
+  button.step-item {
+    border: none;
+    background: none;
+    font: inherit;
+    width: 100%;
+    text-align: left;
+    cursor: pointer;
+    border-radius: 6px;
+    padding: 6px 8px;
+    transition: background 0.15s ease;
+  }
+
+  button.step-item:hover {
+    background: var(--parchment-2);
+  }
+
+  button.wrangler-btn {
+    border: 1px solid var(--rule-strong);
+    background: var(--vellum);
+    font: inherit;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+
+  button.wrangler-btn:hover {
+    background: var(--parchment-2);
+    border-color: var(--cobalt);
+  }
+
+  button.dag-task {
+    border: 1px solid var(--rule);
+    background: var(--vellum);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: all 0.18s ease;
+  }
+
+  button.dag-task:hover,
+  .dag-task--selected {
+    border-color: var(--cobalt) !important;
+    background: var(--mist-2) !important;
+    box-shadow: 0 0 0 1px var(--cobalt);
+  }
+
+  button.op-node {
+    border: 1px solid var(--rule);
+    background: var(--parchment);
+    font: inherit;
+    font-family: var(--font-mono);
+    cursor: pointer;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 11px;
+    transition: all 0.15s ease;
+  }
+
+  button.op-node:hover,
+  .op-node--active {
+    background: var(--cobalt) !important;
+    border-color: var(--cobalt) !important;
+    color: #fff !important;
+  }
+
+  .op-detail-box {
+    margin-top: 14px;
+    padding: 10px 12px;
+    background: var(--parchment);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    font-size: 11.5px;
+  }
+
+  .op-detail-tag {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--cobalt);
+    margin-bottom: 4px;
+    display: block;
+  }
+
+  .op-detail-text {
+    margin: 0;
+    color: var(--ink-2);
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  button.cluster-pill {
+    border: 1px solid var(--rule);
+    background: var(--vellum);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 11.5px;
+    transition: border-color 0.15s ease;
+  }
+
+  button.cluster-pill:hover {
+    border-color: var(--cobalt);
+  }
+
+  .cluster-card__actions {
+    display: flex;
+    gap: 8px;
+    margin: 10px 0;
+  }
+
+  .cluster-action-btn,
+  .action-btn {
+    border: 1px solid var(--rule-strong);
+    background: var(--vellum);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    padding: 3px 9px;
+    border-radius: 5px;
+    color: var(--ink);
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .cluster-action-btn:hover,
+  .action-btn:hover {
+    border-color: var(--cobalt);
+    background: var(--mist-2);
+    color: var(--cobalt);
+  }
+
+  .export-tabs {
+    display: flex;
+    gap: 4px;
+  }
+
+  .export-tab {
+    border: 1px solid var(--rule);
+    background: var(--parchment);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    color: var(--ink-2);
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .export-tab.is-active {
+    background: var(--cobalt);
+    border-color: var(--cobalt);
+    color: #fff;
+    font-weight: 600;
+  }
+
+  /* Git View Inside Studio */
+  .git-box {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 10px;
+  }
+
+  .git-box__files {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .git-file {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--parchment);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .git-pill {
+    font-size: 9.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    padding: 1px 6px;
+    border-radius: 4px;
+  }
+
+  .git-pill--staged {
+    background: #e1f5ea;
+    color: #1e7e48;
+  }
+
+  .git-pill--mod {
+    background: #fdf3d8;
+    color: #8c6708;
+  }
+
+  .git-diff-card {
+    background: var(--parchment);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 10px 12px;
+  }
+
+  .diff-ctx {
+    color: var(--ink-3);
+  }
+
+  .diff-del {
+    color: #b91c1c;
+    background: rgba(185, 28, 28, 0.08);
+  }
+
+  .diff-add {
+    color: #15803d;
+    background: rgba(21, 128, 61, 0.08);
+  }
+
+  .git-actions {
+    margin-top: 10px;
+  }
+
+  .button--sm {
+    padding: 4px 12px;
+    font-size: 0.82rem;
+  }
+
+  /* Profile Breakdown Card */
+  .cell-profile-card {
+    padding: 10px 12px;
+    background: var(--parchment);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    font-size: 11.5px;
+    margin-top: 6px;
+  }
+
+  /* Floating Toast Notification */
+  .studio-toast {
+    position: absolute;
+    top: 12px;
+    right: 14px;
+    z-index: 50;
+    display: none;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 12px;
+    background: var(--night);
+    color: #fff;
+    border-radius: 6px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+    animation: toast-in 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .studio-toast.is-visible {
+    display: flex;
+  }
+
+  .studio-toast[hidden] {
+    display: none !important;
+  }
+
+  .studio-toast__close {
+    border: none;
+    background: none;
+    color: var(--night-dim);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 0;
+  }
+
+  .studio-toast__close:hover {
+    color: #fff;
+  }
+
+  @keyframes toast-in {
+    from {
+      opacity: 0;
+      transform: translateY(-8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* Command Palette Modal */
+  .search-modal {
+    position: absolute;
+    inset: 0;
+    z-index: 40;
+    display: none;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 60px;
+  }
+
+  .search-modal.is-open {
+    display: flex;
+  }
+
+  .search-modal[hidden] {
+    display: none !important;
+  }
+
+  .search-modal__backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(23, 31, 38, 0.45);
+    backdrop-filter: blur(4px);
+    cursor: pointer;
+  }
+
+  .search-modal__dialog {
+    position: relative;
+    z-index: 41;
+    width: 90%;
+    max-width: 520px;
+    background: var(--vellum);
+    border: 1px solid var(--rule-strong);
+    border-radius: 10px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.25);
+    overflow: hidden;
+  }
+
+  .search-modal__header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--rule);
+    background: var(--parchment);
+  }
+
+  .search-modal__input {
+    flex: 1;
+    border: none;
+    background: none;
+    font: inherit;
+    font-size: 13px;
+    color: var(--ink);
+    outline: none;
+  }
+
+  .search-modal__close {
+    border: none;
+    background: none;
+    font-size: 14px;
+    line-height: 1;
+    color: var(--ink-3);
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.15s ease, background 0.15s ease;
+  }
+
+  .search-modal__close:hover {
+    color: var(--ink);
+    background: var(--mist-2);
+  }
+
+  .search-modal__list {
+    max-height: 440px;
+    overflow-y: auto;
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .search-modal__item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border: none;
+    background: none;
+    border-radius: 6px;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+
+  .search-modal__item:hover,
+  .search-modal__item:focus {
+    background: var(--mist-2);
+  }
+
+  .search-modal__badge {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--cobalt);
+    background: var(--mist-2);
+    border: 1px solid rgba(30, 91, 184, 0.2);
+    padding: 1px 6px;
+    border-radius: 4px;
+    min-width: 62px;
+    text-align: center;
+  }
+
+  .search-modal__item strong {
+    font-size: 12px;
+    color: var(--ink);
+  }
+
+  .search-modal__item .muted {
+    margin-left: auto;
   }
 
   @media (max-width: 980px) {

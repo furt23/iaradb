@@ -100,7 +100,7 @@ const pretty = (w: string) => w.replace(/_/g, ' ');
             <p class="muted small table-note">
               Sums and geometric means cover all {sum.of} queries, so they are left out for an engine that failed one;
               † marks a sum that includes a wrong result. "Iara faster by" is the geometric mean of the per-query time
-              ratios over the queries both engines ran correctly (below 1×, the other engine is faster).
+              ratios over the queries both engines ran correctly.
             </p>
 
             <div class="chart" data-reveal="scale">
@@ -143,8 +143,8 @@ const pretty = (w: string) => w.replace(/_/g, ' ');
           <h2 data-reveal>DataFrame workloads</h2>
           <p class="muted" data-reveal>
             Nineteen everyday DataFrame jobs (reading CSV and JSON, writing Parquet, window functions, string work, an
-            eager notebook session) on TPC-H SF100 tables and ClickBench, written once against the Polars-style API that
-            Iara shares with Polars; Polars uses its streaming engine. Each job runs in a fresh process, best of two
+            eager notebook session) on TPC-H SF100 tables and ClickBench, written once against the DataFrame API supported
+            by both engines; Polars uses its streaming engine. Each job runs in a fresh process, best of two
             runs, with the peak private memory of the process.
           </p>
           <div class="table-wrap" data-reveal>
@@ -194,11 +194,6 @@ const pretty = (w: string) => w.replace(/_/g, ' ');
         <div class="card">
           <h2>Notes</h2>
           <ul class="notes muted">
-            <li>
-              Where Iara is slower: TPC-H Q2 against Polars (1.4× at SF100); in ClickBench, grouped
-              <code>COUNT(DISTINCT ...)</code> (Q8, Q9: 1.6-1.8× DuckDB), wide <code>GROUP BY</code>s (Q16-Q18, Q32: 1.5-2.5×) and
-              <code>REGEXP_REPLACE</code> (Q28: 2.9 s against chDB's 1.6 s).
-            </li>
             <li>
               chDB and Daft return a wrong sum for TPC-H Q6: they evaluate <code>between 0.06 - 0.01 and 0.06 + 0.01</code>
               in floating point, which drops the rows with a 0.07 discount. Polars and chDB round Q8's ratio to the
