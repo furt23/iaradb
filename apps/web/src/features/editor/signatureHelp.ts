@@ -11,10 +11,10 @@ interface Shown {
   help: SignatureHelp;
 }
 
-const setSignature = StateEffect.define<Shown | null>();
+export const setSignature = StateEffect.define<Shown | null>();
 
 /** The character just typed (`(` also when bracket closing inserted `()`). */
-function typedChar(update: ViewUpdate): string | null {
+export function typedChar(update: ViewUpdate): string | null {
   let typed: string | null = null;
   update.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
     typed = fromA === toA && inserted.length >= 1 && inserted.length <= 2 ? inserted.sliceString(0, 1) : null;
@@ -22,7 +22,7 @@ function typedChar(update: ViewUpdate): string | null {
   return typed;
 }
 
-const signatureField = StateField.define<Shown | null>({
+export const signatureField = StateField.define<Shown | null>({
   create: () => null,
   update(value, tr) {
     for (const e of tr.effects) if (e.is(setSignature)) value = e.value;
@@ -32,7 +32,7 @@ const signatureField = StateField.define<Shown | null>({
   provide: (f) => showTooltip.from(f, (v): Tooltip | null => (v ? { pos: v.pos, above: true, create: () => ({ dom: render(v.help) }) } : null)),
 });
 
-function firstParagraph(doc: string): string {
+export function firstParagraph(doc: string): string {
   const para = doc.trim().split(/\n\s*\n/)[0] ?? "";
   return para.length > 420 ? `${para.slice(0, 419)}…` : para;
 }
@@ -67,6 +67,7 @@ function plugin(fetch: Fetch) {
     class {
       private timer = 0;
       private abort: AbortController | null = null;
+      private destroyed = false;
 
       constructor(private readonly view: EditorView) {}
 
@@ -108,10 +109,20 @@ function plugin(fetch: Fetch) {
       }
 
       show(value: Shown | null) {
-        if (value || this.view.state.field(signatureField)) this.view.dispatch({ effects: setSignature.of(value) });
+        if (!value && !this.view.state.field(signatureField)) return;
+        // Dispatching transactions synchronously from within a ViewPlugin update is forbidden
+        // in CodeMirror. Defer the dispatch to a microtask so it runs right after the current update.
+        queueMicrotask(() => {
+          if (this.destroyed) return;
+          if (value && (!this.view.hasFocus || this.view.state.selection.main.head !== value.pos)) return;
+          if (value || this.view.state.field(signatureField)) {
+            this.view.dispatch({ effects: setSignature.of(value) });
+          }
+        });
       }
 
       destroy() {
+        this.destroyed = true;
         window.clearTimeout(this.timer);
         this.abort?.abort();
       }
@@ -125,11 +136,16 @@ export function signatureHelp(fetch: Fetch): Extension {
   return [
     signatureField,
     help,
+    EditorView.focusChangeEffect.of((state, focusing) => {
+      if (!focusing && state.field(signatureField)) return setSignature.of(null);
+      return null;
+    }),
     Prec.high(
       keymap.of([
         {
           key: "Escape",
           run: (view) => {
+            view.plugin(help)?.cancel();
             if (!view.state.field(signatureField)) return false;
             view.dispatch({ effects: setSignature.of(null) });
             return true;
