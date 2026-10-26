@@ -91,4 +91,5 @@ The thread count defaults to the number of cores. Change it with `iara.set_num_t
 - `DISTINCT` aggregates and `median` work over whole partitions, not sliding frames.
 - Under a memory limit, one partition key must fit in memory.
 - An empty quoted string (`""`) in CSV is read as null.
-- Studio is single-user: no authentication or access control.
+- Studio has no sign-in unless `IARA_AUTH=auth0` is set; then access follows the email lists in [studio.md](studio.md#sign-in).
+- Data grants do not yet apply to notebooks, the SQL editor or the Data panel's previews ([studio.md](studio.md#data-permissions)).

@@ -1,0 +1,335 @@
+---
+import LogoMark from './LogoMark.astro';
+
+const points = [
+  {
+    title: 'Ask in your own words',
+    text: 'Type a question about your data, like “Which customers spent the most last month?”. Iara looks at your tables, finds the answer and explains what she found.',
+  },
+  {
+    title: 'You see how she got there',
+    text: 'Every answer comes with the steps she took: which tables she looked at, what she asked them and how she checked her own work.',
+  },
+  {
+    title: 'You decide what changes',
+    text: 'When Iara wants to add a chart or fix a query, she shows the change right in your file first. Nothing is saved or run until you press Keep. You can reject it, or undo it afterward.',
+  },
+  {
+    title: 'She remembers what you tell her',
+    text: 'Tell Iara how you like things done and she will remember next time. Her memories are only yours, and you can read or delete them at any time.',
+  },
+];
+
+const steps = [
+  'Listing tables',
+  'Looking at the data',
+  'Querying the data',
+  'Writing the code',
+  'Reviewing the change',
+];
+---
+
+<section class="section section--alt" id="assistant">
+  <div class="container">
+    <header class="section-head" data-reveal>
+      <span class="eyebrow">Meet Iara</span>
+      <h2>An assistant that works with your data.</h2>
+      <p class="lede">
+        Open Iara next to a notebook or a query. Ask a question, or ask her to write the work for you. She can only
+        read what you are allowed to read.
+      </p>
+    </header>
+
+    <div class="assistant">
+      <div class="panel" data-reveal="scale" aria-label="Example conversation with Iara">
+        <div class="panel__bar">
+          <LogoMark size={20} />
+          <strong>Iara</strong>
+          <span class="panel__file">revenue.py</span>
+          <span class="panel__tag">Example</span>
+        </div>
+
+        <div class="chat">
+          <p class="chat__you">Add a chart of sales by month.</p>
+
+          <div class="chat__iara">
+            <details class="steps" open>
+              <summary>Steps ({steps.length})</summary>
+              <ol class="steps__list">
+                {steps.map((s, i) => (
+                  <li style={`--i: ${i}`}><span class="steps__dot" aria-hidden="true"></span>{s}</li>
+                ))}
+              </ol>
+              <p class="steps__thought">
+                The orders table has a date and a total for each order. I will add up the totals by month.
+              </p>
+            </details>
+            <p>I wrote a query for it. Have a look before I add it to your notebook.</p>
+          </div>
+
+          <div class="proposal">
+            <div class="proposal__head">
+              <span class="proposal__tag">Iara suggests a change</span>
+              <strong>New SQL cell</strong>
+            </div>
+            <pre class="diff"><span class="diff__add">+ select date_trunc('month', o_orderdate) as month,</span>
+<span class="diff__add">+        sum(o_totalprice) as sales</span>
+<span class="diff__add">+ from orders</span>
+<span class="diff__add">+ group by 1 order by 1</span></pre>
+            <div class="proposal__actions" aria-hidden="true">
+              <span class="proposal__btn proposal__btn--main">Keep and run</span>
+              <span class="proposal__btn">Keep</span>
+              <span class="proposal__btn">Reject</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="composer" aria-hidden="true">
+          <span>Ask Iara…</span>
+          <span class="composer__send">↑</span>
+        </div>
+      </div>
+
+      <div class="points" data-reveal-stagger>
+        {points.map((p) => (
+          <article class="card">
+            <h3>{p.title}</h3>
+            <p class="muted small">{p.text}</p>
+          </article>
+        ))}
+      </div>
+    </div>
+
+    <p class="small muted note" data-reveal>
+      Iara runs on an AI service that whoever sets up Studio connects. To answer, her questions, the names of your
+      tables and columns, and the results she reads are sent to that service.
+    </p>
+  </div>
+</section>
+
+<style>
+  .assistant {
+    display: grid;
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+    gap: 32px;
+    align-items: start;
+  }
+
+  .panel {
+    background: var(--vellum);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+
+  .panel__bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .panel__file {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--ink-3);
+  }
+
+  .panel__tag {
+    margin-left: auto;
+    font-size: 0.72rem;
+    color: var(--ink-2);
+    background: var(--parchment-2);
+    border: 1px solid var(--rule);
+    padding: 2px 9px;
+    border-radius: 999px;
+  }
+
+  .chat {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 20px 18px;
+  }
+
+  .chat p {
+    margin: 0;
+  }
+
+  .chat__you {
+    align-self: flex-end;
+    max-width: 85%;
+    padding: 10px 14px;
+    background: var(--cobalt);
+    color: var(--vellum);
+    border-radius: var(--radius);
+  }
+
+  .chat__iara {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    align-self: flex-start;
+    max-width: 95%;
+  }
+
+  .steps {
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    background: var(--parchment);
+    padding: 8px 14px;
+  }
+
+  .steps summary {
+    cursor: pointer;
+    font-size: 0.82rem;
+    color: var(--ink-2);
+  }
+
+  .steps__list {
+    list-style: none;
+    margin: 10px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 0.86rem;
+  }
+
+  .steps__list li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    animation: step-in 0.4s ease both;
+    animation-delay: calc(var(--i) * 0.25s);
+  }
+
+  .steps__dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--cobalt);
+  }
+
+  .steps__thought {
+    margin: 10px 0 2px;
+    font-size: 0.84rem;
+    font-style: italic;
+    color: var(--ink-3);
+  }
+
+  .proposal {
+    border: 1px solid var(--rule-strong);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+
+  .proposal__head {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 12px 14px 10px;
+  }
+
+  .proposal__tag {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--ink-2);
+  }
+
+  .diff {
+    margin: 0;
+    padding: 10px 14px;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    line-height: 1.6;
+    background: var(--parchment);
+    overflow-x: auto;
+  }
+
+  .diff__add {
+    display: block;
+    background: rgba(46, 160, 67, 0.16);
+  }
+
+  .proposal__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 12px 14px;
+  }
+
+  .proposal__btn {
+    padding: 4px 12px;
+    font-size: 0.82rem;
+    border: 1px solid var(--rule-strong);
+    border-radius: 999px;
+    color: var(--ink-2);
+  }
+
+  .proposal__btn--main {
+    background: var(--cobalt);
+    border-color: var(--cobalt);
+    color: var(--vellum);
+  }
+
+  .composer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 0 18px 18px;
+    padding: 10px 12px 10px 14px;
+    border: 1px solid var(--rule-strong);
+    border-radius: var(--radius);
+    color: var(--ink-3);
+  }
+
+  .composer__send {
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: var(--cobalt);
+    color: var(--vellum);
+    font-size: 0.9rem;
+  }
+
+  .points {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .card h3 {
+    margin: 0 0 8px;
+  }
+
+  .note {
+    margin-top: 28px;
+    margin-bottom: 0;
+    max-width: 720px;
+  }
+
+  @keyframes step-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+  }
+
+  @media (max-width: 900px) {
+    .assistant {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .steps__list li {
+      animation: none;
+    }
+  }
+</style>

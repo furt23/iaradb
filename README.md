@@ -34,7 +34,7 @@ iara.sql("select k, sum(v) from t group by k", t=arrow_table)   # pyarrow, panda
   - uses every core;
   - spills to disk when a query outgrows its memory limit;
   - streams results without collecting them.
-- **Studio:** reactive notebooks stored as plain `.py` files (marimo format), SQL files, a data catalog, query profiles, charts, scheduled jobs and on-demand clusters.
+- **Studio:** reactive notebooks stored as plain `.py` files (marimo format), SQL files, a data catalog, query profiles, charts, dashboards, scheduled jobs and on-demand clusters. Sign-in and per-user data grants are optional.
 
 ## Install
 
@@ -42,15 +42,15 @@ Wheels will be published to PyPI. Until then, build from source: see [docs/devel
 
 ## Performance
 
-TPC-H, all 22 queries over the same Parquet files, and ClickBench (AWS m7i.4xlarge, 16 vCPUs, 64 GB RAM):
+Sum of the query times, on the same Parquet files (AWS m7i.4xlarge, 16 vCPUs, 64 GB RAM, measured 2026-10-22). Iara is compared with DuckDB and Polars here; seven engines in total are in the docs:
 
-| | Iara | DuckDB 1.5.6 | Polars 2.0.0 |
+| Suite | Iara 0.1.0 | DuckDB 1.5.6 | Polars 2.0.0 |
 |---|---:|---:|---:|
-| TPC-H SF10, total | **5.88 s** | 7.69 s | 8.11 s |
-| TPC-H SF100, total | **60.6 s** | 82.1 s | 90.0 s |
-| ClickBench, 32 queries, total | **17.6 s** | 18.0 s | 20.3 s |
+| TPC-H SF10, all 22 queries | **3.46 s** | 5.37 s | 6.09 s |
+| TPC-H SF100, all 22 queries | **36.6 s** | 58.5 s | 69.3 s |
+| ClickBench, all 43 queries | **17.8 s** | 26.0 s | 28.9 s |
 
-Per-query numbers and how to reproduce them: [docs/benchmarks.md](docs/benchmarks.md).
+TPC-H results were checked against DuckDB's. Per-query numbers, the other engines, and how to reproduce them: [docs/benchmarks.md](docs/benchmarks.md).
 
 ## Documentation
 
