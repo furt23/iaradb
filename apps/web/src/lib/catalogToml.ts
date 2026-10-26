@@ -125,6 +125,7 @@ function catalogTable(name: TableName, path: string, format: unknown, defaultCat
     catalog: name.catalog,
     schema: name.schema,
     table: name.table,
+    full: `${name.catalog}.${name.schema}.${name.table}`,
     path,
     format: fmt,
   };

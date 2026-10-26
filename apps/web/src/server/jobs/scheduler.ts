@@ -2,13 +2,14 @@ import "server-only";
 
 import { due } from "@/lib/jobs";
 
+import { refreshJobs } from "../dashboards/refresh";
 import { listJobs } from "./files";
 import { activeRun, settleInterrupted, startRun } from "./runner";
 import { firedAt, setFiredAt } from "./runs";
 
 /**
- * Starts scheduled jobs: every half minute, each enabled job whose schedule
- * fired since it last ran starts (once, however many times it fired while
+ * Starts scheduled jobs, and the scheduled refreshes of dashboards: every half
+ * minute, each enabled one whose schedule fired since it last ran starts (once, however many times it fired while
  * the Studio was down; a run still going on is not doubled).
  */
 
@@ -30,7 +31,7 @@ export class Scheduler {
     this.ticking = true;
     const started: string[] = [];
     try {
-      const { jobs } = await listJobs();
+      const jobs = [...(await listJobs()).jobs, ...(await refreshJobs())];
       const fired = firedAt();
       const now = this.now();
       for (const job of jobs) {

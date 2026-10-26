@@ -45,6 +45,10 @@ describe("local kernel environment", () => {
     expect(localKernelEnv(env, "linux")).toEqual({ PATH: "/usr/bin", PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8" });
   });
 
+  it("never passes the AI key to the kernel", () => {
+    expect(localKernelEnv({ PATH: "/usr/bin", OPENAI_API_KEY: "key" }, "linux")).not.toHaveProperty("OPENAI_API_KEY");
+  });
+
   it("forces unbuffered UTF-8 output", () => {
     expect(localKernelEnv({ PYTHONUNBUFFERED: "0", PYTHONIOENCODING: "latin-1" }, "linux")).toMatchObject({ PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8" });
   });

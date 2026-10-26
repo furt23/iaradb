@@ -68,7 +68,7 @@ export function tableForFolder(schema: SchemaRef, folder: string, base: string, 
   const sep = base.endsWith("/") ? "" : "/";
   const tablePath = `${base}${sep}${folder}/`;
   const names = { catalog: schema.catalog, schema: schema.name, table };
-  return { name: displayName(names, defaultCatalog), ...names, path: tablePath, format: "parquet", discovered: true };
+  return { name: displayName(names, defaultCatalog), ...names, full: `${names.catalog}.${names.schema}.${table}`, path: tablePath, format: "parquet", discovered: true };
 }
 
 function localFolders(location: string): string {

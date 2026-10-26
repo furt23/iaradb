@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { due, jobId, jobToml, nextScheduled, parseJob, taskOf, type JobSpec } from "./jobs";
+import { checkJob, due, jobId, jobToml, nextScheduled, parseJob, taskOf, type JobSpec } from "./jobs";
 
 const spec: JobSpec = {
   id: "nightly_sales",
@@ -98,7 +98,7 @@ describe("job files", () => {
 
   it("explain what is wrong", () => {
     expect(() => parseJob("x", "name = 'x'")).toThrow(/target is missing/);
-    expect(() => parseJob("x", 'target = "data/x.csv"')).toThrow(/notebook \(\.py\) or a query file/);
+    expect(() => parseJob("x", 'target = "data/x.csv"')).toThrow(/the target is a notebook \(\.py\) or a query file \(\.sql\)/);
     expect(() => parseJob("x", 'target = "a.py"\nschedule = "every day"')).toThrow(/schedule: a schedule has 5 fields/);
     expect(() => parseJob("x", "target = ")).toThrow(/not valid TOML/);
   });
@@ -117,6 +117,11 @@ describe("job files", () => {
     expect(() => parseJob("x", '[[task]]\nkey = "a"\ntarget = "a.py"\nmax_retries = "2"\n')).toThrow(/max_retries is a number/);
     expect(() => parseJob("x", '[[task]]\nkey = "a"\ntarget = "a.py"\n[task.params]\nx = [1]\n')).toThrow(/params\.x is a string, a number or a boolean/);
     expect(() => parseJob("x", "[task]\nkey = \"a\"\ntarget = \"a.py\"\n")).toThrow(/task is a list of tables/);
+  });
+
+  it("refuse a dashboard folder: dashboards schedule their own refreshes", () => {
+    expect(() => parseJob("d", 'target = "dashboards/sales"\n')).toThrow(/notebook \(\.py\) or a query file/);
+    expect(() => checkJob({ ...spec, tasks: [taskOf("dashboards/sales")] })).toThrow(/notebook \(\.py\) or a query file/);
   });
 
   it("explain what is wrong with notify", () => {
