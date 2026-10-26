@@ -3,6 +3,8 @@
 import AreaChartOutlined from "@mui/icons-material/AreaChartOutlined";
 import BarChartOutlined from "@mui/icons-material/BarChartOutlined";
 import BubbleChartOutlined from "@mui/icons-material/BubbleChartOutlined";
+import NumbersOutlined from "@mui/icons-material/NumbersOutlined";
+import PieChartOutlined from "@mui/icons-material/PieChartOutlined";
 import ShowChartOutlined from "@mui/icons-material/ShowChartOutlined";
 import StackedBarChartOutlined from "@mui/icons-material/StackedBarChartOutlined";
 import Box from "@mui/material/Box";
@@ -23,6 +25,8 @@ const KINDS: { kind: ChartKind; label: string; icon: ReactNode }[] = [
   { kind: "area", label: "Area", icon: <AreaChartOutlined fontSize="small" /> },
   { kind: "scatter", label: "Scatter", icon: <BubbleChartOutlined fontSize="small" /> },
   { kind: "histogram", label: "Histogram", icon: <StackedBarChartOutlined fontSize="small" /> },
+  { kind: "pie", label: "Pie", icon: <PieChartOutlined fontSize="small" /> },
+  { kind: "counter", label: "Counter", icon: <NumbersOutlined fontSize="small" /> },
 ];
 
 const AGGS: { agg: ChartAgg; label: string }[] = [
@@ -36,16 +40,29 @@ const AGGS: { agg: ChartAgg; label: string }[] = [
 
 const FIELD = { size: "small", sx: { minWidth: 140 }, slotProps: { inputLabel: { shrink: true } } } as const;
 
+/**
+ * The spec in another kind. A counter has no x or split and one value; leaving one gets x back from the columns.
+ * Pies and counters aggregate (raw rows become a sum) and a pie has one series (no split).
+ */
+function withKind(spec: ChartSpec, kind: ChartKind, columns: ColumnInfo[]): ChartSpec {
+  const agg = (kind === "pie" || kind === "counter") && spec.agg === "none" ? "sum" : spec.agg;
+  if (kind === "counter") return { ...spec, kind, agg, x: "", group: null, y: spec.y.slice(0, 1) };
+  return { ...spec, kind, agg, x: spec.x || (columns[0]?.name ?? ""), group: kind === "pie" ? null : spec.group };
+}
+
 /** What to draw: chart kind, axes, aggregation, series split. */
 export function ChartControls({ spec, columns, onChange }: { spec: ChartSpec; columns: ColumnInfo[]; onChange(spec: ChartSpec): void }) {
   const { t } = useTranslation();
   const set = (patch: Partial<ChartSpec>) => onChange({ ...spec, ...patch });
   const numeric = columns.filter((c) => isNumericType(c.type));
   const histogram = spec.kind === "histogram";
+  const counter = spec.kind === "counter";
   const counting = spec.agg === "count";
+  // a pie or a counter aggregates: no raw rows
+  const aggs = counter || spec.kind === "pie" ? AGGS.filter((a) => a.agg !== "none") : AGGS;
   return (
     <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: 1.5, px: 1.5, py: 1, borderBottom: 1, borderColor: "divider" }}>
-      <ToggleButtonGroup size="small" exclusive value={spec.kind} onChange={(_, kind: ChartKind | null) => kind && set({ kind })} aria-label="chart kind">
+      <ToggleButtonGroup size="small" exclusive value={spec.kind} onChange={(_, kind: ChartKind | null) => kind && onChange(withKind(spec, kind, columns))} aria-label="chart kind">
         {KINDS.map((k) => (
           <Tooltip key={k.kind} title={t(k.label)}>
             <ToggleButton value={k.kind} aria-label={t(k.label)}>
@@ -54,13 +71,15 @@ export function ChartControls({ spec, columns, onChange }: { spec: ChartSpec; co
           </Tooltip>
         ))}
       </ToggleButtonGroup>
-      <TextField {...FIELD} select label={histogram ? t("Column") : t("X axis")} value={spec.x} onChange={(e) => set({ x: e.target.value })}>
-        {(histogram ? numeric : columns).map((c) => (
-          <MenuItem key={c.name} value={c.name}>
-            {c.name}
-          </MenuItem>
-        ))}
-      </TextField>
+      {!counter && (
+        <TextField {...FIELD} select label={histogram ? t("Column") : t("X axis")} value={spec.x} onChange={(e) => set({ x: e.target.value })}>
+          {(histogram ? numeric : columns).map((c) => (
+            <MenuItem key={c.name} value={c.name}>
+              {c.name}
+            </MenuItem>
+          ))}
+        </TextField>
+      )}
       {histogram ? (
         <TextField
           {...FIELD}
@@ -73,13 +92,22 @@ export function ChartControls({ spec, columns, onChange }: { spec: ChartSpec; co
       ) : (
         <>
           <TextField {...FIELD} select label={t("Aggregation")} value={spec.agg} onChange={(e) => set({ agg: e.target.value as ChartAgg })}>
-            {AGGS.map((a) => (
+            {aggs.map((a) => (
               <MenuItem key={a.agg} value={a.agg}>
                 {t(a.label)}
               </MenuItem>
             ))}
           </TextField>
-          {!counting && (
+          {!counting && counter && (
+            <TextField {...FIELD} select label={t("Values")} value={spec.y[0] ?? ""} onChange={(e) => set({ y: [e.target.value] })}>
+              {numeric.map((c) => (
+                <MenuItem key={c.name} value={c.name}>
+                  {c.name}
+                </MenuItem>
+              ))}
+            </TextField>
+          )}
+          {!counting && !counter && (
             <TextField
               {...FIELD}
               select
@@ -97,18 +125,20 @@ export function ChartControls({ spec, columns, onChange }: { spec: ChartSpec; co
           )}
         </>
       )}
-      <TextField {...FIELD} select label={t("Split by")} value={spec.group ?? ""} onChange={(e) => set({ group: e.target.value || null })}>
-        <MenuItem value="">
-          <em>{t("Nothing")}</em>
-        </MenuItem>
-        {columns
-          .filter((c) => c.name !== spec.x)
-          .map((c) => (
-            <MenuItem key={c.name} value={c.name}>
-              {c.name}
-            </MenuItem>
-          ))}
-      </TextField>
+      {!counter && spec.kind !== "pie" && (
+        <TextField {...FIELD} select label={t("Split by")} value={spec.group ?? ""} onChange={(e) => set({ group: e.target.value || null })}>
+          <MenuItem value="">
+            <em>{t("Nothing")}</em>
+          </MenuItem>
+          {columns
+            .filter((c) => c.name !== spec.x)
+            .map((c) => (
+              <MenuItem key={c.name} value={c.name}>
+                {c.name}
+              </MenuItem>
+            ))}
+        </TextField>
+      )}
     </Box>
   );
 }

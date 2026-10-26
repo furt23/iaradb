@@ -6,7 +6,7 @@ import Button from "@mui/material/Button";
 import Tab from "@mui/material/Tab";
 import Tabs from "@mui/material/Tabs";
 import Typography from "@mui/material/Typography";
-import type { ChartSpec, TableOutput } from "@iara/protocol";
+import type { ChartSpec, TableOutput, TablesOutput } from "@iara/protocol";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -22,12 +22,13 @@ import { ResultTable } from "./ResultTable";
 import { WranglerView } from "@/features/wrangler";
 
 function ExportButton({ kernelKey, output, format }: { kernelKey: string; output: TableOutput; format: "csv" | "parquet" }) {
+  const { t } = useTranslation();
   const guard = useGuard();
   const notify = useNotify();
   const run = () =>
     guard(async () => {
       const { path } = unwrap(await exportResult(kernelKey, output.result.id, format));
-      notify(`Exported to ${path}`, "success");
+      notify(t("Download started"), "success");
       window.location.href = `/api/download?kernel=${encodeURIComponent(kernelKey)}&path=${encodeURIComponent(path)}`;
     });
   return (
@@ -71,11 +72,7 @@ export function TableOutputView({ kernelKey, output, height, chart, onChart }: {
         <Typography variant="body2" sx={{ color: "text.secondary", px: 1 }}>
           {rowsLabel(result)} × {result.columns.length} columns
           {profile && ` · ${formatDuration(profile.elapsed_ms)}`}
-          {result.on_disk && (
-            <Box component="span" title="Larger than the kernel's result memory: kept on disk and read page by page">
-              {" · on disk"}
-            </Box>
-          )}
+          {result.on_disk && " · on disk"}
         </Typography>
         <Box sx={{ flex: 1 }} />
         <ExportButton kernelKey={kernelKey} output={output} format="csv" />
@@ -90,6 +87,30 @@ export function TableOutputView({ kernelKey, output, height, chart, onChart }: {
       )}
       {tab === "profile" && profile && <ProfileView profile={profile} />}
       {tab === "plan" && plan && <PlanTree plan={plan} />}
+    </Box>
+  );
+}
+
+/** The tables of a cell that previewed several frames: one tab each, named after its variable. */
+export function TablesOutputView({ kernelKey, output, height }: { kernelKey: string; output: TablesOutput; height?: number }) {
+  const { t } = useTranslation();
+  const [tab, setTab] = useState(0);
+  const at = Math.min(tab, output.tables.length - 1);
+  return (
+    <Box>
+      <Tabs
+        value={at}
+        onChange={(_, v) => setTab(v)}
+        variant="scrollable"
+        scrollButtons="auto"
+        sx={{ minHeight: 34, px: 1, borderBottom: 1, borderColor: "divider", "& .MuiTab-root": { minHeight: 34, py: 0, px: 1.5, fontSize: 12.5, textTransform: "none" } }}
+      >
+        {output.tables.map((o, i) => (
+          <Tab key={i} value={i} label={o.name ?? t("Preview {{n}}", { n: i + 1 })} sx={o.name ? { fontFamily: "'JetBrains Mono Variable', monospace" } : undefined} />
+        ))}
+      </Tabs>
+      {/* keyed: each table opens on its rows */}
+      <TableOutputView key={at} kernelKey={kernelKey} output={output.tables[at]} height={height} />
     </Box>
   );
 }

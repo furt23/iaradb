@@ -57,21 +57,16 @@ function EngineNote({ cloud, version }: { cloud: boolean; version: string }) {
   }, [cloud]);
   if (!cloud) {
     return (
-      <Alert severity="info">
-        AWS is not configured for this Studio, so only the local cluster is available. Set <code>AWS_ACCESS_KEY_ID</code> /{" "}
-        <code>AWS_SECRET_ACCESS_KEY</code> (or <code>IARA_AWS_ENV_FILE</code>) on the server to create clusters.
-      </Alert>
+      <Alert severity="info">AWS is not configured, so only the local cluster is available.</Alert>
     );
   }
   if (wheel === undefined) return null;
   return wheel ? (
     <Alert severity="success" variant="outlined">
-      Clusters install engine {version} ({wheel.slice(wheel.lastIndexOf("/") + 1)}).
+      Clusters install engine {version}.
     </Alert>
   ) : (
-    <Alert severity="warning">
-      Engine {version} is not published for clusters yet: run <code>uv run --env-file .aws python -m iara.cloud publish</code>.
-    </Alert>
+    <Alert severity="warning">Engine {version} is not published for clusters yet.</Alert>
   );
 }
 
@@ -131,9 +126,6 @@ export function ComputeView() {
         <Box sx={{ flex: 1 }}>
           <Typography variant="h5" sx={{ fontWeight: 700 }}>
             {t("Compute")}
-          </Typography>
-          <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.5 }}>
-            {t("Clusters run the kernels of notebooks, the SQL editor and the catalog, and read your data straight from S3. Notebooks attach to a cluster from their toolbar; many can share one.")}
           </Typography>
         </Box>
         <Button variant="contained" startIcon={<Add />} onClick={() => setDialog({ edit: null })} disabled={!overview?.cloud}>

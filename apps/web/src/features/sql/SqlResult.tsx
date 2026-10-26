@@ -18,7 +18,7 @@ export function SqlResult({ runner, tableHeight = 480, chart, onChart }: { runne
       {running && <LiveProgress queries={progress} />}
       {!view ? (
         <Typography sx={{ color: "text.secondary", p: 3 }}>
-          Run a query with <b>Ctrl+Enter</b>. Every catalog table is available by name.
+          Run a query with <b>Ctrl+Enter</b>.
         </Typography>
       ) : view.kind === "error" ? (
         <Typography variant="mono" component="pre" sx={{ p: 2, m: 0, color: "error.main", whiteSpace: "pre-wrap" }}>

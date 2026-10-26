@@ -144,7 +144,7 @@ export function ClusterDialog({
               <FormHelperText sx={{ mt: 0 }}>
                 {machineLocked
                   ? lockedHelper
-                  : t("AWS may reclaim a spot machine with 2 minutes' notice; it starts on-demand when there is no spot capacity.")}
+                  : t("AWS can reclaim the machine with 2 minutes' notice.")}
               </FormHelperText>
             </Box>
             <Stack direction="row" spacing={2}>
@@ -154,7 +154,6 @@ export function ClusterDialog({
                 value={form.autoTerminateMinutes}
                 onChange={(e) => set("autoTerminateMinutes", Number(e.target.value))}
                 slotProps={{ htmlInput: { min: 5, max: 1440 } }}
-                helperText={t("No kernel activity for this long ends the machine")}
                 fullWidth
               />
               <TextField
@@ -164,7 +163,7 @@ export function ClusterDialog({
                 onChange={(e) => set("volumeGb", Number(e.target.value))}
                 disabled={machineLocked}
                 slotProps={{ htmlInput: { min: 20, max: 2000 } }}
-                helperText={machineLocked ? lockedHelper : t("Scratch space and spill")}
+                helperText={machineLocked ? lockedHelper : undefined}
                 fullWidth
               />
             </Stack>
@@ -174,21 +173,12 @@ export function ClusterDialog({
               value={form.maxHours}
               onChange={(e) => set("maxHours", Number(e.target.value))}
               slotProps={{ htmlInput: { min: 1, max: 12 } }}
-              helperText={t("The machine terminates after this long, idle or not")}
+              helperText={t("Terminates the machine even when busy.")}
             />
           </Stack>
         )}
 
-        {tab === "libraries" && (
-          <Stack spacing={1.5}>
-            <LibrariesEditor value={form.libraries} onChange={(v) => set("libraries", v)} />
-            <FormHelperText sx={{ mt: 0 }}>
-              {edit?.state === "running"
-                ? t("Added libraries install right away; removed ones leave at the next start.")
-                : t("Installed when the cluster starts.")}
-            </FormHelperText>
-          </Stack>
-        )}
+        {tab === "libraries" && <LibrariesEditor value={form.libraries} onChange={(v) => set("libraries", v)} />}
 
         {tab === "environment" && (
           <Stack spacing={3}>
@@ -198,7 +188,7 @@ export function ClusterDialog({
               valueLabel={t("Value")}
               value={form.env}
               onChange={(v) => set("env", v)}
-              helperText={t("Kernels see these variables. Not for secrets: they are stored in the Studio and visible on the machine.")}
+              helperText={t("Not for secrets: they are visible on the machine.")}
             />
             <TextField
               label={t("Init script")}
@@ -207,14 +197,14 @@ export function ClusterDialog({
               value={form.initScript}
               onChange={(e) => set("initScript", e.target.value)}
               disabled={machineLocked}
-              placeholder={t("#!/bin/bash\n# runs as root at boot, after the engine and libraries")}
+              placeholder="#!/bin/bash"
               error={initTooBig}
               helperText={
                 machineLocked
                   ? lockedHelper
                   : initTooBig
                     ? t("The init script is over 8 KB")
-                    : t("Runs as root at boot; a failure stops the start. Max 8 KB.")
+                    : t("Runs as root at boot. A failure stops the start. Max 8 KB.")
               }
               sx={{ "& .MuiInputBase-input": { fontFamily: "monospace" } }}
             />
@@ -229,7 +219,7 @@ export function ClusterDialog({
             value={form.tags}
             onChange={(v) => set("tags", v)}
             disabled={machineLocked}
-            helperText={machineLocked ? lockedHelper : t("Added to the machine and its disk in AWS, e.g. for cost reports.")}
+            helperText={machineLocked ? lockedHelper : undefined}
           />
         )}
       </DialogContent>

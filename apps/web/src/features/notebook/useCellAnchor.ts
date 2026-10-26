@@ -20,7 +20,8 @@ export function cellLink(path: string, cellId: string, origin: string = window.l
   return `${origin}${fileHref(path)}#cell-${cellId}`;
 }
 
-function reveal(root: HTMLElement, id: string, color: string): boolean {
+/** Scroll cell `id` to the middle of the view and flash it; false when it is not rendered. */
+export function reveal(root: HTMLElement, id: string, color: string): boolean {
   const cell = root.querySelector<HTMLElement>(`[data-cell-id="${id}"]`);
   if (!cell) return false;
   cell.scrollIntoView({ behavior: "smooth", block: "center" });

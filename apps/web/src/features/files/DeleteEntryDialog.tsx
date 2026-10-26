@@ -20,11 +20,10 @@ import { deleteEntry, entryInfo } from "@/server/actions/files";
 import type { EntryInfo } from "@/server/workspace/fileOps";
 
 function describe(info: EntryInfo | null, t: (key: string, opt?: Record<string, unknown>) => string): string {
-  if (!info) return "";
-  if (!info.folder) return info.notebooks.length ? t("This notebook's kernel will be stopped.") : "";
+  if (!info?.folder) return "";
   const nb = info.notebooks.length;
   const countStr = info.files === 1 ? t("The folder holds {{count}} file", { count: info.files }) : t("The folder holds {{count}} files", { count: info.files });
-  return `${countStr}${nb ? `, ${nb} ${t("of them notebooks (their kernels will be stopped)")}` : ""}.`;
+  return `${countStr}${nb ? `, ${nb} ${t("of them notebooks")}` : ""}.`;
 }
 
 /** Confirm, then delete a file or folder: its files, the kernels and open tabs of its notebooks. */
@@ -65,7 +64,7 @@ export function DeleteEntryDialog({ path, onClose }: { path: string | null; onCl
           <Box component="strong" sx={{ overflowWrap: "anywhere" }}>
             {path}
           </Box>{" "}
-          {t("will be deleted from the workspace.")} {describe(info, t)} {t("This cannot be undone here (files in Git can be restored from there).")}
+          {t("will be deleted from the workspace.")} {describe(info, t)} {t("This can't be undone.")}
         </DialogContentText>
       </DialogContent>
       <DialogActions>

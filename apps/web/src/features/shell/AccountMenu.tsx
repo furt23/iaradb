@@ -1,5 +1,6 @@
 "use client";
 
+import HubOutlined from "@mui/icons-material/HubOutlined";
 import LogoutOutlined from "@mui/icons-material/LogoutOutlined";
 import PersonOutline from "@mui/icons-material/PersonOutlined";
 import Avatar from "@mui/material/Avatar";
@@ -15,6 +16,8 @@ import Typography from "@mui/material/Typography";
 import { useState } from "react";
 
 import { useTranslation } from "@/i18n";
+
+import { TokensDialog } from "./TokensDialog";
 
 /** The user the Studio runs as; `signOut` is false when sign-in is off. */
 export interface AppAccount {
@@ -38,6 +41,7 @@ export function initials(name: string): string {
 export function AccountMenu({ account }: { account: AppAccount }) {
   const { t } = useTranslation();
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const [tokensOpen, setTokensOpen] = useState(false);
   const local = !account.signOut;
   const label = local ? t("Local Studio") : account.name;
   return (
@@ -74,6 +78,20 @@ export function AccountMenu({ account }: { account: AppAccount }) {
         </Box>
         {account.signOut && <Divider sx={{ my: 0.5 }} />}
         {account.signOut && (
+          <MenuItem
+            onClick={() => {
+              setAnchor(null);
+              setTokensOpen(true);
+            }}
+          >
+            <ListItemIcon>
+              <HubOutlined fontSize="small" />
+            </ListItemIcon>
+            {t("Connect an AI client…")}
+          </MenuItem>
+        )}
+        {account.signOut && <Divider sx={{ my: 0.5 }} />}
+        {account.signOut && (
           // a full page load: Auth0 ends the session too
           <MenuItem component="a" href="/auth/logout">
             <ListItemIcon>
@@ -83,6 +101,7 @@ export function AccountMenu({ account }: { account: AppAccount }) {
           </MenuItem>
         )}
       </Menu>
+      <TokensDialog open={tokensOpen} onClose={() => setTokensOpen(false)} />
     </>
   );
 }

@@ -119,7 +119,7 @@ export function AddTableDialog({
               }}
               autoFocus={Boolean(initialPath)}
               error={badName}
-              helperText={badName ? t("Letters, digits and underscores") : t("How queries refer to it")}
+              helperText={badName ? t("Letters, digits and underscores") : undefined}
               sx={{ flex: 1 }}
             />
             <TextField select label={t("Catalog")} value={chosen} onChange={(e) => pickCatalog(e.target.value)} sx={{ minWidth: 150 }}>

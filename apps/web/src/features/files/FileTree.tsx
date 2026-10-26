@@ -90,7 +90,7 @@ function Row({ node, depth, open, onToggle, active, onMenu }: { node: FileNode; 
         {content}
       </ButtonBase>
     ) : (
-      <Box sx={{ ...sx, display: "flex", alignItems: "center", cursor: "default" }} title="data file">
+      <Box sx={{ ...sx, display: "flex", alignItems: "center", cursor: "default" }}>
         {content}
       </Box>
     );

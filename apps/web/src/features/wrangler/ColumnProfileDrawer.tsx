@@ -13,6 +13,7 @@ import IconButton from "@mui/material/IconButton";
 import LinearProgress from "@mui/material/LinearProgress";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
+import { useTranslation } from "react-i18next";
 
 import type { WrangleProfile } from "@iara/protocol";
 import { typeLabel } from "@/lib/format";
@@ -25,6 +26,7 @@ interface Props {
 }
 
 export function ColumnProfileDrawer({ profile, onClose, onFilterValue }: Props) {
+  const { t } = useTranslation();
   if (!profile) return null;
   if (profile === "loading") {
     return (
@@ -53,28 +55,28 @@ export function ColumnProfileDrawer({ profile, onClose, onFilterValue }: Props) 
 
       <Box sx={{ display: "flex", gap: 1, mb: 2 }}>
         <Chip label={typeLabel(profile.type)} title={profile.type} size="small" variant="outlined" sx={{ fontSize: 11 }} />
-        <Chip label={`${profile.total} rows`} size="small" variant="outlined" />
+        <Chip label={t("{{count}} rows", { count: profile.total })} size="small" variant="outlined" />
       </Box>
 
       <Typography variant="overline" sx={{ color: "text.secondary", fontSize: 10 }}>
-        Completeness
+        {t("Completeness")}
       </Typography>
       <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 1, my: 1 }}>
         <Box sx={{ p: 1, border: 1, borderColor: "divider", borderRadius: 1, textAlign: "center" }}>
           <Typography variant="caption" sx={{ color: "text.secondary" }}>
-            Valid
+            {t("Valid")}
           </Typography>
           <Typography sx={{ fontWeight: 700, color: "success.main" }}>{validPct}%</Typography>
         </Box>
         <Box sx={{ p: 1, border: 1, borderColor: "divider", borderRadius: 1, textAlign: "center" }}>
           <Typography variant="caption" sx={{ color: "text.secondary" }}>
-            Null
+            {t("Null")}
           </Typography>
           <Typography sx={{ fontWeight: 700, color: nullPct > 0 ? "warning.main" : "text.secondary" }}>{nullPct}%</Typography>
         </Box>
         <Box sx={{ p: 1, border: 1, borderColor: "divider", borderRadius: 1, textAlign: "center" }}>
           <Typography variant="caption" sx={{ color: "text.secondary" }}>
-            Distinct
+            {t("Distinct")}
           </Typography>
           <Typography sx={{ fontWeight: 700 }}>{profile.distinct}</Typography>
         </Box>
@@ -84,37 +86,37 @@ export function ColumnProfileDrawer({ profile, onClose, onFilterValue }: Props) 
         <>
           <Divider sx={{ my: 2 }} />
           <Typography variant="overline" sx={{ color: "text.secondary", fontSize: 10 }}>
-            Statistics
+            {t("Statistics")}
           </Typography>
           <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, my: 1 }}>
             <Box sx={{ display: "flex", justifyContent: "space-between", py: 0.25 }}>
               <Typography variant="body2" sx={{ color: "text.secondary" }}>
-                Min:
+                {t("Min")}:
               </Typography>
               <Typography variant="mono">{String(profile.min)}</Typography>
             </Box>
             <Box sx={{ display: "flex", justifyContent: "space-between", py: 0.25 }}>
               <Typography variant="body2" sx={{ color: "text.secondary" }}>
-                Max:
+                {t("Max")}:
               </Typography>
               <Typography variant="mono">{String(profile.max)}</Typography>
             </Box>
             <Box sx={{ display: "flex", justifyContent: "space-between", py: 0.25 }}>
               <Typography variant="body2" sx={{ color: "text.secondary" }}>
-                Mean:
+                {t("Mean")}:
               </Typography>
               <Typography variant="mono">{profile.mean}</Typography>
             </Box>
             <Box sx={{ display: "flex", justifyContent: "space-between", py: 0.25 }}>
               <Typography variant="body2" sx={{ color: "text.secondary" }}>
-                Median:
+                {t("Median")}:
               </Typography>
               <Typography variant="mono">{profile.median}</Typography>
             </Box>
             {profile.std !== null && profile.std !== undefined && (
               <Box sx={{ display: "flex", justifyContent: "space-between", py: 0.25, gridColumn: "span 2" }}>
                 <Typography variant="body2" sx={{ color: "text.secondary" }}>
-                  Std dev:
+                  {t("Std dev")}:
                 </Typography>
                 <Typography variant="mono">{profile.std}</Typography>
               </Box>
@@ -126,10 +128,10 @@ export function ColumnProfileDrawer({ profile, onClose, onFilterValue }: Props) 
       <Divider sx={{ my: 2 }} />
       <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 1 }}>
         <Typography variant="overline" sx={{ color: "text.secondary", fontSize: 10 }}>
-          Top values
+          {t("Top values")}
         </Typography>
         <Typography variant="caption" sx={{ color: "text.secondary" }}>
-          {profile.top.length} of {profile.distinct}
+          {t("{{shown}} of {{distinct}}", { shown: profile.top.length, distinct: profile.distinct })}
         </Typography>
       </Box>
 
@@ -145,7 +147,7 @@ export function ColumnProfileDrawer({ profile, onClose, onFilterValue }: Props) 
                   {f.count} ({Math.round(f.share * 100)}%)
                 </Typography>
                 {onFilterValue && (
-                  <Tooltip title={`Filter to rows where ${profile.name} = '${f.value}'`}>
+                  <Tooltip title={t("Filter to rows where {{column}} = '{{value}}'", { column: profile.name, value: f.value })}>
                     <IconButton size="small" onClick={() => onFilterValue(profile.name, f.value, false)}>
                       <FilterList fontSize="inherit" sx={{ fontSize: 14 }} />
                     </IconButton>

@@ -21,6 +21,8 @@ export interface SetupDialogProps {
   /** the last run's error, first line */
   error: string | null;
   running: boolean;
+  /** the notebook's cluster runs: without it, Shift+Enter saves and there is no run button */
+  canRun: boolean;
   onClose(): void;
   /** applies the code to the cell, as an edit of any other cell */
   onSave(id: string, code: string): void;
@@ -29,7 +31,7 @@ export interface SetupDialogProps {
 }
 
 /** The notebook's setup code (`with app.setup:`): imports and names every cell can use. It is not shown among the cells. */
-export function SetupDialog({ open, path, cell, error, running, onClose, onSave, onRun }: SetupDialogProps) {
+export function SetupDialog({ open, path, cell, error, running, canRun, onClose, onSave, onRun }: SetupDialogProps) {
   const [draft, setDraft] = useState("");
   useEffect(() => {
     if (open && cell) setDraft(cell.code);
@@ -45,21 +47,34 @@ export function SetupDialog({ open, path, cell, error, running, onClose, onSave,
       <DialogTitle>Setup code</DialogTitle>
       <DialogContent>
         <Typography variant="body2" sx={{ color: "text.secondary", mb: 1.5 }}>
-          Runs before every other cell; the names it defines (mo, ia, ws, ...) are available in all of them. Saved as <code>with app.setup:</code>.
+          Runs before every other cell.
         </Typography>
         {error && (
           <Typography variant="body2" role="alert" sx={{ color: "error.main", mb: 1.5 }}>
             Last run failed: {error}
           </Typography>
         )}
-        <CodeEditor value={draft} onChange={setDraft} language="python" assist={assist} autoFocus minHeight={160} maxHeight={420} onRun={run} onRunInPlace={run} onSave={save} />
+        <CodeEditor
+          value={draft}
+          onChange={setDraft}
+          language="python"
+          assist={assist}
+          autoFocus
+          minHeight={160}
+          maxHeight={420}
+          onRun={canRun ? run : save}
+          onRunInPlace={canRun ? run : save}
+          onSave={save}
+        />
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
         <Button onClick={save}>Save</Button>
-        <Button variant="contained" color="secondary" onClick={run} disabled={running}>
-          Save and run
-        </Button>
+        {canRun && (
+          <Button variant="contained" color="secondary" onClick={run} disabled={running}>
+            Save and run
+          </Button>
+        )}
       </DialogActions>
     </Dialog>
   );

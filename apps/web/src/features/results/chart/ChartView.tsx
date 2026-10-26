@@ -70,7 +70,7 @@ export function ChartView({ kernelKey, meta, spec: saved, onSpec, height = 320 }
       </Box>
       {!problem && !error && shown?.data.truncated && (
         <Typography sx={{ px: 2, pb: 1, fontSize: 12, color: "text.disabled" }}>
-          {shown.spec.kind === "bar" ? "Showing the largest categories only." : "Showing a sample of the rows."}
+          {shown.spec.kind === "bar" || shown.spec.kind === "pie" ?"Showing the largest categories only." : "Showing a sample of the rows."}
         </Typography>
       )}
     </Box>

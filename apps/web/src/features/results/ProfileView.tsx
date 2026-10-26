@@ -9,6 +9,8 @@ import type { PipelineStats, QueryProfile } from "@iara/protocol";
 import { formatBytes, formatCompact, formatCount, formatDuration } from "@/lib/format";
 
 import { operatorColor, operatorName } from "./operators";
+import { PipelineLines } from "./PipelineLines";
+import { pipelineLines } from "./progress";
 
 function Step({ label }: { label: string }) {
   const color = operatorColor(label);
@@ -82,23 +84,14 @@ export function ProfileView({ profile }: { profile: QueryProfile }) {
   );
 }
 
-/** Compact live progress of running queries. */
+/** Live progress of the running query: a short line per pipeline, with how complete it is. */
 export function LiveProgress({ queries }: { queries: QueryProfile[] }) {
   const q = queries[queries.length - 1];
-  if (!q) return null;
-  const current = q.pipelines.find((p) => !p.finished) ?? q.pipelines[q.pipelines.length - 1];
-  if (!current) return <LinearProgress sx={{ height: 3 }} />;
-  const pct = (current.morsels_done / Math.max(1, current.morsels_total)) * 100;
+  const lines = q ? pipelineLines(q) : [];
+  if (lines.length === 0) return null;
   return (
     <Box sx={{ px: 1.5, py: 0.75 }}>
-      <Box sx={{ display: "flex", gap: 1, alignItems: "center", mb: 0.5 }}>
-        <Step label={current.source} />
-        <Typography variant="mono" sx={{ color: "text.secondary" }}>
-          pipeline {q.pipelines.indexOf(current) + 1} · {current.morsels_done}/{current.morsels_total} morsels · {formatCompact(current.rows_in)} rows ·{" "}
-          {formatDuration(q.elapsed_ms)}
-        </Typography>
-      </Box>
-      <LinearProgress variant="determinate" value={pct} sx={{ height: 3, borderRadius: 2 }} />
+      <PipelineLines lines={lines} />
     </Box>
   );
 }

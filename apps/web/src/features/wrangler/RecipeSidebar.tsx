@@ -7,6 +7,7 @@ import Box from "@mui/material/Box";
 import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
+import { useTranslation } from "react-i18next";
 
 import type { WranglerStep } from "./types";
 
@@ -20,14 +21,15 @@ interface Props {
 }
 
 export function RecipeSidebar({ steps, activeStepId, onSelectStep, onToggleStep, onDeleteStep, onClearSteps }: Props) {
+  const { t } = useTranslation();
   return (
     <Box sx={{ width: 240, display: "flex", flexDirection: "column", borderRight: 1, borderColor: "divider", bgcolor: "background.paper" }}>
       <Box sx={{ px: 2, py: 1, display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: 1, borderColor: "divider" }}>
         <Typography variant="overline" sx={{ color: "text.secondary" }}>
-          Steps{steps.length > 0 && ` · ${steps.length}`}
+          {t("Steps")}{steps.length > 0 && ` · ${steps.length}`}
         </Typography>
         {steps.length > 0 && (
-          <Tooltip title="Clear all steps">
+          <Tooltip title={t("Clear all steps")}>
             <IconButton size="small" onClick={onClearSteps}>
               <ClearAll fontSize="small" />
             </IconButton>
@@ -54,7 +56,7 @@ export function RecipeSidebar({ steps, activeStepId, onSelectStep, onToggleStep,
           }}
         >
           <Typography variant="body2" sx={{ fontWeight: 500 }}>
-            Source
+            {t("Source")}
           </Typography>
         </Box>
 
@@ -83,19 +85,19 @@ export function RecipeSidebar({ steps, activeStepId, onSelectStep, onToggleStep,
                 checked={step.enabled}
                 onChange={() => onToggleStep(step.id)}
                 sx={{ p: 0.5 }}
-                title={step.enabled ? "Disable this step" : "Enable this step"}
+                title={step.enabled ? t("Disable this step") : t("Enable this step")}
               />
 
               <Box sx={{ flex: 1, minWidth: 0, cursor: "pointer" }} onClick={() => onSelectStep(step.id)}>
                 <Typography variant="caption" sx={{ color: "text.secondary", display: "block" }}>
-                  Step {idx + 1} · {step.op.kind.replace("_", " ")}
+                  {t("Step {{number}} · {{kind}}", { number: idx + 1, kind: step.op.kind.replaceAll("_", " ") })}
                 </Typography>
                 <Typography variant="body2" noWrap sx={{ fontWeight: 550, fontSize: 12.5 }} title={step.label}>
                   {step.label}
                 </Typography>
               </Box>
 
-              <Tooltip title="Delete step">
+              <Tooltip title={t("Delete step")}>
                 <IconButton size="small" onClick={() => onDeleteStep(step.id)} sx={{ opacity: 0.7, "&:hover": { opacity: 1 } }}>
                   <DeleteOutlined fontSize="small" sx={{ fontSize: 16 }} />
                 </IconButton>

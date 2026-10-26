@@ -3,15 +3,18 @@
 import { markdown } from "@codemirror/lang-markdown";
 import { python } from "@codemirror/lang-python";
 import { sql, StandardSQL } from "@codemirror/lang-sql";
+import { forceLinting } from "@codemirror/lint";
+import { unifiedMergeView } from "@codemirror/merge";
 import { Prec, type Extension } from "@codemirror/state";
-import { keymap, tooltips } from "@codemirror/view";
+import { keymap, tooltips, type EditorView } from "@codemirror/view";
 import { useColorScheme } from "@mui/material/styles";
 import CodeMirror from "@uiw/react-codemirror";
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef } from "react";
 
 import type { EditorAssist } from "./assist";
 import { kernelCompletion } from "./completion";
 import { editorTheme } from "./editorTheme";
+import { FindContext, findHighlight, setFindRegExp } from "./findHighlight";
 import { kernelLinter } from "./lint";
 import { signatureHelp } from "./signatureHelp";
 import { sqlNamespace } from "./sqlNamespace";
@@ -46,6 +49,10 @@ export interface CodeEditorProps {
   lineNumbers?: boolean;
   /** completions, signature help and diagnostics from the kernel */
   assist?: EditorAssist;
+  /** diagnostics are asked for again whenever this turns true (what the code reads from elsewhere may have changed) */
+  relint?: boolean;
+  /** the code before a change Iara proposes: the editor shows its value as a diff against it (removed lines in red, new ones in green), with keep/undo controls on each changed block unless read-only */
+  original?: string;
 }
 
 function languageExtension(language: EditorLanguage, schema?: CodeEditorProps["schema"]): Extension {
@@ -86,10 +93,29 @@ export function CodeEditor(props: CodeEditorProps) {
     );
   }, []);
   const assist = useMemo(() => assistExtensions(props.language, props.assist), [props.language, props.assist]);
-  const extensions = useMemo(
-    () => [languageExtension(props.language, props.schema), editorTheme(scheme), keys, floatingTooltips(), ...assist],
-    [props.language, props.schema, scheme, keys, assist],
+  // rebuilt only for a new original or mode: reconfiguring the editor drops plugin state
+  const merge = useMemo(
+    () => (props.original === undefined ? [] : unifiedMergeView({ original: props.original, mergeControls: !props.readOnly, gutter: true })),
+    [props.original, props.readOnly],
   );
+  const extensions = useMemo(
+    () => [languageExtension(props.language, props.schema), editorTheme(scheme), keys, findHighlight, floatingTooltips(), ...assist, merge],
+    [props.language, props.schema, scheme, keys, assist, merge],
+  );
+  // in a notebook the find bar searches every cell: it replaces the editor's own search panel
+  const find = useContext(FindContext);
+  const regexp = find?.regexp ?? null;
+  const view = useRef<EditorView | null>(null);
+  const regexpRef = useRef(regexp);
+  regexpRef.current = regexp;
+  const onCreateEditor = useCallback((v: EditorView) => {
+    view.current = v;
+    v.dispatch({ effects: setFindRegExp.of(regexpRef.current) });
+  }, []);
+  useEffect(() => view.current?.dispatch({ effects: setFindRegExp.of(regexp) }), [regexp]);
+  useEffect(() => {
+    if (props.relint && view.current) forceLinting(view.current);
+  }, [props.relint]);
   const onChange = useCallback((value: string) => handlers.current.onChange?.(value), []);
   // the kernel's completions replace the built-in ones (they include them)
   const kernelCompletes = props.language === "python" && !!props.assist?.complete;
@@ -104,9 +130,10 @@ export function CodeEditor(props: CodeEditorProps) {
       bracketMatching: true,
       closeBrackets: true,
       indentOnInput: true,
+      searchKeymap: !find,
       tabSize: 4,
     }),
-    [props.lineNumbers, readOnly, kernelCompletes],
+    [props.lineNumbers, readOnly, kernelCompletes, find],
   );
   return (
     <CodeMirror
@@ -116,6 +143,7 @@ export function CodeEditor(props: CodeEditorProps) {
       theme="none"
       readOnly={props.readOnly}
       editable={!props.readOnly}
+      onCreateEditor={onCreateEditor}
       autoFocus={props.autoFocus}
       placeholder={props.placeholder}
       minHeight={props.minHeight ? `${props.minHeight}px` : undefined}

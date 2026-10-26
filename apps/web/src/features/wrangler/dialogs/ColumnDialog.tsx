@@ -1,6 +1,5 @@
 "use client";
 
-import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Checkbox from "@mui/material/Checkbox";
 import Dialog from "@mui/material/Dialog";
@@ -16,8 +15,8 @@ import Select from "@mui/material/Select";
 import Tab from "@mui/material/Tab";
 import Tabs from "@mui/material/Tabs";
 import TextField from "@mui/material/TextField";
-import Typography from "@mui/material/Typography";
 import type { ColumnInfo } from "@iara/protocol";
+import { useTranslation } from "react-i18next";
 import { useEffect, useState } from "react";
 
 import type { CastTargetType, WranglerStep } from "../types";
@@ -41,6 +40,7 @@ const DATA_TYPES: { type: CastTargetType; label: string }[] = [
 ];
 
 export function ColumnDialog({ open, columns, defaultColumn, onClose, onApply }: Props) {
+  const { t } = useTranslation();
   const [tab, setTab] = useState<"rename" | "cast" | "drop" | "round" | "encode">("rename");
   const [column, setColumn] = useState<string>(defaultColumn || columns[0]?.name || "");
   const [newName, setNewName] = useState<string>(defaultColumn ? `${defaultColumn}_renamed` : "");
@@ -62,7 +62,7 @@ export function ColumnDialog({ open, columns, defaultColumn, onClose, onApply }:
       if (!column || !newName.trim()) return;
       onApply({
         id: `rename_${Date.now()}`,
-        label: `Rename ${column} to ${newName.trim()}`,
+        label: t("Rename {{from}} to {{to}}", { from: column, to: newName.trim() }),
         enabled: true,
         op: { kind: "rename_column", from: column, to: newName.trim() },
       });
@@ -70,7 +70,7 @@ export function ColumnDialog({ open, columns, defaultColumn, onClose, onApply }:
       if (!column) return;
       onApply({
         id: `cast_${Date.now()}`,
-        label: `Cast ${column} to ${targetType}`,
+        label: t("Cast {{column}} to {{type}}", { column, type: targetType }),
         enabled: true,
         op: { kind: "cast", column, toType: targetType },
       });
@@ -78,7 +78,7 @@ export function ColumnDialog({ open, columns, defaultColumn, onClose, onApply }:
       if (dropList.length === 0) return;
       onApply({
         id: `drop_${Date.now()}`,
-        label: `Drop column${dropList.length > 1 ? "s" : ""} ${dropList.join(", ")}`,
+        label: dropList.length > 1 ? t("Drop columns {{names}}", { names: dropList.join(", ") }) : t("Drop column {{names}}", { names: dropList.join(", ") }),
         enabled: true,
         op: { kind: "drop_columns", columns: dropList },
       });
@@ -86,7 +86,7 @@ export function ColumnDialog({ open, columns, defaultColumn, onClose, onApply }:
       if (!column) return;
       onApply({
         id: `round_${Date.now()}`,
-        label: `Round ${column} to ${roundDecimals} decimal${roundDecimals !== 1 ? "s" : ""}`,
+        label: roundDecimals !== 1 ? t("Round {{column}} to {{decimals}} decimals", { column, decimals: roundDecimals }) : t("Round {{column}} to 1 decimal", { column }),
         enabled: true,
         op: { kind: "math_round", column, decimals: roundDecimals },
       });
@@ -94,7 +94,7 @@ export function ColumnDialog({ open, columns, defaultColumn, onClose, onApply }:
       if (!column) return;
       onApply({
         id: `encode_${Date.now()}`,
-        label: `One-hot encode ${column}`,
+        label: t("One-hot encode {{column}}", { column }),
         enabled: true,
         op: { kind: "one_hot_encode", column },
       });
@@ -104,7 +104,7 @@ export function ColumnDialog({ open, columns, defaultColumn, onClose, onApply }:
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
-      <DialogTitle>Columns</DialogTitle>
+      <DialogTitle>{t("Columns")}</DialogTitle>
       <Tabs
         value={tab}
         onChange={(_, v) => setTab(v)}
@@ -112,18 +112,18 @@ export function ColumnDialog({ open, columns, defaultColumn, onClose, onApply }:
         scrollButtons="auto"
         sx={{ px: 2, borderBottom: 1, borderColor: "divider" }}
       >
-        <Tab value="rename" label="Rename" />
-        <Tab value="cast" label="Change type" />
-        <Tab value="drop" label="Drop" />
-        <Tab value="round" label="Round" />
-        <Tab value="encode" label="One-hot" />
+        <Tab value="rename" label={t("Rename")} />
+        <Tab value="cast" label={t("Change type")} />
+        <Tab value="drop" label={t("Drop")} />
+        <Tab value="round" label={t("Round")} />
+        <Tab value="encode" label={t("One-hot")} />
       </Tabs>
 
       <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, pt: 2 }}>
         {tab !== "drop" && (
           <FormControl fullWidth size="small">
-            <InputLabel>Column</InputLabel>
-            <Select value={column} label="Column" onChange={(e) => setColumn(e.target.value)}>
+            <InputLabel>{t("Column")}</InputLabel>
+            <Select value={column} label={t("Column")} onChange={(e) => setColumn(e.target.value)}>
               {columns.map((c) => (
                 <MenuItem key={c.name} value={c.name}>
                   {c.name} ({typeLabel(c.type)})
@@ -135,7 +135,7 @@ export function ColumnDialog({ open, columns, defaultColumn, onClose, onApply }:
 
         {tab === "rename" && (
           <TextField
-            label="New name"
+            label={t("New name")}
             size="small"
             fullWidth
             value={newName}
@@ -146,11 +146,11 @@ export function ColumnDialog({ open, columns, defaultColumn, onClose, onApply }:
 
         {tab === "cast" && (
           <FormControl fullWidth size="small">
-            <InputLabel>Type</InputLabel>
-            <Select value={targetType} label="Type" onChange={(e) => setTargetType(e.target.value as CastTargetType)}>
+            <InputLabel>{t("Type")}</InputLabel>
+            <Select value={targetType} label={t("Type")} onChange={(e) => setTargetType(e.target.value as CastTargetType)}>
               {DATA_TYPES.map((d) => (
                 <MenuItem key={d.type} value={d.type}>
-                  {d.label}
+                  {t(d.label)}
                 </MenuItem>
               ))}
             </Select>
@@ -159,12 +159,12 @@ export function ColumnDialog({ open, columns, defaultColumn, onClose, onApply }:
 
         {tab === "drop" && (
           <FormControl fullWidth size="small">
-            <InputLabel>Columns to Drop</InputLabel>
+            <InputLabel>{t("Columns to Drop")}</InputLabel>
             <Select
               multiple
               value={dropList}
               onChange={(e) => setDropList(typeof e.target.value === "string" ? e.target.value.split(",") : e.target.value)}
-              input={<OutlinedInput label="Columns to drop" />}
+              input={<OutlinedInput label={t("Columns to drop")} />}
               renderValue={(selected) => selected.join(", ")}
             >
               {columns.map((c) => (
@@ -179,7 +179,7 @@ export function ColumnDialog({ open, columns, defaultColumn, onClose, onApply }:
 
         {tab === "round" && (
           <TextField
-            label="Decimal places"
+            label={t("Decimal places")}
             type="number"
             size="small"
             fullWidth
@@ -188,18 +188,12 @@ export function ColumnDialog({ open, columns, defaultColumn, onClose, onApply }:
             slotProps={{ htmlInput: { min: 0, max: 10 } }}
           />
         )}
-
-        {tab === "encode" && (
-          <Typography variant="body2" sx={{ color: "text.secondary" }}>
-            Generates binary 0/1 indicator columns for the top distinct categories of <strong>{column}</strong>.
-          </Typography>
-        )}
       </DialogContent>
 
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose}>{t("Cancel")}</Button>
         <Button variant="contained" onClick={handleApply}>
-          Apply
+          {t("Apply")}
         </Button>
       </DialogActions>
     </Dialog>

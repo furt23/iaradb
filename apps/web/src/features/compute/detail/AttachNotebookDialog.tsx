@@ -92,7 +92,7 @@ export function AttachNotebookDialog({
               label={t("Notebook")}
               margin="dense"
               autoFocus
-              helperText={t("Its kernel moves to this cluster the next time it runs.")}
+              helperText={t("Takes effect the next time it runs.")}
             />
           )}
         />

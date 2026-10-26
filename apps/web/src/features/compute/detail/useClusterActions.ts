@@ -23,7 +23,7 @@ export function useClusterActions(refresh: () => Promise<unknown>, hooks: Cluste
     });
   return {
     start: (c: ClusterView) =>
-      run(async () => void unwrap(await startCluster(c.id)), `Starting ${c.name}: a machine is on its way (2-3 minutes)`),
+      run(async () => void unwrap(await startCluster(c.id)), `Starting ${c.name} (2-3 minutes)`),
     terminate: (c: ClusterView) => run(async () => void unwrap(await terminateCluster(c.id)), `Terminating ${c.name}`),
     clone: (c: ClusterView) => run(async () => hooks.onCloned?.(unwrap(await cloneCluster(c.id)).id), `Cloned ${c.name}`),
     remove: (c: ClusterView) =>

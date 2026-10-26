@@ -2,18 +2,21 @@
 
 import Add from "@mui/icons-material/Add";
 import DeleteOutline from "@mui/icons-material/DeleteOutlineOutlined";
+import LockOutlined from "@mui/icons-material/LockOutlined";
 import Divider from "@mui/material/Divider";
 import Menu from "@mui/material/Menu";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { useAccount } from "@/features/shell/account";
 import { useGuard, useNotify } from "@/features/shell/notify";
 import { unwrap } from "@/lib/action";
 import { removeSchema } from "@/server/actions/catalog";
 
 import { ActionItem } from "./ActionItem";
 import { AddTableDialog } from "./AddTableDialog";
+import { PermissionsDialog } from "./PermissionsDialog";
 import type { SchemaGroup } from "./schemaGroups";
 import type { MenuAnchor } from "./TreeRow";
 
@@ -26,6 +29,8 @@ export interface SchemaMenuTarget {
 export function SchemaMenu({ target, onClose }: { target: SchemaMenuTarget | null; onClose(): void }) {
   const { t } = useTranslation();
   const [addingTo, setAddingTo] = useState<SchemaGroup | null>(null);
+  const [granting, setGranting] = useState<string | null>(null);
+  const { admin } = useAccount();
   const guard = useGuard();
   const notify = useNotify();
   const router = useRouter();
@@ -53,6 +58,9 @@ export function SchemaMenu({ target, onClose }: { target: SchemaMenuTarget | nul
         slotProps={{ list: { dense: true, "aria-label": target ? `actions for schema ${target.group.name}` : undefined } }}
       >
         <ActionItem icon={<Add fontSize="small" />} label={t("Add table here…")} onClick={run((g) => setAddingTo(g))} />
+        {admin && (
+          <ActionItem icon={<LockOutlined fontSize="small" />} label={t("Permissions…")} onClick={run((g) => setGranting(`${g.catalog}.${g.schema}`))} />
+        )}
         <Divider />
         <ActionItem
           icon={<DeleteOutline fontSize="small" />}
@@ -68,6 +76,7 @@ export function SchemaMenu({ target, onClose }: { target: SchemaMenuTarget | nul
         schema={addingTo?.schema}
         onClose={() => setAddingTo(null)}
       />
+      <PermissionsDialog open={granting !== null} on={granting ?? ""} onClose={() => setGranting(null)} />
     </>
   );
 }

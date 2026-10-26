@@ -57,6 +57,11 @@ export function editorTheme(mode: "dark" | "light"): Extension {
       ".cm-lintPoint:after": { borderBottomColor: dark ? "#FF6B6B" : "#D32F2F" },
       ".cm-tooltip-lint": { padding: 0 },
       ".cm-diagnostic": { fontFamily: fonts.mono, fontSize: "12px", padding: "4px 10px", whiteSpace: "pre-wrap", maxWidth: "560px" },
+      // a change Iara proposes (@codemirror/merge): its own tints are too faint to read as a diff
+      "&.cm-merge-b .cm-changedLine": { backgroundColor: dark ? "rgba(46,160,67,0.16)" : "rgba(46,160,67,0.12)" },
+      "&.cm-merge-b .cm-changedText": { background: dark ? "rgba(46,160,67,0.35)" : "rgba(46,160,67,0.28)" },
+      ".cm-deletedChunk": { backgroundColor: dark ? "rgba(248,81,73,0.14)" : "rgba(248,81,73,0.10)" },
+      ".cm-deletedChunk .cm-deletedText": { background: dark ? "rgba(248,81,73,0.35)" : "rgba(248,81,73,0.25)" },
     },
     { dark },
   );

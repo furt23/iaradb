@@ -1,31 +1,46 @@
 "use client";
 
+import AddBoxOutlined from "@mui/icons-material/AddBoxOutlined";
+import ArrowDropDown from "@mui/icons-material/ArrowDropDown";
 import BarChartOutlined from "@mui/icons-material/BarChartOutlined";
 import CleaningServicesOutlined from "@mui/icons-material/CleaningServicesOutlined";
 import Code from "@mui/icons-material/Code";
+import DashboardOutlined from "@mui/icons-material/DashboardOutlined";
 import FilterList from "@mui/icons-material/FilterList";
+import Functions from "@mui/icons-material/Functions";
+import MergeTypeOutlined from "@mui/icons-material/MergeTypeOutlined";
 import TextFieldsOutlined from "@mui/icons-material/TextFieldsOutlined";
+import TransformOutlined from "@mui/icons-material/TransformOutlined";
 import ViewColumnOutlined from "@mui/icons-material/ViewColumnOutlined";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import IconButton from "@mui/material/IconButton";
 import Alert from "@mui/material/Alert";
 import LinearProgress from "@mui/material/LinearProgress";
+import Menu from "@mui/material/Menu";
+import MenuItem from "@mui/material/MenuItem";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { DataGrid, type GridColDef } from "@mui/x-data-grid";
 import type { CellValue, WranglePreview, WrangleProfile, WrangleSource } from "@iara/protocol";
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { formatCount, isNumericType, typeLabel } from "@/lib/format";
 import { ColumnProfileDrawer } from "./ColumnProfileDrawer";
 import { QualityBar } from "./QualityBar";
 import { RecipeSidebar } from "./RecipeSidebar";
+import { CalculatedDialog } from "./dialogs/CalculatedDialog";
 import { CleanDialog } from "./dialogs/CleanDialog";
 import { ColumnDialog } from "./dialogs/ColumnDialog";
+import { DateDialog } from "./dialogs/DateDialog";
 import { ExportDialog } from "./dialogs/ExportDialog";
 import { FilterDialog } from "./dialogs/FilterDialog";
+import { GroupByDialog } from "./dialogs/GroupByDialog";
+import { JoinDialog } from "./dialogs/JoinDialog";
+import { PivotDialog } from "./dialogs/PivotDialog";
 import { TextDialog } from "./dialogs/TextDialog";
+import { UseInDashboardDialog } from "./dialogs/UseInDashboardDialog";
 import { previewRecipe, profileRecipeColumn } from "@/server/actions/wrangle";
 import type { WranglerStep } from "./types";
 
@@ -36,6 +51,10 @@ interface Props {
   /** shown in the toolbar */
   label: string;
   height?: number | string;
+  /** the recipe the view starts with (read once) */
+  initialSteps?: WranglerStep[];
+  /** called with the recipe after each change the user makes; the recipe is then the caller's, so "Use in dashboard" is hidden */
+  onSteps?: (steps: WranglerStep[]) => void;
 }
 
 type RowType = { id: number } & Record<string, CellValue>;
@@ -54,8 +73,9 @@ function stepsUpTo(steps: WranglerStep[], activeId: string | null): WranglerStep
   return steps.slice(0, end > 0 ? end : steps.length).filter((s) => s.enabled);
 }
 
-export function WranglerView({ kernelKey, source, label, height = "100%" }: Props) {
-  const [steps, setSteps] = useState<WranglerStep[]>([]);
+export function WranglerView({ kernelKey, source, label, height = "100%", initialSteps, onSteps }: Props) {
+  const { t } = useTranslation();
+  const [steps, setSteps] = useState<WranglerStep[]>(initialSteps ?? []);
   const [activeStepId, setActiveStepId] = useState<string | null>(null);
 
   // Active dialog states
@@ -63,7 +83,14 @@ export function WranglerView({ kernelKey, source, label, height = "100%" }: Prop
   const [cleanOpen, setCleanOpen] = useState(false);
   const [textOpen, setTextOpen] = useState(false);
   const [columnOpen, setColumnOpen] = useState(false);
+  const [groupOpen, setGroupOpen] = useState(false);
+  const [joinOpen, setJoinOpen] = useState(false);
+  const [dateOpen, setDateOpen] = useState(false);
+  const [calcOpen, setCalcOpen] = useState(false);
+  const [pivotTab, setPivotTab] = useState<"pivot" | "unpivot" | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
+  const [dashboardOpen, setDashboardOpen] = useState(false);
+  const [menu, setMenu] = useState<{ kind: "add" | "reshape"; anchor: HTMLElement } | null>(null);
   const [selectedColumn, setSelectedColumn] = useState<string | undefined>(undefined);
 
   // Profile drawer state
@@ -97,23 +124,37 @@ export function WranglerView({ kernelKey, source, label, height = "100%" }: Prop
     void profileRecipeColumn(kernelKey, source, shown, column).then((r) => setProfile(r.ok ? r.data : null));
   };
 
+  const commit = (next: WranglerStep[]) => {
+    setSteps(next);
+    onSteps?.(next);
+  };
+
   const handleAddStep = (step: WranglerStep) => {
-    setSteps((prev) => [...prev, step]);
+    commit([...steps, step]);
     setActiveStepId(null);
   };
 
   const handleToggleStep = (id: string) => {
-    setSteps((prev) => prev.map((s) => (s.id === id ? { ...s, enabled: !s.enabled } : s)));
+    commit(steps.map((s) => (s.id === id ? { ...s, enabled: !s.enabled } : s)));
   };
 
   const handleDeleteStep = (id: string) => {
-    setSteps((prev) => prev.filter((s) => s.id !== id));
+    commit(steps.filter((s) => s.id !== id));
     if (activeStepId === id) setActiveStepId(null);
   };
 
   const handleClearSteps = () => {
-    setSteps([]);
+    commit([]);
     setActiveStepId(null);
+  };
+
+  // a recipe over a table can become a dashboard's dataset; one over a result cannot
+  const table = "table" in source ? source.table : null;
+
+  const choose = (open: () => void) => {
+    setMenu(null);
+    setSelectedColumn(undefined);
+    open();
   };
 
   const handleFilterValue = (column: string, value: string, exclude = false) => {
@@ -161,7 +202,7 @@ export function WranglerView({ kernelKey, source, label, height = "100%" }: Prop
                   </Typography>
                 </Box>
                 {(
-                  <Tooltip title="Column statistics">
+                  <Tooltip title={t("Column statistics")}>
                     <IconButton
                       size="small"
                       onClick={(e) => {
@@ -188,7 +229,7 @@ export function WranglerView({ kernelKey, source, label, height = "100%" }: Prop
         };
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- openProfile reads the current recipe
-    [columns, quality],
+    [columns, quality, t],
   );
 
   return (
@@ -219,7 +260,7 @@ export function WranglerView({ kernelKey, source, label, height = "100%" }: Prop
             setFilterOpen(true);
           }}
         >
-          Filter
+          {t("Filter")}
         </Button>
 
         <Button
@@ -230,7 +271,7 @@ export function WranglerView({ kernelKey, source, label, height = "100%" }: Prop
             setCleanOpen(true);
           }}
         >
-          Clean and impute
+          {t("Clean and impute")}
         </Button>
 
         <Button
@@ -241,7 +282,7 @@ export function WranglerView({ kernelKey, source, label, height = "100%" }: Prop
             setTextOpen(true);
           }}
         >
-          Text
+          {t("Text")}
         </Button>
 
         <Button
@@ -252,15 +293,65 @@ export function WranglerView({ kernelKey, source, label, height = "100%" }: Prop
             setColumnOpen(true);
           }}
         >
-          Columns
+          {t("Columns")}
+        </Button>
+
+        <Button
+          size="small"
+          startIcon={<Functions fontSize="small" />}
+          onClick={() => {
+            setSelectedColumn(undefined);
+            setGroupOpen(true);
+          }}
+        >
+          {t("Group by")}
+        </Button>
+
+        <Button
+          size="small"
+          startIcon={<MergeTypeOutlined fontSize="small" />}
+          onClick={() => {
+            setSelectedColumn(undefined);
+            setJoinOpen(true);
+          }}
+        >
+          {t("Join")}
+        </Button>
+
+        <Button
+          size="small"
+          startIcon={<AddBoxOutlined fontSize="small" />}
+          endIcon={<ArrowDropDown fontSize="small" />}
+          onClick={(e) => setMenu({ kind: "add", anchor: e.currentTarget })}
+        >
+          {t("Add column")}
+        </Button>
+
+        <Button
+          size="small"
+          startIcon={<TransformOutlined fontSize="small" />}
+          endIcon={<ArrowDropDown fontSize="small" />}
+          onClick={(e) => setMenu({ kind: "reshape", anchor: e.currentTarget })}
+        >
+          {t("Reshape")}
         </Button>
 
         <Box sx={{ flex: 1 }} />
 
         <Typography variant="caption" sx={{ color: "text.secondary", mr: 1 }}>
-          {data && `${formatCount(data.num_rows)} rows × ${columns.length} columns`}
-          {data && data.num_rows > data.rows.length && `, first ${formatCount(data.rows.length)} shown`}
+          {data &&
+            t(data.num_rows > data.rows.length ? "{{rows}} rows × {{columns}} columns, first {{shown}} shown" : "{{rows}} rows × {{columns}} columns", {
+              rows: formatCount(data.num_rows),
+              columns: columns.length,
+              shown: formatCount(data.rows.length),
+            })}
         </Typography>
+
+        {table !== null && !onSteps && (
+          <Button size="small" startIcon={<DashboardOutlined fontSize="small" />} onClick={() => setDashboardOpen(true)}>
+            {t("Use in dashboard")}
+          </Button>
+        )}
 
         <Button
           size="small"
@@ -270,7 +361,7 @@ export function WranglerView({ kernelKey, source, label, height = "100%" }: Prop
           onClick={() => setExportOpen(true)}
           disabled={!data}
         >
-          Export code
+          {t("Export code")}
         </Button>
       </Box>
 
@@ -350,6 +441,61 @@ export function WranglerView({ kernelKey, source, label, height = "100%" }: Prop
         onClose={() => setColumnOpen(false)}
         onApply={handleAddStep}
       />
+
+      <GroupByDialog
+        open={groupOpen}
+        columns={columns}
+        defaultColumn={selectedColumn}
+        onClose={() => setGroupOpen(false)}
+        onApply={handleAddStep}
+      />
+
+      <JoinDialog
+        open={joinOpen}
+        columns={columns}
+        defaultColumn={selectedColumn}
+        onClose={() => setJoinOpen(false)}
+        onApply={handleAddStep}
+      />
+
+      <DateDialog
+        open={dateOpen}
+        columns={columns}
+        defaultColumn={selectedColumn}
+        onClose={() => setDateOpen(false)}
+        onApply={handleAddStep}
+      />
+
+      <CalculatedDialog
+        open={calcOpen}
+        columns={columns}
+        defaultColumn={selectedColumn}
+        onClose={() => setCalcOpen(false)}
+        onApply={handleAddStep}
+      />
+
+      <PivotDialog
+        open={pivotTab !== null}
+        initialTab={pivotTab ?? "pivot"}
+        columns={columns}
+        defaultColumn={selectedColumn}
+        onClose={() => setPivotTab(null)}
+        onApply={handleAddStep}
+      />
+
+      <Menu anchorEl={menu?.anchor} open={menu?.kind === "add"} onClose={() => setMenu(null)}>
+        <MenuItem onClick={() => choose(() => setDateOpen(true))}>{t("Date part…")}</MenuItem>
+        <MenuItem onClick={() => choose(() => setCalcOpen(true))}>{t("Calculated column…")}</MenuItem>
+      </Menu>
+
+      <Menu anchorEl={menu?.anchor} open={menu?.kind === "reshape"} onClose={() => setMenu(null)}>
+        <MenuItem onClick={() => choose(() => setPivotTab("pivot"))}>{t("Pivot…")}</MenuItem>
+        <MenuItem onClick={() => choose(() => setPivotTab("unpivot"))}>{t("Unpivot…")}</MenuItem>
+      </Menu>
+
+      {table !== null && !onSteps && (
+        <UseInDashboardDialog open={dashboardOpen} table={table} steps={steps} onClose={() => setDashboardOpen(false)} />
+      )}
 
       {data && <ExportDialog open={exportOpen} sql={data.sql} python={data.python} onClose={() => setExportOpen(false)} />}
 

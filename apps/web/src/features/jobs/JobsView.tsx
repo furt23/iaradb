@@ -72,7 +72,6 @@ export function JobsView({ targets, newTarget }: { targets: string[]; newTarget:
     <Box sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       <PageHeader
         title={t("Jobs")}
-        subtitle={t("Notebooks and queries that run on a schedule (UTC) or by hand, on a cluster of their own")}
         actions={
           <Button variant="contained" color="secondary" startIcon={<Add />} onClick={() => setEditing({ job: null })}>
             {t("New job")}
@@ -83,7 +82,7 @@ export function JobsView({ targets, newTarget }: { targets: string[]; newTarget:
         {error && <Typography sx={{ color: "error.main", mb: 2 }}>{error}</Typography>}
         {data?.problems.map((p) => (
           <Typography key={p.id} sx={{ color: "warning.main", mb: 1, fontSize: 13 }}>
-            jobs/{p.id}.toml: {p.error}
+            Job {p.id}: {p.error}
           </Typography>
         ))}
         {data && !jobs.length && (
@@ -93,7 +92,7 @@ export function JobsView({ targets, newTarget }: { targets: string[]; newTarget:
               {t("No jobs yet")}
             </Typography>
             <Typography variant="body2" sx={{ maxWidth: 440, mx: "auto", mt: 0.5 }}>
-              {t("A job runs a notebook or a query file without anyone watching: every morning, every hour, or when you start it. Jobs are files in jobs/, versioned with the workspace.")}
+              {t("Run a notebook or query on a schedule or by hand.")}
             </Typography>
           </Box>
         )}
@@ -129,7 +128,7 @@ export function JobsView({ targets, newTarget }: { targets: string[]; newTarget:
           if (newTarget) router.replace("/jobs");
         }}
         onSaved={(j) => {
-          notify(`Saved jobs/${j.id}.toml`, "success");
+          notify(`Saved ${j.name}`, "success");
           void reload();
           router.refresh();
         }}
@@ -146,7 +145,7 @@ export function JobsView({ targets, newTarget }: { targets: string[]; newTarget:
       <Dialog open={removing !== null} onClose={() => setRemoving(null)} maxWidth="xs" fullWidth>
         <DialogTitle>Delete {removing?.name}?</DialogTitle>
         <DialogContent>
-          <DialogContentText>Its file (jobs/{removing?.id}.toml) and run history are deleted. What it runs ({removing?.tasks.length === 1 ? removing.tasks[0].target : `${removing?.tasks.length} tasks`}) stays.</DialogContentText>
+          <DialogContentText>The job and its run history are deleted. What it runs ({removing?.tasks.length === 1 ? removing.tasks[0].target : `${removing?.tasks.length} tasks`}) stays.</DialogContentText>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setRemoving(null)}>Cancel</Button>

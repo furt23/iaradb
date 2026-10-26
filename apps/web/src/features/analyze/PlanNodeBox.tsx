@@ -40,8 +40,9 @@ export function PlanNodeBox({ placed, margin, totalMs, hottestMs, onOpen }: Prop
         boxSizing: "border-box",
         display: "flex",
         flexDirection: "column",
-        gap: 0.5,
-        p: 1,
+        gap: 0.25,
+        px: 1,
+        py: 0.75,
         m: 0,
         overflow: "hidden",
         textAlign: "left",
@@ -58,7 +59,7 @@ export function PlanNodeBox({ placed, margin, totalMs, hottestMs, onOpen }: Prop
       }}
     >
       <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, minWidth: 0 }}>
-        <Typography component="span" sx={{ fontWeight: 700, fontSize: 12.5, color, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
+        <Typography component="span" sx={{ fontWeight: 700, fontSize: 12, lineHeight: 1.3, color, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
           {node.name}
         </Typography>
         {node.role && (
@@ -67,18 +68,18 @@ export function PlanNodeBox({ placed, margin, totalMs, hottestMs, onOpen }: Prop
           </Typography>
         )}
       </Box>
-      <Typography variant="mono" sx={{ fontSize: 10.5, color: "text.secondary", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+      <Typography variant="mono" title={node.detail} sx={{ fontSize: 10.5, lineHeight: 1.3, color: "text.secondary", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {node.detail === node.name ? "" : node.detail}
       </Typography>
       {node.metrics && (
         <Box sx={{ mt: "auto" }}>
-          <Typography variant="mono" sx={{ display: "block", fontSize: 11, whiteSpace: "nowrap" }}>
+          <Typography variant="mono" sx={{ display: "block", fontSize: 11, lineHeight: 1.3, whiteSpace: "nowrap" }}>
             {formatCount(node.metrics.rows_out)} rows · {formatDuration(node.metrics.elapsed_ms)}
           </Typography>
           <LinearProgress
             variant="determinate"
             value={timeShare(node, totalMs) * 100}
-            sx={{ height: 4, borderRadius: 2, mt: 0.5, "& .MuiLinearProgress-bar": { bgcolor: color } }}
+            sx={{ height: 3, borderRadius: 2, mt: 0.5, "& .MuiLinearProgress-bar": { bgcolor: color } }}
           />
         </Box>
       )}

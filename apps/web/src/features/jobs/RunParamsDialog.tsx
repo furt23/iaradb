@@ -24,7 +24,7 @@ export function RunParamsDialog({ job, onClose, onRun }: { job: Pick<JobSpec, "n
     <Dialog open={job !== null} onClose={onClose} fullWidth maxWidth="sm">
       <DialogTitle>Run {job?.name} with parameters</DialogTitle>
       <DialogContent>
-        <DialogContentText sx={{ mb: 2, fontSize: 13.5 }}>These params win over the job&apos;s and its tasks&apos; for this run. The job&apos;s file is not changed.</DialogContentText>
+        <DialogContentText sx={{ mb: 2, fontSize: 13.5 }}>For this run only. The job itself is not changed.</DialogContentText>
         <ParamRows label="Run params" rows={rows} onChange={setRows} errors={parsed.errors} />
       </DialogContent>
       <DialogActions>

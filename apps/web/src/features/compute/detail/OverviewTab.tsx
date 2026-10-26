@@ -34,7 +34,7 @@ function Facts({ rows }: { rows: Row[] }) {
 
 /** Spot or on-demand, and what the machine actually got at its start. */
 function marketLabel(c: ClusterView, t: TFunction): string {
-  if (c.spot && c.state === "running" && c.runningSpot === false) return t("On-demand (no spot capacity at start)");
+  if (c.spot && c.state === "running" && c.runningSpot === false) return t("On-demand");
   return c.spot ? t("Spot") : t("On-demand");
 }
 
@@ -96,7 +96,7 @@ function machineRows(c: ClusterView, createdAt: number | null, now: number, t: T
 
 function localRows(c: ClusterView, kernels: number, t: TFunction): Row[] {
   return [
-    [t("Machine"), t("this machine (development only)")],
+    [t("Machine"), t("this machine")],
     [t("Notebooks attached"), String(c.notebooks.length)],
     [t("Kernels running"), String(kernels)],
     [t("Default"), c.isDefault ? t("yes") : t("no")],

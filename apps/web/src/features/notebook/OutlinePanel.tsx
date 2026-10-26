@@ -80,14 +80,18 @@ function OutlineRow({ node, depth, collapsed, onToggle, onJump }: RowProps) {
 
 /** The headings of the notebook's markdown cells as a tree; a click scrolls to the heading. */
 export function OutlinePanel({ cells, scrollRoot }: { cells: Cell[]; scrollRoot?: HTMLElement | null }) {
-  const tree = useMemo(() => outlineOf(cells), [cells]);
+  // only markdown cells make headings: typing in a code cell must not rebuild the tree
+  const markdown = cells.filter((c) => c.kind === "markdown");
+  const markdownKey = markdown.map((c) => `${c.id}\u0000${c.code}`).join("\u0001");
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `markdownKey` stands for the markdown cells' content
+  const tree = useMemo(() => outlineOf(markdown), [markdownKey]);
   const color = useTheme().palette.primary.main;
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
 
   if (!tree.length) {
     return (
       <Typography variant="body2" sx={{ p: 2, color: "text.secondary" }}>
-        Add markdown headings (# Title, ## Section, or numbered 1, 1.1…) to build an outline.
+        Add markdown headings to build an outline.
       </Typography>
     );
   }

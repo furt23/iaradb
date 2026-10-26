@@ -5,7 +5,6 @@ import Button from "@mui/material/Button";
 import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
-import DialogContentText from "@mui/material/DialogContentText";
 import DialogTitle from "@mui/material/DialogTitle";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -38,16 +37,13 @@ export function RestoreDialog({ table, version, onRestore, onClose }: { table: s
       <DialogTitle>
         {t("Restore {{table}} to version {{version}}?", { table, version })}
       </DialogTitle>
-      <DialogContent>
-        <DialogContentText>
-          {t("The table gets a new version with the contents of version {{version}}. Earlier versions stay in the history until they are vacuumed.", { version })}
-        </DialogContentText>
-        {error && (
+      {error && (
+        <DialogContent>
           <Alert severity="error" sx={{ mt: 2, whiteSpace: "pre-wrap" }}>
             {error}
           </Alert>
-        )}
-      </DialogContent>
+        </DialogContent>
+      )}
       <DialogActions>
         <Button onClick={close} disabled={busy}>
           {t("Cancel")}

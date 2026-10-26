@@ -58,7 +58,7 @@ export function NewCatalogDialog({ open, onClose }: { open: boolean; onClose(): 
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && void create()}
             error={badName}
-            helperText={badName ? t("Letters, digits and underscores") : t("Its tables are named catalog.schema.table, e.g. sales.raw.orders")}
+            helperText={badName ? t("Letters, digits and underscores") : undefined}
           />
           <TextField label={t("Description (optional)")} value={description} onChange={(e) => setDescription(e.target.value)} />
         </Stack>

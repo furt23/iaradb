@@ -81,13 +81,7 @@ export function NewSchemaDialog({ open, onClose, catalog }: { open: boolean; onC
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && void create()}
             error={badName}
-            helperText={
-              badName
-                ? t("Letters, digits and underscores")
-                : inOther
-                  ? t("Its tables are named catalog.schema.table, e.g. sales.raw.orders")
-                  : t("Its tables are named schema.table, e.g. tpch.lineitem")
-            }
+            helperText={badName ? t("Letters, digits and underscores") : undefined}
           />
           <TextField label={t("Description (optional)")} value={description} onChange={(e) => setDescription(e.target.value)} />
           <TextField
@@ -96,7 +90,7 @@ export function NewSchemaDialog({ open, onClose, catalog }: { open: boolean; onC
             onChange={(e) => setLocation(e.target.value)}
             error={badLocation}
             placeholder="s3://bucket/prefix/"
-            helperText={badLocation ? "An s3:// URL or a folder, without .." : t("Each subfolder becomes a table of the schema")}
+            helperText={badLocation ? "An s3:// URL or a folder, without .." : undefined}
           />
         </Stack>
       </DialogContent>

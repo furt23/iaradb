@@ -68,7 +68,7 @@ export function NotebooksTab({
     return (
       <>
         <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2 }}>
-          <Typography sx={{ color: "text.secondary" }}>No notebook is attached to this cluster. Pick it from a notebook&apos;s toolbar.</Typography>
+          <Typography sx={{ color: "text.secondary" }}>No notebook is attached to this cluster.</Typography>
           {attachButton}
         </Box>
         {dialog}
@@ -102,9 +102,6 @@ export function NotebooksTab({
           </TableBody>
         </Table>
       </Paper>
-      <Typography variant="caption" sx={{ display: "block", mt: 1, color: "text.disabled" }}>
-        A detached notebook runs on the default cluster the next time it runs.
-      </Typography>
       {dialog}
     </>
   );

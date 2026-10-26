@@ -13,6 +13,8 @@ describe("sections", () => {
     expect(sectionOf("/data/lineitem")).toBe("data");
     expect(sectionOf("/wrangle")).toBe("wrangle");
     expect(sectionOf("/wrangle/lineitem")).toBe("wrangle");
+    expect(sectionOf("/dashboards")).toBe("dashboards");
+    expect(sectionOf("/dashboards/sales")).toBe("dashboards");
     expect(sectionOf("/sql")).toBe("sql");
     expect(sectionOf("/history")).toBe("history");
     expect(sectionOf("/analyze")).toBe("history");
@@ -26,6 +28,7 @@ describe("sections", () => {
     expect(section("workspace").panel).toBe("files");
     expect(section("data").panel).toBe("catalog");
     expect(section("wrangle").panel).toBe("catalog");
+    expect(section("dashboards").panel).toBeNull();
     expect(section("git").panel).toBeNull();
   });
 });

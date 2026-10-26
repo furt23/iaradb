@@ -14,6 +14,7 @@ import Menu from "@mui/material/Menu";
 import MenuItem from "@mui/material/MenuItem";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
+import { IaraMark } from "@iara/ui";
 import { useState, type ReactNode } from "react";
 
 import { useTranslation } from "@/i18n";
@@ -24,6 +25,8 @@ export interface NotebookToolbarProps {
   path: string;
   dirty: boolean;
   running: boolean;
+  /** the notebook's cluster runs: without it the run controls are hidden (the notebook stays editable) */
+  canRun: boolean;
   timer: RunTimerProps;
   onRunAll(): void;
   onInterrupt(): void;
@@ -38,6 +41,9 @@ export interface NotebookToolbarProps {
   /** the side panel: outline and variables */
   onToggleSide(): void;
   sideOpen: boolean;
+  /** Iara's panel, which shares the side with the outline */
+  onToggleIara(): void;
+  iaraOpen: boolean;
   onOutputs(hidden: boolean): void;
   /** where the notebook runs (a cluster picker) */
   cluster?: ReactNode;
@@ -125,13 +131,14 @@ export function NotebookToolbar(p: NotebookToolbarProps) {
         {p.dirty ? t("unsaved") : t("saved")}
       </Typography>
       {p.fileMenu}
-      <RunTimer {...p.timer} />
+      {p.canRun && <RunTimer {...p.timer} />}
       <Box sx={{ flex: 1 }} />
       {p.cluster}
-      <ToolButton label={t("Run all")} icon={<PlayCircleOutline />} onClick={p.onRunAll} disabled={p.running} variant="contained" color="secondary" />
-      <ToolButton label={t("Interrupt")} icon={<StopCircleOutlined />} onClick={p.onInterrupt} disabled={!p.running} color="error" />
+      {p.canRun && <ToolButton label={t("Run all")} icon={<PlayCircleOutline />} onClick={p.onRunAll} disabled={p.running} variant="contained" color="secondary" />}
+      {p.canRun && <ToolButton label={t("Interrupt")} icon={<StopCircleOutlined />} onClick={p.onInterrupt} disabled={!p.running} color="error" />}
       <KernelMenu
         running={p.running}
+        canRun={p.canRun}
         onInterrupt={p.onInterrupt}
         onRestart={p.onRestart}
         onRestartAndClear={p.onRestartAndClear}
@@ -141,6 +148,7 @@ export function NotebookToolbar(p: NotebookToolbarProps) {
         autorun={p.autorun}
         onAutorun={p.onAutorun}
       />
+      <ToolButton label="Iara" icon={<IaraMark size={20} />} onClick={p.onToggleIara} sx={{ color: p.iaraOpen ? "secondary.main" : "text.secondary" }} />
       <ToolButton label={t("Outline")} icon={<ViewSidebarOutlined />} onClick={p.onToggleSide} sx={{ color: p.sideOpen ? "secondary.main" : "text.secondary" }} />
       <MoreMenu onOutputs={p.onOutputs} />
     </Box>

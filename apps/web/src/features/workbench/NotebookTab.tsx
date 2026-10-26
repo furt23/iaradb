@@ -8,15 +8,18 @@ import { useEffect, useState } from "react";
 
 import { NotebookEditor } from "@/features/notebook/NotebookEditor";
 import { ErrorState } from "@/features/shell/PageHeader";
+import { useTranslation } from "@/i18n";
 import { openNotebook } from "@/server/actions/notebooks";
 
 type Load = { status: "idle" } | { status: "loading" } | { status: "ready"; view: NotebookView } | { status: "failed"; message: string };
 
 /**
  * A notebook tab. It opens the notebook (and so starts its kernel) the first
- * time it is shown, not when tabs are restored.
+ * time it is shown, not when tabs are restored. Without a running cluster it
+ * opens to edit, and runs once the cluster does.
  */
 export function NotebookTab({ path, shown, schema }: { path: string; shown: boolean; schema: Record<string, { name: string }[]> }) {
+  const { t } = useTranslation();
   const [load, setLoad] = useState<Load>({ status: "idle" });
 
   useEffect(() => {
@@ -29,9 +32,9 @@ export function NotebookTab({ path, shown, schema }: { path: string; shown: bool
   if (load.status === "failed") {
     return (
       <Box>
-        <ErrorState title={`Could not open ${path}`} message={load.message} />
+        <ErrorState title={t("Could not open {{path}}", { path })} message={load.message} />
         <Button sx={{ ml: 4 }} onClick={() => setLoad({ status: "idle" })}>
-          Retry
+          {t("Retry")}
         </Button>
       </Box>
     );

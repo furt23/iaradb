@@ -89,9 +89,9 @@ export function FileActionsMenu({ path, kind, cells = [] }: FileActionsMenuProps
   const downloads =
     kind === "notebook"
       ? [
-          <Item key="py" icon={<DownloadOutlined fontSize="small" />} label="Download .py (marimo)" onClick={saveRaw} />,
-          <Item key="ipynb" icon={<DownloadOutlined fontSize="small" />} label="Download .ipynb (Jupyter)" onClick={saveIpynb} />,
-          <Item key="md" icon={<DownloadOutlined fontSize="small" />} label="Download .md (Markdown)" onClick={saveMarkdown} />,
+          <Item key="py" icon={<DownloadOutlined fontSize="small" />} label="Download .py" onClick={saveRaw} />,
+          <Item key="ipynb" icon={<DownloadOutlined fontSize="small" />} label="Download .ipynb" onClick={saveIpynb} />,
+          <Item key="md" icon={<DownloadOutlined fontSize="small" />} label="Download .md" onClick={saveMarkdown} />,
         ]
       : [<Item key="sql" icon={<DownloadOutlined fontSize="small" />} label="Download .sql" onClick={saveRaw} />];
 
