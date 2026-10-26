@@ -46,7 +46,7 @@ Sum of the query times, on the same Parquet files (AWS m7i.4xlarge, 16 vCPUs, 64
 
 | Suite | Iara 0.1.0 | DuckDB 1.5.6 | Polars 2.0.0 |
 |---|---:|---:|---:|
-| TPC-H SF10, all 22 queries | **3.5 s** | 5.4 s | 6.1 s |
+| TPC-H SF10, all 22 queries | **3.46 s** | 5.37 s | 6.09 s |
 | TPC-H SF100, all 22 queries | **36.6 s** | 58.5 s | 69.3 s |
 | ClickBench, all 43 queries | **17.8 s** | 26.0 s | 28.9 s |
 
