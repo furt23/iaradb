@@ -2,7 +2,7 @@
 
 TPC-H (all 22 queries, SF10 and SF100) and ClickBench (43 queries) on Iara, DuckDB, Polars, DataFusion, chDB, Spark and Daft. The engines read the same Parquet files. TPC-H data comes from `tpchgen-cli` (`DECIMAL(15,2)` prices). ClickBench reads a typed copy of `hits.parquet` (see below).
 
-Machine: AWS m7i.4xlarge (16 vCPUs, Xeon 8488C, 64 GB RAM), Amazon Linux 2023, Python 3.12, Iara built with `-C target-cpu=native`. Measured 2026-10-18; Iara was re-measured on the same instance type after later engine changes, the other engines are from the first run.
+Machine: AWS m7i.4xlarge (16 vCPUs, Xeon 8488C, 64 GB RAM), Amazon Linux 2023, Python 3.12, Iara built with `-C target-cpu=native`. Measured 2026-10-22, all engines in one run. On 2026-10-23 the queries changed below were rerun for every engine on a second instance of the same type (DuckDB as the control ran 2-8% slower there), so each query's row comes from one machine.
 
 Method:
 
@@ -16,75 +16,72 @@ Method:
 
 | Engine | Correct | Sum, all 22 | Geomean | Iara faster by |
 |---|---:|---:|---:|---:|
-| Iara 0.1.0 | 22 | 4.1 s | 157 ms |  |
-| DuckDB 1.5.6 | 22 | 5.4 s | 206 ms | 1.31× |
-| Polars 2.0.0 | 22 | 6.1 s | 177 ms | 1.13× |
-| DataFusion 55.0.0 | 22 | 8.4 s | 294 ms | 1.87× |
-| chDB 4.4.0 | 21 | 10.8 s † | 375 ms | 2.41× |
-| Spark 4.2.0 | 22 | 58.7 s | 1898 ms | 12.10× |
-| Daft 0.7.26 | 16 | — | — | 3.76× |
+| Iara 0.1.0 | 22 | 3.5 s | 130 ms |  |
+| DuckDB 1.5.6 | 22 | 5.4 s | 204 ms | 1.57× |
+| Polars 2.0.0 | 22 | 6.1 s | 176 ms | 1.35× |
+| DataFusion 55.0.0 | 22 | 8.4 s | 291 ms | 2.24× |
+| chDB 4.4.0 | 22 | 10.6 s | 367 ms | 2.81× |
+| Spark 4.2.0 | 22 | 58.7 s | 1893 ms | 14.53× |
+| Daft 0.7.26 | 17 | — | — | 5.06× |
 
 ## TPC-H SF100
 
 | Engine | Correct | Sum, all 22 | Geomean | Iara faster by |
 |---|---:|---:|---:|---:|
-| Iara 0.1.0 | 22 | 41.1 s | 1453 ms |  |
-| DuckDB 1.5.6 | 22 | 59.2 s | 2200 ms | 1.51× |
-| Polars 2.0.0 | 22 | 69.3 s | 1783 ms | 1.23× |
-| DataFusion 55.0.0 | 22 | 95.0 s | 3070 ms | 2.11× |
-| chDB 4.4.0 | 21 | 398.8 s † | 4742 ms | 3.33× |
-| Spark 4.2.0 | 22 | 733.7 s | 22.9 s | 15.79× |
-| Daft 0.7.26 | 16 | — | — | 5.70× |
+| Iara 0.1.0 | 22 | 36.6 s | 1283 ms |  |
+| DuckDB 1.5.6 | 22 | 58.5 s | 2174 ms | 1.69× |
+| Polars 2.0.0 | 22 | 69.3 s | 1792 ms | 1.40× |
+| DataFusion 55.0.0 | 22 | 94.8 s | 3063 ms | 2.39× |
+| chDB 4.4.0 | 22 | 402.3 s | 4747 ms | 3.70× |
+| Spark 4.2.0 | 22 | 722.5 s | 22.8 s | 17.77× |
+| Daft 0.7.26 | 17 | — | — | 7.12× |
 
 Per query (ms), fastest correct time in bold:
 
 | Query | Iara | DuckDB | Polars | DataFusion | chDB | Spark | Daft |
 |:---:|---:|---:|---:|---:|---:|---:|---:|
-| Q1 | **2472** | 2608 | 3986 | 4648 | 4417 | 71477 | n/a |
-| Q2 | 300 | 623 | **213** | 1071 | 859 | 10071 | 2579 |
-| Q3 | **1770** | 2511 | 2012 | 3128 | 49965 | 23933 | 6631 |
-| Q4 | **864** | 1527 | 1157 | 1470 | 2506 | 16121 | 5038 |
-| Q5 | 2101 | 2940 | **2008** | 4587 | 5123 | 61872 | 6439 |
-| Q6 | **860** | 1151 | 869 | 1667 | 1885 † | 6261 | 14032 † |
-| Q7 | **2284** | 2984 | 4379 | 7568 | 5205 | 23581 | 6038 |
-| Q8 | 2342 | 3697 | **2261** | 4658 | 7848 | 35100 | n/a |
-| Q9 | **4369** | 6348 | 4803 | 7773 | 224636 | 90633 | n/a |
-| Q10 | 3042 | 2861 | **2828** | 3854 | 5753 | 19902 | 19579 |
-| Q11 | **392** | 488 | 568 | 991 | 805 | 10084 | 3372 |
-| Q12 | **860** | 1661 | 977 | 2490 | 4464 | 13091 | 20401 |
-| Q13 | **2359** | 3714 | 3669 | 3722 | 4429 | 20541 | 9892 |
-| Q14 | **1143** | 1988 | 1226 | 1857 | 2254 | 9723 | n/a |
-| Q15 | **1144** | 1780 | 1222 | 3578 | 4259 | 20470 | 6654 |
-| Q16 | 639 | 915 | 652 | **575** | 953 | 16028 | 2075 |
-| Q17 | 1353 | 3034 | **1086** | 8914 | 4182 | 88996 | 20908 |
-| Q18 | 4597 | 4421 | **3771** | 13693 | 4337 | 76625 | 12445 |
-| Q19 | 2084 | 2654 | **1844** | 2727 | 4450 | 9745 | 22538 |
-| Q20 | **1580** | 2442 | 3032 | 3067 | 3822 | 12794 | 7676 |
-| Q21 | **4045** | 7648 | 26150 | 12274 | 55422 | 88510 | n/a |
-| Q22 | **460** | 1249 | 611 | 642 | 1231 | 8136 | 1638 |
+| Q1 | **2272** | 2666 | 4071 | 4684 | 4432 | 73986 | n/a |
+| Q2 | 237 | 613 | **211** | 1061 | 846 | 9594 | 2562 |
+| Q3 | **1575** | 2379 | 1970 | 3087 | 49608 | 24461 | 6545 |
+| Q4 | **821** | 1456 | 1190 | 1455 | 2475 | 16299 | 5386 |
+| Q5 | **2059** | 2718 | 2122 | 4652 | 5970 | 60443 | 6549 |
+| Q6 | **800** | 1242 | 892 | 1680 | 2018 | 6356 | 15905 |
+| Q7 | **1922** | 2902 | 4326 | 7527 | 5038 | 23569 | 6010 |
+| Q8 | **2175** | 3591 | 2236 | 4604 | 7722 | 35711 | n/a |
+| Q9 | **4024** | 6177 | 4783 | 7702 | 227234 | 85191 | n/a |
+| Q10 | **2297** | 2767 | 2888 | 3912 | 5770 | 18222 | 20143 |
+| Q11 | **346** | 500 | 571 | 989 | 781 | 10188 | 3397 |
+| Q12 | **814** | 1716 | 999 | 2498 | 4400 | 13275 | 20947 |
+| Q13 | **2181** | 3718 | 3624 | 3658 | 4411 | 20354 | 9812 |
+| Q14 | **1137** | 1883 | 1259 | 1859 | 2246 | 10033 | n/a |
+| Q15 | **1038** | 1795 | 1255 | 3685 | 4242 | 21342 | 7338 |
+| Q16 | **465** | 913 | 659 | 572 | 937 | 16048 | 2075 |
+| Q17 | 1143 | 3023 | **1070** | 8926 | 4119 | 85657 | 20792 |
+| Q18 | 4287 | 4419 | **3722** | 13602 | 4321 | 76466 | 12318 |
+| Q19 | **1458** | 2650 | 1802 | 2688 | 4354 | 9476 | 22514 |
+| Q20 | **1493** | 2468 | 3089 | 3094 | 3742 | 13110 | 7897 |
+| Q21 | **3680** | 7744 | 25971 | 12216 | 56454 | 84577 | n/a |
+| Q22 | **413** | 1159 | 595 | 621 | 1214 | 8185 | 1623 |
 
-Polars runs its own DataFrame versions of the queries (`benchmarks/tpch_polars.py`); for Q2, Q17 and Q18 they read `partsupp` or `lineitem` once where the SQL plans read them twice. The other engines run the SQL in `benchmarks/tpch_queries.py`.
+Polars runs its own DataFrame versions of the queries (`benchmarks/tpch_polars.py`, written like Polars' own PDS-H benchmark); for Q2, Q17 and Q18 they read `partsupp` or `lineitem` once where the SQL plans read them twice. The other engines run the SQL in `benchmarks/tpch_queries.py`, with the spec's constant arithmetic written out as literals (`date '1998-09-02'` for `date '1998-12-01' - interval '90' day`, `between 0.05 and 0.07` for `between 0.06 - 0.01 and 0.06 + 0.01`), as the Polars versions have it. That changed Q1, Q4, Q5, Q6, Q10, Q12, Q14, Q15 and Q20. Before, chDB and Daft computed `0.06 + 0.01` in floating point (0.069999…) and dropped Q6's 0.07 discounts.
 
-Wrong or missing results:
-
-- chDB and Daft return a wrong Q6: they evaluate `between 0.06 - 0.01 and 0.06 + 0.01` in floating point, which drops the rows with a 0.07 discount.
-- Daft cannot plan Q1, Q8, Q9 and Q14 (in Q1 the `DECIMAL` product exceeds 38 digits) or the correlated subquery in Q21.
+Missing results: Daft cannot plan Q1, Q8, Q9 and Q14 on `DECIMAL(15,2)` columns. Its decimal arithmetic does not cap the result precision at 38 digits (Q1, Q9), and a `CASE` cannot mix a decimal with the literal `0` (Q8, Q14). In Q21 its row-group pruning fails to bind a predicate.
 
 ## ClickBench
 
 | Engine | Correct | Sum, all 43 | Geomean | Iara faster by |
 |---|---:|---:|---:|---:|
-| Iara 0.1.0 | 43 | 23.4 s | 149 ms |  |
-| DuckDB 1.5.6 | 43 | 26.3 s | 311 ms | 2.09× |
-| Polars 2.0.0 | 40 | — | — | 1.23× |
-| DataFusion 55.0.0 | 43 | 30.1 s | 227 ms | 1.52× |
-| chDB 4.4.0 | 43 | 27.7 s | 329 ms | 2.21× |
-| Spark 4.2.0 | 43 | 152.7 s | 2315 ms | 15.54× |
-| Daft 0.7.26 | 39 | — | — | 5.17× |
+| Iara 0.1.0 | 43 | 17.8 s | 105 ms |  |
+| DuckDB 1.5.6 | 43 | 26.0 s | 309 ms | 2.93× |
+| Polars 2.0.0 | 43 | 28.9 s | 184 ms | 1.75× |
+| DataFusion 55.0.0 | 43 | 29.9 s | 226 ms | 2.14× |
+| chDB 4.4.0 | 43 | 27.7 s | 328 ms | 3.12× |
+| Spark 4.2.0 | 43 | 147.7 s | 2240 ms | 21.27× |
+| Daft 0.7.26 | 42 | — | — | 8.15× |
 
-Polars SQL has no `regexp_replace` or `date_trunc` and rejects Q35's repeated group key. Daft cannot plan Q6, Q28 and Q29 and ran out of memory on Q23.
+Polars runs DataFrame versions of the queries (`benchmarks/clickbench_polars.py`), each a direct translation of the SQL; its SQL frontend has no `regexp_replace` or `date_trunc` and rejects Q35's repeated group key. On the 40 queries both ran, the two frontends took the same time (21.6 s vs 21.5 s). `polars-sql` still runs the SQL. Q6, Q28 and Q29 name their aggregates (`MIN(EventDate) AS min_date`), since Daft names an unaliased aggregate after its column and two aggregates over one column collide. Daft runs out of memory on Q23.
 
-Where Iara is slower: grouped `COUNT(DISTINCT ...)` (Q8, Q9: 1.6-1.8× DuckDB), wide `GROUP BY`s (Q16-Q18, Q32: 1.5-2.5×) and `REGEXP_REPLACE` (Q28, 2.9 s against chDB's 1.6 s).
+Where Iara is slower: `REGEXP_REPLACE` (Q28, 2.4 s against chDB's 1.6 s), `GROUP BY URL` (Q33, 1.15× DuckDB), `AVG(STRLEN(URL))` (Q27, 1.1× DuckDB) and the `ORDER BY SearchPhrase` top-N (Q25, 1.2× Polars).
 
 ## DataFrame workloads
 

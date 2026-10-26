@@ -152,6 +152,10 @@ Studio creates nothing in IAM or S3. It finds the team's security group and inst
 
 Every signed-in member can create, clone, start and terminate clusters and run jobs on them. Only a cluster's creator or a team admin (`IARA_ADMIN_EMAILS`) can edit or delete it; clusters created before owners were recorded are admin-only.
 
+Viewers (`IARA_VIEWER_EMAILS`) sign in like members but only reach `/view`, where they open the published dashboards shared with them. They never see the workspace, the catalog or a dashboard's SQL. A published dashboard's queries run on its cluster, limited to the tables the viewer has a grant on ([Data permissions](studio.md#data-permissions)). Without grants, a viewer reads nothing.
+
+`IARA_VIEW_HOST` (a bare hostname such as `view-<team>.<domain>`) serves the same Studio under a second name that has only `/view` and sign-in: every other page there redirects to `/view`, and other requests get 404. Requests on that host also cannot call the Studio's server actions or API routes, even when a member is signed in there. Add an ingress rule in `docker/cloudflared/config.yml` for the hostname that points to the same service as the Studio (no `httpHostHeader`, the Studio reads the `Host` header), list both addresses in `APP_BASE_URL` separated by a comma, and add each address's `/auth/callback` to the Auth0 application's Allowed Callback URLs and each address to its Allowed Logout URLs. Sessions are per hostname, so people sign in once on each. The editor's "Open view" link then points to the view host. If `IARA_VIEW_HOST` is set but is not a bare hostname, the Studio answers 503 until it is fixed.
+
 ### Publishing the engine
 
 Machines install the engine from the S3 bucket. Build a Linux wheel (x86-64-v3, cross-compiled with zig) and the proxy binary (`iara-s3-proxy`, built with cargo-zigbuild), and upload both to `engine/<version>/`:

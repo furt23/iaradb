@@ -21,11 +21,15 @@ hero:
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
 
+## How it works
+
+Queries are built as lazy plans and run only when they are collected or written. At run time the engine optimizes the plan, splits it into pipelines, and runs each pipeline in parallel on a thread pool. The input is divided into morsels, such as the row groups of a Parquet file or the byte ranges of a CSV file, and each morsel is processed by one worker. Results are Arrow record batches: a `DataFrame` holds them in memory, and a sink such as `sink_parquet` writes them out as they are produced. Aggregations, joins and sorts reserve their memory from a process-wide pool and spill to disk when it is full.
+
 ## Core Modules & API Surface
 
 <CardGrid stagger>
   <Card title="LazyFrame API" icon="random">
-    Build optimized logical execution plans lazily. Supports projection, filtering, grouping, distributed joins, sorting, and streaming out-of-core results.
+    Build optimized logical execution plans lazily. Supports projection, filtering, grouping, joins, sorting, and streaming out-of-core results.
     [Explore LazyFrame](/lazyframe/)
   </Card>
   <Card title="DataFrame (Materialized)" icon="list-format">
