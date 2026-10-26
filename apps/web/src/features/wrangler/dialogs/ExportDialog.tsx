@@ -10,9 +10,9 @@ import DialogContent from "@mui/material/DialogContent";
 import DialogTitle from "@mui/material/DialogTitle";
 import Tab from "@mui/material/Tab";
 import Tabs from "@mui/material/Tabs";
-import Typography from "@mui/material/Typography";
 import Link from "next/link";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { sqlHref } from "@/features/data/links";
 import { useNotify } from "@/features/shell/notify";
@@ -26,28 +26,26 @@ interface Props {
 }
 
 export function ExportDialog({ open, sql, python, onClose }: Props) {
+  const { t } = useTranslation();
   const [lang, setLang] = useState<"python" | "sql">("sql");
   const notify = useNotify();
   const code = lang === "python" ? python : sql;
 
   const copy = async () => {
     await navigator.clipboard.writeText(code);
-    notify("Copied", "success");
+    notify(t("Copied"), "success");
   };
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
-      <DialogTitle sx={{ pb: 1 }}>Recipe code</DialogTitle>
+      <DialogTitle sx={{ pb: 1 }}>{t("Recipe code")}</DialogTitle>
       <Box sx={{ px: 3, borderBottom: 1, borderColor: "divider" }}>
         <Tabs value={lang} onChange={(_, v) => setLang(v)}>
-          <Tab value="sql" label="SQL" />
-          <Tab value="python" label="Python" />
+          <Tab value="sql" label={t("SQL")} />
+          <Tab value="python" label={t("Python")} />
         </Tabs>
       </Box>
       <DialogContent sx={{ pt: 2 }}>
-        <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mb: 1 }}>
-          The query the preview ran, over all rows.
-        </Typography>
         <Box
           component="pre"
           sx={{
@@ -72,14 +70,14 @@ export function ExportDialog({ open, sql, python, onClose }: Props) {
         <Box>
           {lang === "sql" && !/\bFROM\s+source(?:\s|\)|;|,|$)/i.test(sql) && (
             <Button variant="outlined" size="small" startIcon={<TerminalOutlined />} component={Link} href={sqlHref(sql)} onClick={onClose}>
-              Open in SQL editor
+              {t("Open in SQL editor")}
             </Button>
           )}
         </Box>
         <Box sx={{ display: "flex", gap: 1 }}>
-          <Button onClick={onClose}>Close</Button>
+          <Button onClick={onClose}>{t("Close")}</Button>
           <Button variant="contained" startIcon={<ContentCopy fontSize="small" />} onClick={copy}>
-            Copy
+            {t("Copy")}
           </Button>
         </Box>
       </DialogActions>

@@ -4,7 +4,8 @@ Running a cell runs it, and the cells it reads from that have no value yet
 (never ran, or failed). The cells that read its values are marked stale, not
 run: nothing runs unless asked. With ``autorun`` (a notebook setting in the
 Studio) they run too, as marimo does, and so do edited ancestors. Running
-all cells, and changing a widget, runs everything that depends on it.
+all cells stops at the first cell that fails, as a notebook does; changing a
+widget runs everything that depends on it, failures included.
 
 Notebook files belong to the Studio (protocol v2): it sends a notebook's
 source when opening it and writes back the source the kernel returns on
@@ -42,6 +43,8 @@ class CellState:
     inputs_changed: bool = False
     #: the frames the last run made: name, kind, rows, columns and types
     frames: list[dict[str, Any]] = field(default_factory=list)
+    #: the engine queries the last run made, with their plans (see ``cell_runner.queries_of``)
+    queries: list[dict[str, Any]] = field(default_factory=list)
 
     def view(self, code: str) -> dict[str, Any]:
         edited = self.code_run is not None and self.code_run != code
@@ -53,6 +56,7 @@ class CellState:
             "streams": self.streams,
             "elapsed_ms": self.elapsed_ms,
             "frames": self.frames,
+            "queries": self.queries,
         }
 
 
@@ -186,7 +190,7 @@ class NotebookService:
                 s = self.states.get(cid)
                 if s is None or s.status in ("queued", "running"):
                     continue
-                s.status, s.output, s.streams, s.elapsed_ms, s.frames = "idle", None, [], None, []
+                s.status, s.output, s.streams, s.elapsed_ms, s.frames, s.queries = "idle", None, [], None, [], []
                 cleared += 1
         return {"cleared": cleared}
 
@@ -199,6 +203,11 @@ class NotebookService:
         s = self.states.get(cid)
         return s is not None and s.status == "done"
 
+    def _lacks(self, graph: DependencyGraph, cid: str, readers: set[str]) -> bool:
+        """Whether a name ``readers`` take from ``cid`` is missing from its value (it was edited to define it since it ran)."""
+        have = self.values.get(cid, {})
+        return any(src == cid and n not in have for r in readers for n, src in graph.deps[r].sources.items())
+
     def _plan(self, graph: DependencyGraph, nb: Notebook, targets: list[str], autorun: bool = True) -> list[str]:
         seeds = set(targets)
         # the setup cell comes before any cell: it runs when it never did or was edited
@@ -207,8 +216,9 @@ class NotebookService:
             if autorun:
                 seeds |= {a for a in graph.ancestors(t) if self._needs_run(nb.cell(a))}
             else:
-                # inputs with a value are read as they are (even if edited since)
-                seeds |= {a for a in graph.ancestors(t) if not self._has_value(a)}
+                # inputs with a value are read as they are (even if edited since), unless it lacks a name they read
+                up = graph.ancestors(t)
+                seeds |= {a for a in up if not self._has_value(a) or self._lacks(graph, a, up | {t})}
         plan = set(seeds)
         if autorun:
             for s in seeds:
@@ -230,7 +240,7 @@ class NotebookService:
     def _finish(self, cell: Cell, outcome: Outcome, defs: tuple[str, ...]) -> None:
         s = self.states[cell.id]
         s.status, s.output, s.elapsed_ms, s.code_run = outcome.status, outcome.output, outcome.elapsed_ms, cell.code
-        s.frames = outcome.frames
+        s.frames, s.queries = outcome.frames, outcome.queries
         if outcome.status == "done":
             self.values[cell.id] = dict(outcome.defs)
             s.defs = defs
@@ -239,9 +249,12 @@ class NotebookService:
     def _blocked(reason: str) -> Outcome:
         return Outcome("error", {"type": "error", "ename": "Blocked", "evalue": reason, "traceback": ""})
 
-    def run(self, cells: list[dict[str, Any]] | None, targets: list[str] | None, emit: Emit, autorun: bool = False) -> dict[str, Any]:
+    def run(self, cells: list[dict[str, Any]] | None, targets: list[str] | None, emit: Emit, autorun: bool = False, stop_on_error: bool = True) -> dict[str, Any]:
         """Run ``targets`` (every cell when None: all of them run); ``autorun``:
-        the cells that read their values run too, instead of turning stale."""
+        the cells that read their values run too, instead of turning stale.
+        ``stop_on_error``: the run ends at the first cell that fails, and the
+        cells after it do not run, as in a notebook (otherwise the cells that
+        read from a failed cell are blocked and the rest still run)."""
         with self._lock:
             nb = self._sync(cells)
             self._emit_widgets(emit)
@@ -283,10 +296,10 @@ class NotebookService:
                 self._emit_widgets(emit)
             if outcome.status != "done":
                 failed.add(cid)
-            if outcome.status == "cancelled":
+            if outcome.status == "cancelled" or (outcome.status == "error" and stop_on_error):
                 self._unqueue([snapshot[c] for c in order[i + 1 :]], emit)
                 self._mark_stale(graph, snapshot, ran, emit)
-                return {"ran": ran, "interrupted": True}
+                return {"ran": ran, "interrupted": outcome.status == "cancelled"}
         self._mark_stale(graph, snapshot, ran, emit)
         return {"ran": ran, "interrupted": False}
 
@@ -312,8 +325,8 @@ class NotebookService:
             self._emit_widgets(emit)
         if not targets:
             return {"ran": [], "interrupted": False}
-        # a widget is for exploring: what depends on it runs
-        return self.run(None, targets, emit, autorun=True)
+        # a widget is for exploring: what depends on it runs, past a failure too
+        return self.run(None, targets, emit, autorun=True, stop_on_error=False)
 
     def _unqueue(self, rest: list[Cell], emit: Emit) -> None:
         with self._lock:

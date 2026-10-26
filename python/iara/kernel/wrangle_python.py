@@ -10,13 +10,15 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from iara.kernel.wrangle import _COMPARE, _sql_type, ident, is_numeric, is_text, literal
+from iara.kernel.wrangle import _COMPARE, _sql_type, ident, is_numeric, is_text, literal, pivot_sql, unpivot_sql
 
 #: the API's names for the wrangler's cast targets
 _DTYPES = {"int64": "Int64", "float64": "Float64", "utf8": "Utf8", "bool": "Boolean", "date": "Date32", "timestamp": "Timestamp"}
 _OPS = {"=": "==", "<>": "!="}
 _CASE = {"upper": "to_uppercase", "lower": "to_lowercase", "title": "to_titlecase"}
 _INTS = ("Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64")
+#: the expression method of each aggregation
+_AGGS = {"count": "count", "count_distinct": "n_unique", "sum": "sum", "avg": "mean", "min": "min", "max": "max", "median": "median"}
 
 
 def _s(value: Any) -> str:
@@ -29,8 +31,8 @@ def _col(name: str) -> str:
 
 def _value(value: Any, type_name: str) -> str:
     """A Python literal for a value compared with (or put in) a column of ``type_name``."""
-    if value is None:
-        return "None"
+    if value is None or isinstance(value, bool):
+        return str(value)
     if is_numeric(type_name):
         literal(value, type_name)  # the same check as the SQL
         number = float(value)
@@ -54,6 +56,16 @@ def _call(method: str, *args: str) -> str:
     if len(one) <= 88 or len(args) < 2:
         return one
     return f".{method}(\n" + "".join(f"        {a},\n" for a in args) + "    )"
+
+
+def _sql_step(query: str) -> str:
+    """A step the frame API has no call for: SQL over the frame so far (`self`)."""
+    # the last quote must not join the closing ones, nor a run of three end the string early
+    body = query.replace("\\", "\\\\")
+    if body.endswith('"'):
+        body = body[:-1] + '\\"'
+    body = body.replace('"""', '""\\"')
+    return f'.sql("""{body}""")'
 
 
 def python_step(op: dict[str, Any], schema: dict[str, str]) -> str:
@@ -97,7 +109,7 @@ def python_step(op: dict[str, Any], schema: dict[str, str]) -> str:
         # no mode in the expression API: the step runs as SQL over the frame so far (`self`)
         q = ident(name)
         mode = f"(SELECT {q} FROM self WHERE {q} IS NOT NULL GROUP BY {q} ORDER BY count(*) DESC, {q} LIMIT 1)"
-        return f'.sql("""SELECT * REPLACE (CAST(coalesce({q}, {mode}) AS {_sql_type(t)}) AS {q}) FROM self""")'
+        return _sql_step(f"SELECT * REPLACE (CAST(coalesce({q}, {mode}) AS {_sql_type(t)}) AS {q}) FROM self")
     if kind == "drop_nulls":
         cols = op.get("columns") or []
         return ".drop_nulls()" if not cols else f".drop_nulls(subset=[{', '.join(_s(c) for c in cols)}])"
@@ -125,7 +137,34 @@ def python_step(op: dict[str, Any], schema: dict[str, str]) -> str:
         return _call("with_columns", *flags) if flags else ""
     if kind == "math_round":
         return _call("with_columns", f"{_col(op['column'])}.round({int(op['decimals'])})")
+    if kind == "group_by":
+        aggs = [_agg(a) for a in op["aggs"]]
+        group = f".group_by({', '.join(_s(k) for k in op['keys'])})" if op["keys"] else ""
+        return group + _call("agg", *aggs)
+    if kind == "join":
+        on = op["on"]
+        # the right frame carries only the keys (named as the left's, so the join keeps one) and the new columns
+        keys = [_col(p["right"]) if p["right"] == p["left"] else f"{_col(p['right'])}.alias({_s(p['left'])})" for p in on]
+        picks = [_col(c) if c == out else f"{_col(c)}.alias({_s(out)})" for c, out in zip(op["columns"], op["values"])]
+        right = f"ws.table({_s(op['table'])}).select({', '.join(keys + picks)})"
+        return _call("join", right, f"on=[{', '.join(_s(p['left']) for p in on)}]", f"how={_s(op['how'])}")
+    if kind == "date_part":
+        return _call("with_columns", f"{_col(op['column'])}.dt.{op['part']}().alias({_s(op['as'])})")
+    if kind == "date_trunc":
+        return _call("with_columns", f"{_col(op['column'])}.dt.truncate({_s(op['unit'])}).alias({_s(op['as'])})")
+    if kind == "calculated":
+        cell = f"({op['expression']}) AS {ident(op['name'])}"
+        return _sql_step(f"SELECT * REPLACE ({cell}) FROM self" if op["name"] in schema else f"SELECT *, {cell} FROM self")
+    if kind == "pivot":
+        return _sql_step(pivot_sql("self", op, schema))
+    if kind == "unpivot":
+        return _sql_step(unpivot_sql("self", op, schema))
     raise ValueError(f"unknown step {kind!r}")
+
+
+def _agg(a: dict[str, Any]) -> str:
+    expr = "F.len()" if a.get("column") is None else f"{_col(a['column'])}.{_AGGS[a['fn']]}()"
+    return f"{expr}.alias({_s(a['as'])})"
 
 
 def python_code(steps: list[tuple[dict[str, Any], dict[str, str]]], name: str, from_result: bool, order: tuple[str, bool] | None) -> str:

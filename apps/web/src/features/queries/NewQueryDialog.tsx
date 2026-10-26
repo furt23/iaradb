@@ -51,7 +51,6 @@ export function NewQueryDialog({ open, onClose, folder = "queries", text }: { op
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && void create()}
-          helperText={t("A .sql file: versioned with the workspace, run on the default cluster")}
           sx={{ mt: 1 }}
         />
       </DialogContent>

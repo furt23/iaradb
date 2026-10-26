@@ -77,8 +77,15 @@ export function useNotebook(view: NotebookView, onRunFinished?: () => void) {
     [notify, onRunFinished, save, refreshCatalog],
   );
 
+  // one run at a time: a run asked for while another goes on would start as soon as that one is stopped
+  const runningRef = useRef(state.running);
+  runningRef.current = state.running;
   const run = useCallback(
-    (cellIds: string[] | null) => execute({ kind: "notebook", path: state.path, cells: cellsRef.current, cellIds, autorun }),
+    async (cellIds: string[] | null) => {
+      if (runningRef.current) return;
+      runningRef.current = true;
+      await execute({ kind: "notebook", path: state.path, cells: cellsRef.current, cellIds, autorun });
+    },
     [execute, state.path, autorun],
   );
 
@@ -103,7 +110,7 @@ export function useNotebook(view: NotebookView, onRunFinished?: () => void) {
     const r = await restartKernel(kernelKey);
     if (r.ok) {
       dispatch({ type: "restarted" });
-      notify("Kernel restarted: every value was cleared (outputs are kept until you clear them)", "info");
+      notify("Kernel restarted: every value was cleared", "info");
       return true;
     }
     notify(r.error.message, "error");

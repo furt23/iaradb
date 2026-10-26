@@ -20,7 +20,12 @@ test("a job runs a query file by hand and keeps its log", async ({ page }) => {
   const dialog = page.getByRole("dialog");
   await dialog.getByLabel("Name", { exact: true }).fill("E2E job");
   await dialog.getByRole("combobox", { name: "Runs" }).click();
+  // the panel browses by folder; typing searches every notebook and query file
+  await page.getByRole("option", { name: "folder queries" }).click();
+  await expect(page.getByRole("option", { name: "queries/e2e_job.sql" })).toBeVisible();
+  await page.getByLabel("search what the task runs").fill("e2ejob");
   await page.getByRole("option", { name: "queries/e2e_job.sql" }).click();
+  await expect(dialog.getByRole("combobox", { name: "Runs" })).toHaveValue("queries/e2e_job.sql");
   // no AWS here: runs go to the Local cluster
   await expect(dialog.getByRole("combobox", { name: "Cluster" })).toContainText("Local");
   await dialog.getByRole("button", { name: "Create" }).click();
@@ -46,10 +51,10 @@ test("a notebook is scheduled from its menu in the file tree", async ({ page }) 
   await menu.click();
   await page.getByRole("menuitem", { name: "Schedule as a job…" }).click();
   await page.waitForURL("**/jobs?new=*");
-  await expect(page.getByRole("combobox", { name: "Runs" })).toContainText("notebooks/e2e_nightly.py");
+  await expect(page.getByRole("combobox", { name: "Runs" })).toHaveValue("notebooks/e2e_nightly.py");
   await page.getByRole("combobox", { name: "Schedule" }).click();
   await page.getByRole("option", { name: "Every day" }).click();
-  await expect(page.getByText(/every day at 06:00 UTC · next/)).toBeVisible();
+  await expect(page.getByText(/Next run: \d{4}-\d\d-\d\d 06:00 UTC/)).toBeVisible();
   await page.getByRole("button", { name: "Create" }).click();
   const row = page.getByRole("row", { name: "job e2e nightly" });
   await expect(row).toContainText("every day at 06:00 UTC");

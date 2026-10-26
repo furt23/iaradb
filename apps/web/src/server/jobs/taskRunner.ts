@@ -4,8 +4,15 @@ import type { CatalogChange, CellOutput, RunResult } from "@iara/protocol";
 
 import { splitQuery } from "@/features/queries/queryHeader";
 import { detectParams, mergeSpecs, type ParamRaw, resolveParams } from "@/features/queries/queryParams";
+import type { RenderResult } from "@/lib/dashboards/types";
 import { splitStatements } from "@/lib/sqlStatements";
 
+import { getPublished } from "../dashboards/publish";
+import { dashboardSlug } from "../dashboards/refresh";
+import { renderDashboard } from "../dashboards/run";
+import { audienceAllows, forgetSnapshots, saveSnapshot } from "../dashboards/snapshots";
+import { readConfig } from "../dashboards/store";
+import { readGrants } from "../governance/store";
 import type { KernelClient } from "../kernel/client";
 import { kernels } from "../kernel/manager";
 import { applyCatalogChanges } from "../workspace/catalogChanges";
@@ -14,8 +21,9 @@ import { readSqlFile } from "../workspace/sqlFiles";
 import type { TaskInput, TaskOutcome } from "./orchestrator";
 
 /**
- * Running one task of a job: its notebook or query file, in a kernel of its
- * own (`<run>:<task>`) on the run's cluster. The kernel always ends with the
+ * Running one task of a job: its notebook or query file, or the render of a
+ * dashboard for a scheduled refresh (dashboards/refresh.ts), in a kernel
+ * of its own (`<run>:<task>`) on the run's cluster. The kernel always ends with the
  * task. The task's `timeoutMinutes` fails it; an abort of `signal` cancels it.
  */
 
@@ -25,6 +33,7 @@ function outputText(o: CellOutput | null): string {
   if (!o) return "";
   if (o.type === "error") return `${o.ename}: ${o.evalue}`;
   if (o.type === "table") return `${o.result.num_rows} rows × ${o.result.columns.length} columns`;
+  if (o.type === "tables") return o.tables.map(outputText).join("; ");
   return "";
 }
 
@@ -74,6 +83,51 @@ async function runQueries(kernel: KernelClient, input: TaskInput, changes: Catal
   return `${statements.length} statement(s) ran`;
 }
 
+/**
+ * Render the published dashboard `dashboards/<slug>` for every user who can
+ * open it and store the renders, which its viewers get at once from then on.
+ * `stopped` says the task was cancelled or timed out: nothing is stored then.
+ */
+export async function refreshDashboard(kernel: Pick<KernelClient, "request">, input: TaskInput, stopped: () => boolean = () => false): Promise<string> {
+  const { target } = input.task;
+  const p = getPublished((await readConfig(dashboardSlug(target) ?? "")).id);
+  if (!p) throw new Error(`${target} is not published`);
+  const audiences = audienceAllows(p, readGrants());
+  if (!audiences.length) throw new Error(`${p.title} has no one to render for (IARA_ALLOWED_EMAILS and IARA_VIEWER_EMAILS name nobody who can open it)`);
+  const renders: { allow: string[] | null; result: RenderResult }[] = [];
+  let widgets = 0;
+  let failed = 0;
+  let firstError = "";
+  for (const allow of audiences) {
+    const result = await renderDashboard(
+      p,
+      {},
+      {
+        // once stopped, the queries still to run fail at once
+        request: (method, params) => (stopped() ? Promise.reject(new Interrupted("interrupted")) : kernel.request(method, params)),
+        redact: false,
+        source: `job ${input.jobId}`,
+        allow,
+      },
+      [],
+    );
+    if (stopped()) throw new Interrupted("interrupted");
+    const data = Object.entries(result.widgets);
+    const errors = data.flatMap(([id, w]) => (w.kind === "error" ? [`widget ${id} failed: ${w.message}`] : []));
+    widgets += data.length;
+    failed += errors.length;
+    firstError ||= errors[0] ?? "";
+    input.log(`rendered for ${allow ? `${allow.length} granted ${allow.length === 1 ? "scope" : "scopes"}` : "everything"} · ${errors.length} of ${data.length} widgets failed`);
+    for (const e of errors) input.log(e);
+    renders.push({ allow, result });
+  }
+  if (failed > 0 && failed === widgets) throw new Error(`every widget failed (${firstError})`);
+  // the renders of the audiences now, not of a past publish or a past set of users
+  forgetSnapshots(p.id);
+  for (const { allow, result } of renders) saveSnapshot(p, allow, result);
+  return `dashboard ${p.title} refreshed (${renders.length} ${renders.length === 1 ? "render" : "renders"})`;
+}
+
 function cancelReason(signal: AbortSignal): string {
   return typeof signal.reason === "string" ? signal.reason : "cancelled";
 }
@@ -97,7 +151,12 @@ export async function runTask(input: TaskInput): Promise<TaskOutcome> {
   try {
     if (signal.aborted) return { status: "cancelled", error: cancelReason(signal) };
     kernel = kernels.forJob(kernelId, input.cluster.id);
-    const summary = task.target.toLowerCase().endsWith(".sql") ? await runQueries(kernel, input, changes) : await runNotebook(kernel, input, changes);
+    const summary =
+      dashboardSlug(task.target) !== null
+        ? await refreshDashboard(kernel, input, () => timedOut || signal.aborted)
+        : task.target.toLowerCase().endsWith(".sql")
+          ? await runQueries(kernel, input, changes)
+          : await runNotebook(kernel, input, changes);
     if (timedOut) throw new Error(`timed out after ${task.timeoutMinutes} min`);
     if (signal.aborted) return { status: "cancelled", error: cancelReason(signal) };
     return { status: "succeeded", summary };

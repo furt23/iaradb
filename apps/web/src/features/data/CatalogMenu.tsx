@@ -2,12 +2,14 @@
 
 import CreateNewFolderOutlined from "@mui/icons-material/CreateNewFolderOutlined";
 import DeleteOutline from "@mui/icons-material/DeleteOutlineOutlined";
+import LockOutlined from "@mui/icons-material/LockOutlined";
 import Divider from "@mui/material/Divider";
 import Menu from "@mui/material/Menu";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { useAccount } from "@/features/shell/account";
 import { useGuard, useNotify } from "@/features/shell/notify";
 import { MAIN_SCHEMA } from "@/lib/catalogToml";
 import { unwrap } from "@/lib/action";
@@ -15,6 +17,7 @@ import { removeCatalog } from "@/server/actions/catalog";
 
 import { ActionItem } from "./ActionItem";
 import { NewSchemaDialog } from "./NewSchemaDialog";
+import { PermissionsDialog } from "./PermissionsDialog";
 import type { CatalogGroup } from "./schemaGroups";
 import type { MenuAnchor } from "./TreeRow";
 
@@ -31,6 +34,8 @@ export interface CatalogMenuTarget {
 export function CatalogMenu({ target, onClose }: { target: CatalogMenuTarget | null; onClose(): void }) {
   const { t } = useTranslation();
   const [creatingIn, setCreatingIn] = useState<string | null>(null);
+  const [granting, setGranting] = useState<string | null>(null);
+  const { admin } = useAccount();
   const guard = useGuard();
   const notify = useNotify();
   const router = useRouter();
@@ -60,6 +65,7 @@ export function CatalogMenu({ target, onClose }: { target: CatalogMenuTarget | n
         slotProps={{ list: { dense: true, "aria-label": target ? `actions for catalog ${target.catalog.name}` : undefined } }}
       >
         <ActionItem icon={<CreateNewFolderOutlined fontSize="small" />} label={t("New schema here…")} onClick={run((c) => setCreatingIn(c.name))} />
+        {admin && <ActionItem icon={<LockOutlined fontSize="small" />} label={t("Permissions…")} onClick={run((c) => setGranting(c.name))} />}
         <Divider />
         <ActionItem
           icon={<DeleteOutline fontSize="small" />}
@@ -67,10 +73,11 @@ export function CatalogMenu({ target, onClose }: { target: CatalogMenuTarget | n
           onClick={run(remove)}
           danger
           disabled={isDefault || holds}
-          hint={isDefault ? t("The default catalog is named after the workspace") : holds ? t("Remove its tables and schemas first") : undefined}
+          hint={!isDefault && holds ? t("Remove its tables and schemas first") : undefined}
         />
       </Menu>
       <NewSchemaDialog open={creatingIn !== null} catalog={creatingIn ?? undefined} onClose={() => setCreatingIn(null)} />
+      <PermissionsDialog open={granting !== null} on={granting ?? ""} onClose={() => setGranting(null)} />
     </>
   );
 }

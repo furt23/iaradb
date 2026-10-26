@@ -3,6 +3,10 @@
 //! Phase 1 (streaming, per worker thread): every worker starts by
 //! pre-aggregating its morsels into a thread-local table (dense group ids +
 //! accumulator states). That is ideal for low/medium cardinality.
+//! A local table that grows large while still folding several rows into each
+//! group (skewed keys: a few values on most rows, many rare ones) is handed
+//! over whole, to be merged at the end, and the worker starts a new one: the
+//! frequent values keep being aggregated where they are read.
 //! If the local table grows large while reducing the input poorly (few rows
 //! per group, typical for `GROUP BY <id>`), the worker switches to *radix
 //! mode*: it stops pre-aggregating and scatters the evaluated input rows by
@@ -104,18 +108,48 @@ pub struct AggregateSink {
     pub schema: SchemaRef,
     /// estimated bytes of one group in a pre-aggregation table
     per_group: usize,
-    /// radix mode: the hash partitions, shared by all workers
-    parts: Vec<Part>,
-    /// set once a partition table could not grow: radix rows go to `spill`
+    /// the planner's estimate of the input rows
+    est_rows: Option<f64>,
+    /// the morsels of the input pipeline's source: with the rows a worker
+    /// got from the morsels it ran, an estimate of the input rows that
+    /// accounts for the filters (the planner's often does not)
+    pub morsels: Option<usize>,
+    /// radix mode: the hash partitions, shared by all workers, made when the
+    /// first worker switches to it (or for a partitioned finalize)
+    radix: OnceLock<Radix>,
+    /// set once a partition table could not grow: radix rows go to the spill
     spilling: AtomicBool,
-    spill: AggSpill,
     /// workers created so far (spreads their first partition)
     workers: AtomicUsize,
     /// the key columns rows are partitioned by, fixed by the first worker to
     /// switch to radix mode
     part_cols: OnceLock<Vec<usize>>,
+    /// full thread-local tables handed over, merged in the finalize
+    flushed: Mutex<Vec<AggLocal>>,
+    /// a LIMIT above with no ORDER BY between: this many groups will do, and
+    /// the partitioned finalize stops once it has them (each partition holds
+    /// complete groups)
+    pub fetch: Option<usize>,
+}
+
+/// The hash partitions of radix mode: as many as keep about
+/// [`GROUPS_PER_PARTITION`] groups each, so a partition's table stays in cache.
+struct Radix {
+    parts: Vec<Part>,
+    spill: AggSpill,
     /// bytes of waiting rows that make a partition fold them
     fold_bytes: usize,
+}
+
+impl Radix {
+    fn new(groups: f64) -> Self {
+        let n = num_partitions(groups);
+        Self {
+            parts: (0..n).map(|_| Part { waiting: Mutex::new(Waiting::new()), table: Mutex::new(None) }).collect(),
+            spill: AggSpill::new(n),
+            fold_bytes: fold_bytes(n),
+        }
+    }
 }
 
 /// Evaluated input columns of one partition chunk:
@@ -156,6 +190,8 @@ pub struct AggLocal {
     accs: AccSet,
     gids: Vec<u32>,
     rows: usize,
+    /// rows folded into the current table
+    table_rows: usize,
     /// rows go to the shared partitions
     radix: bool,
     /// radix mode while spilling: partition -> chunks waiting for the spill files
@@ -170,8 +206,11 @@ pub struct AggLocal {
     buffered_bytes: usize,
     /// scan position of the next row: (morsel, rows of it seen so far)
     seq: (usize, u64),
-    /// the partition this worker visits first
-    start: usize,
+    /// morsels the worker took rows from, and its rows before the current one
+    morsels_seen: usize,
+    finished_rows: usize,
+    /// the worker's number (spreads the partition it visits first)
+    worker: usize,
 }
 
 impl AggLocal {
@@ -187,6 +226,7 @@ impl AggLocal {
     fn next_seq(&mut self, morsel: usize, n: usize) -> u64 {
         if self.seq.0 != morsel {
             self.seq = (morsel, 0);
+            self.morsels_seen += 1;
         }
         let at = ((morsel as u64) << 40) + self.seq.1;
         self.seq.1 += n as u64;
@@ -196,10 +236,15 @@ impl AggLocal {
 
 /// Up to this many groups in total, thread-local tables are merged sequentially.
 const SEQUENTIAL_MERGE_LIMIT: usize = 1 << 15;
+/// ... and up to this many when an accumulator merges its whole state at once.
+const WHOLE_MERGE_LIMIT: usize = 1 << 22;
 /// A local table switches to radix mode beyond this many groups ...
 const RADIX_MIN_GROUPS: usize = 1 << 15;
 /// ... when it holds fewer than this many input rows per group.
 const RADIX_MAX_ROWS_PER_GROUP: usize = 16;
+/// A table of at least this many rows per group is handed over instead (see
+/// [`AggregateSink::flush_table`]).
+const FLUSH_MIN_ROWS_PER_GROUP: usize = 4;
 /// Radix mode scatters at least this many rows per partition at once.
 const SLICE_ROWS: usize = 128;
 
@@ -214,13 +259,16 @@ fn fold_bytes(parts: usize) -> usize {
     (budget / WAITING_SHARE / parts).max(1 << 20)
 }
 
-fn num_partitions() -> usize {
+/// Groups a partition is sized for: its table stays in a core's cache
+/// (more, smaller partitions cost more slices and folds per row).
+const GROUPS_PER_PARTITION: f64 = 65536.0;
+
+/// Partitions for about `groups` groups in all.
+fn num_partitions(groups: f64) -> usize {
     if let Some(p) = std::env::var("IARA_AGG_PARTITIONS").ok().and_then(|v| v.parse::<usize>().ok()) {
         return p.next_power_of_two();
     }
-    let p = (rayon::current_num_threads() * 4).next_power_of_two().clamp(8, 256);
-    // under a memory limit partitions may be spilled and read back one by one: smaller ones
-    if memory::pool().limited() { p.max(64) } else { p }
+    ((groups / GROUPS_PER_PARTITION).ceil().min(1e6) as usize).next_power_of_two().clamp(64, 1024)
 }
 
 #[inline(always)]
@@ -234,35 +282,41 @@ fn chunk_rows(chunk: &[ArrayRef]) -> usize {
 }
 
 impl AggregateSink {
-    pub fn new(group_exprs: Vec<PhysExpr>, aggs: Vec<AggregateExpr>, schema: SchemaRef) -> Self {
+    /// `est_rows`: the planner's estimate of the input rows (sizes the radix
+    /// partitions with the share of new groups the first rows show).
+    pub fn new(group_exprs: Vec<PhysExpr>, aggs: Vec<AggregateExpr>, schema: SchemaRef, est_rows: Option<f64>) -> Self {
         let group_types: Vec<DataType> = group_exprs.iter().map(|e| e.data_type()).collect();
         let per_group = group_bytes(&group_types, &aggs);
-        let parts = num_partitions();
         Self {
             group_exprs,
             group_types,
             aggs,
             schema,
             per_group,
-            parts: (0..parts)
-                .map(|_| Part { waiting: Mutex::new(Waiting::new()), table: Mutex::new(None) })
-                .collect(),
+            est_rows,
+            morsels: None,
+            radix: OnceLock::new(),
             spilling: AtomicBool::new(false),
-            spill: AggSpill::new(parts),
             workers: AtomicUsize::new(0),
             part_cols: OnceLock::new(),
-            fold_bytes: fold_bytes(parts),
+            flushed: Mutex::new(vec![]),
+            fetch: None,
         }
     }
 
+    /// The radix partitions (made by the first switch to radix mode).
+    fn radix(&self) -> &Radix {
+        self.radix.get().expect("radix partitions are made before rows go to them")
+    }
+
     fn new_local(&self) -> Result<AggLocal> {
-        let parts = self.parts.len();
         let worker = self.workers.fetch_add(1, Ordering::Relaxed);
         Ok(AggLocal {
             keys: if self.group_exprs.is_empty() { None } else { Some(GroupKeys::try_new(&self.group_types)?) },
             accs: self.new_accs()?,
             gids: vec![],
             rows: 0,
+            table_rows: 0,
             radix: false,
             buffered: vec![],
             hashes: vec![],
@@ -272,7 +326,9 @@ impl AggregateSink {
             table_bytes: 0,
             buffered_bytes: 0,
             seq: (usize::MAX, 0),
-            start: worker * parts / rayon::current_num_threads().max(1) % parts,
+            morsels_seen: 0,
+            finished_rows: 0,
+            worker,
         })
     }
 
@@ -309,16 +365,17 @@ impl AggregateSink {
     /// its share of memory (or the pool is full) they are folded together.
     fn offer(&self, p: usize, chunk: Chunk) -> Result<()> {
         let bytes = arrays_bytes(&chunk);
+        let radix = self.radix();
         let (chunks, _reservation) = {
-            let mut w = self.parts[p].waiting.lock();
+            let mut w = radix.parts[p].waiting.lock();
             let fits = w.reservation.try_grow(bytes);
             w.chunks.push(chunk);
-            if fits && w.reservation.size() < self.fold_bytes {
+            if fits && w.reservation.size() < radix.fold_bytes {
                 return Ok(());
             }
             (std::mem::take(&mut w.chunks), std::mem::replace(&mut w.reservation, memory::pool().reservation()))
         };
-        let mut table = self.parts[p].table.lock();
+        let mut table = radix.parts[p].table.lock();
         if table.is_none() {
             *table = Some(self.new_table()?);
         }
@@ -326,6 +383,27 @@ impl AggregateSink {
         for chunk in &chunks {
             self.fold(t, chunk)?;
         }
+        Ok(())
+    }
+
+    /// Thread-local tables may be handed over: their states merge per
+    /// partition (a DISTINCT state would index its pairs by group for that,
+    /// once per handed-over table).
+    fn can_flush(&self) -> bool {
+        !self.aggs.iter().any(|a| a.distinct)
+    }
+
+    /// Hand the worker's full table over (merged in the finalize, like the
+    /// tables left at the end) and start a new one.
+    fn flush_table(&self, local: &mut AggLocal) -> Result<()> {
+        let mut full = self.new_local()?;
+        std::mem::swap(&mut full.keys, &mut local.keys);
+        std::mem::swap(&mut full.accs, &mut local.accs);
+        std::mem::swap(&mut full.reservation, &mut local.reservation);
+        full.table_bytes = local.table_bytes;
+        local.table_bytes = 0;
+        local.table_rows = 0;
+        self.flushed.lock().push(full);
         Ok(())
     }
 
@@ -348,7 +426,7 @@ impl AggregateSink {
     fn spill_buffered(&self, local: &mut AggLocal) -> Result<()> {
         for (p, chunks) in local.buffered.iter_mut().enumerate() {
             for chunk in chunks.drain(..) {
-                self.spill.write(p, &chunk)?;
+                self.radix().spill.write(p, &chunk)?;
             }
         }
         local.reservation.shrink(local.buffered_bytes);
@@ -478,7 +556,7 @@ impl AggregateSink {
                 cols.push(f);
             }
         }
-        let min_rows = (self.parts.len() * SLICE_ROWS).max(crate::io::parquet::batch_size());
+        let min_rows = (self.radix().parts.len() * SLICE_ROWS).max(crate::io::parquet::batch_size());
         if n >= min_rows && local.pending.is_empty() {
             return self.scatter(local, cols);
         }
@@ -512,7 +590,8 @@ impl AggregateSink {
     /// Radix mode: scatter evaluated rows (`[keys..., inputs...]`) into hash
     /// partitions and hand every slice to its partition.
     fn scatter(&self, local: &mut AggLocal, cols: Vec<ArrayRef>) -> Result<()> {
-        let p = self.parts.len();
+        let p = self.radix().parts.len();
+        let start = local.worker * p / rayon::current_num_threads().max(1) % p;
         let shift = 64 - p.trailing_zeros();
         self.partition_hashes(&cols, &mut local.hashes)?;
         let n = local.hashes.len();
@@ -539,7 +618,7 @@ impl AggregateSink {
         if !self.spilling.load(Ordering::Relaxed) {
             let sorted = cols.iter().map(|c| take(c, &perm, None)).collect::<Result<Vec<_>, _>>()?;
             for i in 0..p {
-                let part = (local.start + i) % p;
+                let part = (start + i) % p;
                 if offsets[part] < offsets[part + 1] {
                     self.offer(part, slice(&sorted, part))?;
                 }
@@ -617,7 +696,11 @@ impl Sink for AggregateSink {
         if n == 0 || selected == 0 {
             return Ok(());
         }
+        if local.seq.0 != morsel {
+            local.finished_rows = local.rows;
+        }
         local.rows += selected;
+        local.table_rows += selected;
         let (keys, inputs) = self.evaluate(&batch, local.next_seq(morsel, n))?;
         if local.keys.is_none() {
             // global aggregation
@@ -634,20 +717,54 @@ impl Sink for AggregateSink {
         let ng = table.len();
         local.accs.update(&inputs, &local.gids, ng)?;
         let fits = self.account_table(local);
-        if !fits || (ng > RADIX_MIN_GROUPS && ng * RADIX_MAX_ROWS_PER_GROUP > local.rows) {
-            // keys made of a column the others depend on (an id with its
-            // attributes) are partitioned by that column alone: any subset of
-            // the key keeps equal keys together, and this one has as many
-            // values as there are groups
-            let lead = local.keys.as_ref().and_then(|k| k.lead());
-            self.part_cols.get_or_init(|| lead.map_or_else(|| (0..self.group_exprs.len()).collect(), |l| vec![l]));
+        let large = ng > RADIX_MIN_GROUPS && ng * RADIX_MAX_ROWS_PER_GROUP > local.table_rows;
+        if fits && large && ng * FLUSH_MIN_ROWS_PER_GROUP <= local.table_rows && self.can_flush() {
+            return self.flush_table(local);
+        }
+        if !fits || large {
+            // keys with a column of about as many values as there are groups
+            // (an id with its attributes, a user next to a search phrase) are
+            // partitioned by that column alone: any subset of the key keeps
+            // equal keys together, and the other columns are not hashed
+            let keys = local.keys.as_ref();
+            self.part_cols.get_or_init(|| keys.and_then(|k| k.partition_column()).map_or_else(|| (0..self.group_exprs.len()).collect(), |l| vec![l]));
+            // the groups to expect: this worker's share of new groups over
+            // all the input rows (its rows per finished morsel times the
+            // morsels; the planner's estimate before a morsel is finished)
+            let rows = local.table_rows.max(1) as f64;
+            let finished = local.morsels_seen.saturating_sub(1);
+            let input = match self.morsels {
+                Some(m) if finished > 0 => Some(local.finished_rows as f64 / finished as f64 * m as f64),
+                _ => self.est_rows,
+            };
+            let unknown = (rayon::current_num_threads() * 16) as f64 * GROUPS_PER_PARTITION;
+            let groups = input.map_or(unknown, |n| (ng as f64 / rows * n.max(rows)).max(ng as f64));
+            self.radix.get_or_init(|| {
+                let r = Radix::new(groups);
+                if crate::exec::pipeline::profiling() {
+                    eprintln!(
+                        "[iara]   aggregate: radix mode after {ng} groups in {} rows (input {:?} rows, planned {:?}): {} partitions",
+                        local.table_rows,
+                        input.map(|e| e as u64),
+                        self.est_rows.map(|e| e as u64),
+                        r.parts.len()
+                    );
+                }
+                r
+            });
             local.radix = true;
         }
         Ok(())
     }
 
-    fn finalize(&self, locals: Vec<Result<AggLocal>>) -> Result<Vec<RecordBatch>> {
+    fn finalize(&self, mut locals: Vec<Result<AggLocal>>) -> Result<Vec<RecordBatch>> {
         let t0 = std::time::Instant::now();
+        let flushed = std::mem::take(&mut *self.flushed.lock());
+        if crate::exec::pipeline::profiling() && !flushed.is_empty() {
+            let groups: usize = flushed.iter().map(|l| l.num_groups()).sum();
+            eprintln!("[iara]   aggregate: {} full local tables handed over ({groups} groups)", flushed.len());
+        }
+        locals.extend(flushed.into_iter().map(Ok));
         let out = self.finalize_inner(locals);
         if crate::exec::pipeline::profiling() {
             eprintln!("[iara]   aggregate finalize: {:.2}ms", t0.elapsed().as_secs_f64() * 1000.0);
@@ -660,7 +777,10 @@ impl AggregateSink {
     fn finalize_inner(&self, locals: Vec<Result<AggLocal>>) -> Result<Vec<RecordBatch>> {
         let mut locals = locals.into_iter().collect::<Result<Vec<_>>>()?;
         locals.par_iter_mut().try_for_each(|l| self.flush_pending(l))?;
-        let spilled = self.spill.finish()?;
+        let spilled = match self.radix.get() {
+            Some(r) => r.spill.finish()?,
+            None => vec![],
+        };
         if crate::exec::pipeline::profiling() && spilled.iter().any(|f| f.is_some()) {
             let bytes: u64 = spilled.iter().flatten().map(|f| f.bytes()).sum();
             eprintln!("[iara]   aggregate spilled {:.1} MB to {} partition files", bytes as f64 / 1e6, spilled.iter().flatten().count());
@@ -668,11 +788,11 @@ impl AggregateSink {
         if locals.is_empty() {
             locals.push(self.new_local()?);
         }
-        let mut parts: Vec<(Option<PartTable>, Waiting)> = self
-            .parts
-            .iter()
-            .map(|p| (p.table.lock().take(), std::mem::replace(&mut *p.waiting.lock(), Waiting::new())))
-            .collect();
+        // the partitions' tables and waiting rows (none before radix mode)
+        let take_parts = |r: &Radix| -> Vec<(Option<PartTable>, Waiting)> {
+            r.parts.iter().map(|p| (p.table.lock().take(), std::mem::replace(&mut *p.waiting.lock(), Waiting::new()))).collect()
+        };
+        let mut parts = self.radix.get().map(take_parts).unwrap_or_default();
         if crate::exec::pipeline::profiling() {
             let groups: Vec<usize> = locals.iter().map(|l| l.num_groups()).collect();
             let radix = locals.iter().filter(|l| l.radix).count();
@@ -700,7 +820,11 @@ impl AggregateSink {
             return Ok(vec![self.output(keys, &mut accs, 0)?]);
         }
         let total: usize = locals.iter().map(|l| l.num_groups()).sum();
-        if !any_radix && (locals.len() == 1 || total <= SEQUENTIAL_MERGE_LIMIT) {
+        // DISTINCT accumulators merge a whole table's pairs in parallel: while
+        // the groups are few, thread-local tables are merged whole, one after
+        // the other, not partition by partition
+        let whole_merges = self.aggs.iter().any(|a| a.distinct) && total <= WHOLE_MERGE_LIMIT;
+        if !any_radix && (locals.len() == 1 || total <= SEQUENTIAL_MERGE_LIMIT || whole_merges) {
             let mut first = locals.remove(0);
             for other in &locals {
                 let other_keys = other.keys.as_ref().unwrap().emit()?;
@@ -715,6 +839,9 @@ impl AggregateSink {
             return Ok(vec![self.output(keys, &mut first.accs, n)?]);
         }
         // ---------------- partitioned parallel finalize ----------------
+        if parts.is_empty() {
+            parts = take_parts(self.radix.get_or_init(|| Radix::new(total as f64)));
+        }
         let nparts = parts.len();
         let shift = 64 - nparts.trailing_zeros();
         // pre-aggregated tables: emit keys once and bucket their groups by partition
@@ -734,10 +861,7 @@ impl AggregateSink {
                 Ok(Some((keys, idx)))
             })
             .collect::<Result<_>>()?;
-        let batches: Vec<RecordBatch> = parts
-            .par_iter_mut()
-            .enumerate()
-            .map(|(p, (table, waiting))| -> Result<Option<RecordBatch>> {
+        let finish = |p: usize, table: &mut Option<PartTable>, waiting: &mut Waiting| -> Result<Option<RecordBatch>> {
                 let buffered = locals.iter().filter(|l| !l.buffered.is_empty()).map(|l| &l.buffered[p]);
                 let mut t = match table.take() {
                     Some(t) => t,
@@ -747,7 +871,7 @@ impl AggregateSink {
                         let rows = |cs: &[Chunk]| cs.iter().map(|c| chunk_rows(c)).sum::<usize>();
                         let raw_rows = rows(&waiting.chunks)
                             + buffered.clone().map(|b| rows(b)).sum::<usize>()
-                            + spilled[p].as_ref().map_or(0, |f| f.rows());
+                            + spilled.get(p).and_then(|f| f.as_ref()).map_or(0, |f| f.rows());
                         t.keys.reserve((raw_rows / 4).min(1 << 20));
                         t
                     }
@@ -760,7 +884,7 @@ impl AggregateSink {
                 for chunk in buffered.flatten() {
                     self.fold(&mut t, chunk)?;
                 }
-                if let Some(file) = &spilled[p] {
+                if let Some(file) = spilled.get(p).and_then(|f| f.as_ref()) {
                     for batch in file.read()? {
                         self.fold(&mut t, batch?.columns())?;
                     }
@@ -784,37 +908,22 @@ impl AggregateSink {
                 }
                 let key_cols = t.keys.emit()?;
                 Ok(Some(self.output(key_cols, &mut t.accs, n)?))
-            })
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .flatten()
-            .collect();
-        coalesce(&self.schema, batches)
-    }
-}
-
-/// Join runs of small partition outputs into batches of about the scan batch size.
-fn coalesce(schema: &SchemaRef, batches: Vec<RecordBatch>) -> Result<Vec<RecordBatch>> {
-    let target = crate::io::parquet::batch_size();
-    let mut out = Vec::with_capacity(batches.len());
-    let mut run: Vec<RecordBatch> = vec![];
-    let mut rows = 0;
-    for b in batches {
-        if b.num_rows() >= target {
-            out.push(b);
-            continue;
+        };
+        // under a LIMIT, a wave of partitions at a time until there are enough groups
+        let wave = if self.fetch.is_some() { rayon::current_num_threads().max(1) } else { nparts };
+        let mut batches: Vec<RecordBatch> = vec![];
+        for (w, chunk) in parts.chunks_mut(wave).enumerate() {
+            let done = chunk
+                .par_iter_mut()
+                .enumerate()
+                .map(|(i, (table, waiting))| finish(w * wave + i, table, waiting))
+                .collect::<Result<Vec<_>>>()?;
+            batches.extend(done.into_iter().flatten());
+            if self.fetch.is_some_and(|f| batches.iter().map(|b| b.num_rows()).sum::<usize>() >= f) {
+                break;
+            }
         }
-        rows += b.num_rows();
-        run.push(b);
-        if rows >= target {
-            out.push(arrow::compute::concat_batches(schema, &std::mem::take(&mut run))?);
-            rows = 0;
-        }
+        // small partition outputs joined into batches of about the scan batch size
+        crate::exec::pipeline::coalesce_small(&self.schema, batches, crate::io::parquet::batch_size())
     }
-    match run.len() {
-        0 => {}
-        1 => out.extend(run),
-        _ => out.push(arrow::compute::concat_batches(schema, &run)?),
-    }
-    Ok(out)
 }

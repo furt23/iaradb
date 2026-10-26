@@ -195,14 +195,15 @@ const pretty = (w: string) => w.replace(/_/g, ' ');
           <h2>Notes</h2>
           <ul class="notes muted">
             <li>
-              chDB and Daft return a wrong sum for TPC-H Q6: they evaluate <code>between 0.06 - 0.01 and 0.06 + 0.01</code>
-              in floating point, which drops the rows with a 0.07 discount. Polars and chDB round Q8's ratio to the
-              <code>DECIMAL</code> scale (0.04, 0.0395); those count as correct.
+              Polars runs its own DataFrame versions of the TPC-H and ClickBench queries, the way Polars' own
+              benchmarks do. The other engines run SQL with constant date and decimal arithmetic written out as
+              literals (<code>between 0.05 and 0.07</code>), the same as the Polars versions. Polars and chDB round
+              Q8's ratio to the <code>DECIMAL</code> scale (0.04, 0.0395); those count as correct.
             </li>
             <li>
-              Daft cannot plan TPC-H Q1, Q8, Q9 and Q14 (in Q1 the <code>DECIMAL</code> product exceeds 38 digits) or the
-              correlated subquery in Q21, and ran out of memory on ClickBench Q23. Polars SQL has no
-              <code>regexp_replace</code> or <code>date_trunc</code> and rejects Q35's repeated group key.
+              Daft cannot plan TPC-H Q1, Q8, Q9 and Q14 on <code>DECIMAL</code> columns (it does not cap result precision
+              at 38 digits, and a <code>CASE</code> cannot mix a decimal with <code>0</code>). Its row-group pruning fails
+              on Q21, and it ran out of memory on ClickBench Q23.
             </li>
             <li>
               ClickBench reads a copy of hits.parquet with <code>EventTime</code> as a timestamp, <code>EventDate</code> as a

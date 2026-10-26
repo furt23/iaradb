@@ -16,7 +16,7 @@ test("File > Download .ipynb saves the cells as a Jupyter notebook", async ({ pa
   await page.getByRole("button", { name: "file actions", exact: true }).click();
   const [download] = await Promise.all([
     page.waitForEvent("download"),
-    page.getByRole("menuitem", { name: "Download .ipynb (Jupyter)", exact: true }).click(),
+    page.getByRole("menuitem", { name: "Download .ipynb", exact: true }).click(),
   ]);
   expect(download.suggestedFilename()).toBe("e2e_export.ipynb");
 

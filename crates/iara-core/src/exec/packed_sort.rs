@@ -5,7 +5,10 @@
 //! its range plus a slot for NULL. When all keys fit next to a 32-bit row
 //! index in a `u64` (or `u128`), a multi-column sort becomes a plain integer
 //! sort (no comparator, no indirection), ties keep their input order, and
-//! runs of equal keys can be read straight off the sorted words.
+//! runs of equal keys can be read straight off the sorted words. Large
+//! inputs are scattered into buckets by their top bits first, in one
+//! parallel pass, and the buckets (small enough to sort in cache) are sorted
+//! in parallel.
 
 use std::ops::{BitOr, Shl, Shr};
 
@@ -15,10 +18,21 @@ use arrow::datatypes::*;
 use rayon::prelude::*;
 
 const MIN_LEN: usize = 1 << 14;
+/// Inputs from this size on are sorted by buckets (see [`bucket_sort`]).
+const BUCKET_SORT_MIN: usize = 1 << 20;
+/// Bits of a word that pick its bucket.
+const BUCKET_BITS: u32 = 12;
 
 trait Word: Copy + Ord + Send + Sync + From<u64> + Shl<u32, Output = Self> + Shr<u32, Output = Self> + BitOr<Output = Self> {
     fn low32(self) -> u32;
 }
+
+/// A pointer written from several threads at disjoint positions.
+#[derive(Clone, Copy)]
+struct Out<W>(*mut W);
+// SAFETY: every thread writes positions no other thread writes
+unsafe impl<W: Send> Send for Out<W> {}
+unsafe impl<W: Send> Sync for Out<W> {}
 
 impl Word for u64 {
     fn low32(self) -> u32 {
@@ -77,10 +91,10 @@ pub fn sort(keys: &[ArrayRef], opts: &[SortOptions]) -> Option<PackedSort> {
     let bits: Vec<u32> = codes.iter().map(|c| c.1).collect();
     let total: u32 = bits.iter().sum();
     let (perm, words) = if total <= 32 {
-        let w = pack::<u64>(&codes, n);
+        let w = pack::<u64>(&codes, n, total + 32);
         (w.par_iter().with_min_len(MIN_LEN).map(|x| x.low32()).collect(), Words::U64(w))
     } else if total <= 96 {
-        let w = pack::<u128>(&codes, n);
+        let w = pack::<u128>(&codes, n, total + 32);
         (w.par_iter().with_min_len(MIN_LEN).map(|x| x.low32()).collect(), Words::U128(w))
     } else {
         return None;
@@ -88,7 +102,8 @@ pub fn sort(keys: &[ArrayRef], opts: &[SortOptions]) -> Option<PackedSort> {
     Some(PackedSort { perm, words, bits })
 }
 
-fn pack<W: Word>(codes: &[(Vec<u64>, u32)], n: usize) -> Vec<W> {
+/// The packed words (keys, then the row index in the low 32 of `bits`), sorted.
+fn pack<W: Word>(codes: &[(Vec<u64>, u32)], n: usize, bits: u32) -> Vec<W> {
     let mut w: Vec<W> = (0..n)
         .into_par_iter()
         .with_min_len(MIN_LEN)
@@ -102,12 +117,69 @@ fn pack<W: Word>(codes: &[(Vec<u64>, u32)], n: usize) -> Vec<W> {
             (acc << 32) | W::from(i as u64)
         })
         .collect();
-    if n > 1 << 15 {
+    if n >= BUCKET_SORT_MIN {
+        w = bucket_sort(w, bits);
+    } else if n > 1 << 15 {
         w.par_sort_unstable();
     } else {
         w.sort_unstable();
     }
     w
+}
+
+/// Sort words whose high bits above `bits` are zero: scatter them by their
+/// top [`BUCKET_BITS`] into buckets (chunks counted and scattered in
+/// parallel), then sort every bucket on its own.
+fn bucket_sort<W: Word>(w: Vec<W>, bits: u32) -> Vec<W> {
+    let n = w.len();
+    let shift = bits.saturating_sub(BUCKET_BITS);
+    let nb = 1usize << BUCKET_BITS;
+    let bucket = |x: W| (x >> shift).low32() as usize & (nb - 1);
+    let chunk = n.div_ceil(rayon::current_num_threads() * 4).max(MIN_LEN);
+    let counts: Vec<Vec<usize>> = w
+        .par_chunks(chunk)
+        .map(|c| {
+            let mut h = vec![0usize; nb];
+            c.iter().for_each(|&x| h[bucket(x)] += 1);
+            h
+        })
+        .collect();
+    // where each chunk writes each bucket: buckets in order, chunks in order within one
+    let mut starts = vec![vec![0usize; nb]; counts.len()];
+    let mut bounds = Vec::with_capacity(nb + 1);
+    let mut at = 0;
+    for b in 0..nb {
+        bounds.push(at);
+        for (c, h) in counts.iter().enumerate() {
+            starts[c][b] = at;
+            at += h[b];
+        }
+    }
+    bounds.push(n);
+    let mut sorted: Vec<W> = Vec::with_capacity(n);
+    let out = Out(sorted.as_mut_ptr());
+    w.par_chunks(chunk).zip(starts).for_each(|(c, mut pos)| {
+        let out = out;
+        for &x in c {
+            let b = bucket(x);
+            // SAFETY: chunk c owns positions starts[c][b].. for its rows of bucket b, all below n
+            unsafe { out.0.add(pos[b]).write(x) };
+            pos[b] += 1;
+        }
+    });
+    // SAFETY: the scatter wrote every position below n once
+    unsafe { sorted.set_len(n) };
+    drop(w);
+    let mut buckets = Vec::with_capacity(nb);
+    let mut rest = sorted.as_mut_slice();
+    for b in 0..nb {
+        let (head, tail) = rest.split_at_mut(bounds[b + 1] - bounds[b]);
+        buckets.push(head);
+        rest = tail;
+    }
+    let big = n / rayon::current_num_threads().max(1);
+    buckets.into_par_iter().for_each(|b| if b.len() > big { b.par_sort_unstable() } else { b.sort_unstable() });
+    sorted
 }
 
 /// Order-preserving codes of one key and the bits they need.
@@ -221,6 +293,26 @@ mod tests {
         for i in 1..expected.len() {
             assert_eq!(brk[i], rows.row(expected[i] as usize) != rows.row(expected[i - 1] as usize));
         }
+    }
+
+    #[test]
+    fn bucket_sort_sorts() {
+        let mut seed = 7u64;
+        let mut next = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            seed >> 20
+        };
+        // spread keys, and keys crowded into a few buckets
+        for top in [44u32, 34, 33] {
+            let w: Vec<u64> = (0..300_000u64).map(|i| ((next() & ((1 << (top - 32)) - 1)) << 32) | i).collect();
+            let mut want = w.clone();
+            want.sort_unstable();
+            assert_eq!(bucket_sort(w, top), want, "{top} bits");
+        }
+        let w: Vec<u128> = (0..200_000u64).map(|i| ((next() as u128) << 40) | i as u128).collect();
+        let mut want = w.clone();
+        want.sort_unstable();
+        assert_eq!(bucket_sort(w, 84), want);
     }
 
     #[test]

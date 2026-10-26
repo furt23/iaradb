@@ -25,11 +25,8 @@ export function EmptyPane({ pane, notebooks }: { pane: Pane; notebooks: string[]
   return (
     <Box sx={{ flex: 1, overflow: "auto", p: 3, display: "flex", flexDirection: "column", alignItems: "center" }}>
       <Box sx={{ width: "100%", maxWidth: 420 }}>
-        <Typography variant="h4" sx={{ mb: 0.5 }}>
+        <Typography variant="h4" sx={{ mb: 2 }}>
           Open a notebook here
-        </Typography>
-        <Typography variant="body2" sx={{ color: "text.secondary", mb: 2 }}>
-          Pick one below, or open files from the tree on the left: they open in the focused pane.
         </Typography>
         {notebooks.map((path) => {
           const elsewhere = paneOf(state, path);

@@ -15,7 +15,7 @@ export function LoadFailure({ type, message, onRetry }: { type: string; message:
   return (
     <Box sx={{ p: 2, display: "flex", flexDirection: "column", gap: 1, alignItems: "flex-start" }}>
       <Typography variant={cluster ? "body2" : "mono"} component="pre" sx={{ m: 0, whiteSpace: "pre-wrap", color: cluster ? "text.secondary" : "error.main" }}>
-        {cluster ? `Reading a table runs on the default cluster: ${message}` : message}
+        {message}
       </Typography>
       <Box sx={{ display: "flex", gap: 1 }}>
         {cluster && (

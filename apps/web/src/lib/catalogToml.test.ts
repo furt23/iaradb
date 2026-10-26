@@ -86,17 +86,17 @@ const names = (text: string) => tablesOf(parse(text)).map((t) => t.name);
 describe("tablesOf", () => {
   it("reads every table in main, with the format the kernel infers", () => {
     expect(tablesOf(parse(TOML))).toEqual([
-      { name: "sales", catalog: "demo", schema: "main", table: "sales", path: "data/sales.parquet", format: "parquet" },
-      { name: "regions", catalog: "demo", schema: "main", table: "regions", path: "data/regions.csv", format: "csv" },
-      { name: "events", catalog: "demo", schema: "main", table: "events", path: "s3://bucket/events/", format: "parquet" },
+      { name: "sales", catalog: "demo", schema: "main", table: "sales", full: "demo.main.sales", path: "data/sales.parquet", format: "parquet" },
+      { name: "regions", catalog: "demo", schema: "main", table: "regions", full: "demo.main.regions", path: "data/regions.csv", format: "csv" },
+      { name: "events", catalog: "demo", schema: "main", table: "events", full: "demo.main.events", path: "s3://bucket/events/", format: "parquet" },
     ]);
   });
 
   it("reads the tables of a schema, dotted or quoted", () => {
     expect(tablesOf(parse(SCHEMAS))).toEqual([
-      { name: "tpch.lineitem", catalog: "main", schema: "tpch", table: "lineitem", path: "warehouse/tpch/lineitem", format: "parquet" },
-      { name: "tpch.lineitem_sf10", catalog: "main", schema: "tpch", table: "lineitem_sf10", path: "warehouse/tpch/lineitem_sf10", format: "parquet" },
-      { name: "tpch.orders", catalog: "main", schema: "tpch", table: "orders", path: "data/orders.csv", format: "csv" },
+      { name: "tpch.lineitem", catalog: "main", schema: "tpch", table: "lineitem", full: "main.tpch.lineitem", path: "warehouse/tpch/lineitem", format: "parquet" },
+      { name: "tpch.lineitem_sf10", catalog: "main", schema: "tpch", table: "lineitem_sf10", full: "main.tpch.lineitem_sf10", path: "warehouse/tpch/lineitem_sf10", format: "parquet" },
+      { name: "tpch.orders", catalog: "main", schema: "tpch", table: "orders", full: "main.tpch.orders", path: "data/orders.csv", format: "csv" },
     ]);
   });
 
@@ -428,7 +428,7 @@ describe("tableEntry", () => {
   it("writes text that reads back as the same table", () => {
     const entry = tableEntry("sales.orders", "data\\Daily \"Trips\".csv", "csv");
     expect(tablesOf(parse(`[workspace]\nname = "x"\n${entry}`))).toEqual([
-      { name: "sales.orders", catalog: "x", schema: "sales", table: "orders", path: 'data\\Daily "Trips".csv', format: "csv" },
+      { name: "sales.orders", catalog: "x", schema: "sales", table: "orders", full: "x.sales.orders", path: 'data\\Daily "Trips".csv', format: "csv" },
     ]);
     const other = tableEntry("raw.events", "a.parquet", undefined, "sales");
     expect(tablesOf(parse(`[workspace]\nname = "x"\n${other}`)).map((t) => t.name)).toEqual(["sales.raw.events"]);

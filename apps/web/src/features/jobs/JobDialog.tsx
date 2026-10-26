@@ -217,7 +217,7 @@ export function JobDialog({ open, job, target, targets, onClose, onSaved }: { op
                 set({ cluster: e.target.value });
               }}
               sx={{ flex: 1 }}
-              helperText={jobCluster ? (overview?.cloud ? "Made for each run, terminated after it" : "AWS is not configured: job clusters cannot start") : "Started if it is not running"}
+              helperText={jobCluster ? (overview?.cloud ? undefined : "AWS is not configured: job clusters cannot start") : "Started if it is not running"}
             >
               <MenuItem value={JOB_CLUSTER}>A new cluster for each run</MenuItem>
               {clusters.map((c) => (

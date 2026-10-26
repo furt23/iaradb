@@ -16,6 +16,8 @@ export const INSTANCE_TYPES: InstanceType[] = [
 ];
 
 export const DEFAULT_INSTANCE_TYPE = "m7i-flex.large";
+/** dashboard refreshes: short bursts of queries that stream and spill, so the cheapest machine with room for the kernel */
+export const REFRESH_INSTANCE_TYPE = "m7i-flex.large";
 export const DEFAULT_AUTO_TERMINATE_MINUTES = 15;
 export const MIN_AUTO_TERMINATE_MINUTES = 5;
 export const DEFAULT_VOLUME_GB = 40;

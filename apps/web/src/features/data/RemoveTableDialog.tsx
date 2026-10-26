@@ -37,14 +37,7 @@ export function RemoveTableDialog({ table, onClose }: { table: TableRef | null; 
     <Dialog open={table !== null} onClose={onClose} maxWidth="xs" fullWidth>
       <DialogTitle>{table ? t("Remove {{name}}?", { name: table.name }) : ""}</DialogTitle>
       <DialogContent>
-        <DialogContentText>
-          {table
-            ? t("Its entry is removed from the catalog. The data at {{path}} is not touched, but queries and notebooks that read {{name}} will stop finding it.", {
-                path: table.path,
-                name: table.name,
-              })
-            : ""}
-        </DialogContentText>
+        <DialogContentText>{t("Its data is not deleted.")}</DialogContentText>
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>{t("Cancel")}</Button>

@@ -13,6 +13,7 @@ import Select from "@mui/material/Select";
 import TextField from "@mui/material/TextField";
 import type { ColumnInfo } from "@iara/protocol";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import type { FilterOperator, WranglerStep } from "../types";
 import { typeLabel } from "@/lib/format";
@@ -42,6 +43,7 @@ const OPERATORS: { op: FilterOperator; label: string; needsValue: boolean; needs
 ];
 
 export function FilterDialog({ open, columns, defaultColumn, onClose, onApply }: Props) {
+  const { t } = useTranslation();
   const [column, setColumn] = useState<string>(defaultColumn || columns[0]?.name || "");
   const [operator, setOperator] = useState<FilterOperator>("equals");
   const [val1, setVal1] = useState<string>("");
@@ -62,7 +64,12 @@ export function FilterDialog({ open, columns, defaultColumn, onClose, onApply }:
     const numVal2 = Number(val2);
     const finalVal2 = opConfig.needsValue2 && !Number.isNaN(numVal2) && val2.trim() !== "" ? numVal2 : val2;
 
-    const label = `${column} ${opConfig.label}${opConfig.needsValue ? ` ${val1}` : ""}${opConfig.needsValue2 ? ` and ${val2}` : ""}`;
+    const condition = t(opConfig.label);
+    const label = opConfig.needsValue2
+      ? t("{{column}} {{condition}} {{value}} and {{value2}}", { column, condition, value: val1, value2: val2 })
+      : opConfig.needsValue
+        ? t("{{column}} {{condition}} {{value}}", { column, condition, value: val1 })
+        : t("{{column}} {{condition}}", { column, condition });
 
     onApply({
       id: `filter_${Date.now()}`,
@@ -81,11 +88,11 @@ export function FilterDialog({ open, columns, defaultColumn, onClose, onApply }:
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
-      <DialogTitle>Filter rows</DialogTitle>
+      <DialogTitle>{t("Filter rows")}</DialogTitle>
       <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, pt: 1 }}>
         <FormControl fullWidth size="small">
-          <InputLabel>Column</InputLabel>
-          <Select value={column} label="Column" onChange={(e) => setColumn(e.target.value)}>
+          <InputLabel>{t("Column")}</InputLabel>
+          <Select value={column} label={t("Column")} onChange={(e) => setColumn(e.target.value)}>
             {columns.map((c) => (
               <MenuItem key={c.name} value={c.name}>
                 {c.name} ({typeLabel(c.type)})
@@ -95,11 +102,11 @@ export function FilterDialog({ open, columns, defaultColumn, onClose, onApply }:
         </FormControl>
 
         <FormControl fullWidth size="small">
-          <InputLabel>Condition</InputLabel>
-          <Select value={operator} label="Condition" onChange={(e) => setOperator(e.target.value as FilterOperator)}>
+          <InputLabel>{t("Condition")}</InputLabel>
+          <Select value={operator} label={t("Condition")} onChange={(e) => setOperator(e.target.value as FilterOperator)}>
             {OPERATORS.map((o) => (
               <MenuItem key={o.op} value={o.op}>
-                {o.label}
+                {t(o.label)}
               </MenuItem>
             ))}
           </Select>
@@ -107,7 +114,7 @@ export function FilterDialog({ open, columns, defaultColumn, onClose, onApply }:
 
         {opConfig.needsValue && (
           <TextField
-            label="Value"
+            label={t("Value")}
             size="small"
             fullWidth
             value={val1}
@@ -118,7 +125,7 @@ export function FilterDialog({ open, columns, defaultColumn, onClose, onApply }:
 
         {opConfig.needsValue2 && (
           <TextField
-            label="And"
+            label={t("And")}
             size="small"
             fullWidth
             value={val2}
@@ -128,9 +135,9 @@ export function FilterDialog({ open, columns, defaultColumn, onClose, onApply }:
         )}
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose}>{t("Cancel")}</Button>
         <Button variant="contained" onClick={handleApply}>
-          Apply
+          {t("Apply")}
         </Button>
       </DialogActions>
     </Dialog>

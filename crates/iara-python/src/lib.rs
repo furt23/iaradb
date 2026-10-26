@@ -945,6 +945,11 @@ impl PySessionContext {
         Self { inner: self.inner.fork() }
     }
 
+    /// The same tables read through an allow list (`*`, `catalog`, `catalog.schema`, `catalog.schema.table`): queries only, no files, no writes.
+    fn restricted(&self, allow: Vec<String>) -> Self {
+        Self { inner: self.inner.restricted(allow) }
+    }
+
     /// Where `CREATE TABLE ... AS` writes tables (None: in memory).
     #[pyo3(signature = (path, storage_options=None))]
     fn set_warehouse(&self, path: Option<&str>, storage_options: Option<&Bound<'_, PyDict>>) -> PyResult<()> {

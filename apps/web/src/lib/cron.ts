@@ -103,8 +103,11 @@ export function describeCron(expr: string): string {
   const step = /^\*\/(\d+)$/.exec(mi);
   if (step && h === "*" && dom === "*" && mo === "*" && dow === "*") return `every ${step[1]} minutes`;
   if (num(mi) && h === "*" && dom === "*" && mo === "*" && dow === "*") return `every hour at :${pad(Number(mi))}`;
-  if (num(mi) && num(h) && mo === "*") {
-    const time = `${pad(Number(h))}:${pad(Number(mi))} UTC`;
+  if (num(mi) && /^\d+(,\d+)*$/.test(h) && mo === "*") {
+    const time = `${h
+      .split(",")
+      .map((x) => `${pad(Number(x))}:${pad(Number(mi))}`)
+      .join(", ")} UTC`;
     if (dom === "*" && dow === "*") return `every day at ${time}`;
     if (dom === "*" && dow === "1-5") return `weekdays at ${time}`;
     if (dom === "*" && num(dow)) return `every ${days[Number(dow)]} at ${time}`;

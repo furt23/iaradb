@@ -21,11 +21,6 @@ function Start({ count }: { count: number }) {
       <Box sx={{ maxWidth: 420, textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
         <StorageOutlined sx={{ fontSize: 40, color: "text.disabled" }} />
         <Typography variant="h4">{count ? "Pick a table from the catalog" : "The catalog is empty"}</Typography>
-        <Typography variant="body2" sx={{ color: "text.secondary" }}>
-          {count
-            ? `${count} tables in the catalog. Each opens in a tab here, with its columns, statistics and a sample of its rows.`
-            : "Name a Parquet or CSV dataset (a file, a folder, a glob or an s3:// URL) to query it from every notebook and the SQL editor."}
-        </Typography>
         <Button startIcon={<Add />} onClick={() => setAdding(true)} sx={{ mt: 1 }}>
           Add table
         </Button>

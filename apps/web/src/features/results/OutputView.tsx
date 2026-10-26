@@ -9,7 +9,7 @@ import remarkGfm from "remark-gfm";
 
 import { markdownHeadings } from "@/lib/outline";
 
-import { TableOutputView, type ChartProps } from "./TableOutputView";
+import { TableOutputView, TablesOutputView, type ChartProps } from "./TableOutputView";
 
 export function ErrorView({ output }: { output: ErrorOutput }) {
   return (
@@ -84,6 +84,9 @@ export function OutputView({ output, kernelKey, tableHeight, chart, onChart }: {
   switch (output.type) {
     case "table":
       return <TableOutputView output={output} kernelKey={kernelKey} height={tableHeight} chart={chart} onChart={onChart} />;
+    case "tables":
+      // the cell's saved chart is for one table: these keep their charts as long as the output
+      return <TablesOutputView output={output} kernelKey={kernelKey} height={tableHeight} />;
     case "text":
       return (
         <Typography variant="mono" component="pre" sx={{ m: 0, px: 2, py: 1, whiteSpace: "pre-wrap" }}>

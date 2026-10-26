@@ -11,6 +11,9 @@
  *     timeout_minutes = 60
  *     target = "notebooks/sales.py"   # one task; or several [[task]] tables (below)
  *
+ * A target is a notebook (`.py`) or a query file (`.sql`). Dashboards schedule
+ * their own refreshes (server/dashboards/refresh.ts), on the same runner.
+ *
  * Several tasks form a DAG (see jobDag.ts): each `[[task]]` names its
  * `depends_on` and when it runs (`run_if`). A file with only `target` is one
  * task keyed "main".

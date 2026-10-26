@@ -1,12 +1,15 @@
 "use client";
 
+import AccountTreeOutlined from "@mui/icons-material/AccountTreeOutlined";
 import Code from "@mui/icons-material/Code";
 import CodeOff from "@mui/icons-material/CodeOff";
 import DragIndicator from "@mui/icons-material/DragIndicator";
 import PlayArrowRounded from "@mui/icons-material/PlayArrowRounded";
+import StopRounded from "@mui/icons-material/StopRounded";
 import UnfoldLess from "@mui/icons-material/UnfoldLess";
 import UnfoldMore from "@mui/icons-material/UnfoldMore";
 import Box from "@mui/material/Box";
+import CircularProgress from "@mui/material/CircularProgress";
 import IconButton from "@mui/material/IconButton";
 import InputBase from "@mui/material/InputBase";
 import MenuItem from "@mui/material/MenuItem";
@@ -26,11 +29,19 @@ export interface CellHeaderProps extends CellMenuProps {
   cell: Cell;
   state: CellState;
   stale: boolean;
-  disabled: boolean;
+  /** the notebook runs: the run button stops the whole run instead */
+  running: boolean;
+  /** the notebook's cluster runs: otherwise the cell has no run button */
+  canRun: boolean;
+  /** a stop was asked for and the kernel has not stopped yet */
+  stopping: boolean;
   dragHandle?: DragHandle;
   onRun(): void;
+  onStop(): void;
   onKind(kind: CellKind): void;
   onOutput(name: string): void;
+  /** opens the query plans of the last run */
+  onPlans(): void;
 }
 
 function validName(name: string): boolean {
@@ -61,36 +72,46 @@ function OutputName({ value, onChange }: { value: string; onChange(v: string): v
       <Typography variant="mono" sx={{ color: "text.disabled", fontSize: 11 }}>
         →
       </Typography>
-      <Tooltip title={t("Variable holding the result (usable from other cells, in Python or SQL)")}>
-        <InputBase
-          value={value}
-          onChange={(e) => onChange(e.target.value.replace(/[^A-Za-z0-9_]/g, ""))}
-          error={!validName(value)}
-          inputProps={{ "aria-label": t("result name"), spellCheck: false }}
-          sx={{
-            fontFamily: "'JetBrains Mono Variable', monospace",
-            fontSize: 12,
-            color: validName(value) ? "secondary.main" : "error.main",
-            width: `${Math.max(4, value.length + 1)}ch`,
-          }}
-        />
-      </Tooltip>
+      <InputBase
+        value={value}
+        onChange={(e) => onChange(e.target.value.replace(/[^A-Za-z0-9_]/g, ""))}
+        error={!validName(value)}
+        inputProps={{ "aria-label": t("result name"), spellCheck: false }}
+        sx={{
+          fontFamily: "'JetBrains Mono Variable', monospace",
+          fontSize: 12,
+          color: validName(value) ? "secondary.main" : "error.main",
+          width: `${Math.max(4, value.length + 1)}ch`,
+        }}
+      />
     </Box>
   );
 }
 
 export function CellHeader(p: CellHeaderProps) {
   const { t } = useTranslation();
+  const plans = (p.state.queries?.length ?? 0) > 0 && p.state.status !== "running";
   return (
     <Box sx={{ display: "flex", alignItems: "center", gap: 1, pl: 0.5, pr: 1, height: 36 }}>
       {p.dragHandle && <Handle handle={p.dragHandle} />}
-      <Tooltip title={t("Run cell (Shift+Enter)")}>
-        <span>
-          <IconButton onClick={p.onRun} disabled={p.disabled} aria-label={t("run cell")} sx={{ color: "success.main" }}>
-            <PlayArrowRounded fontSize="small" />
-          </IconButton>
-        </span>
-      </Tooltip>
+      {p.running ? (
+        // one run at a time: whichever cell it is pressed on, it stops the whole run
+        <Tooltip title={p.stopping ? t("Stopping…") : t("Stop the run")}>
+          <span>
+            <IconButton onClick={p.onStop} disabled={p.stopping} aria-label={t("stop the run")} sx={{ color: "error.main" }}>
+              {p.stopping ? <CircularProgress size={14} thickness={5} color="inherit" /> : <StopRounded fontSize="small" />}
+            </IconButton>
+          </span>
+        </Tooltip>
+      ) : (
+        p.canRun && (
+          <Tooltip title={t("Run cell (Shift+Enter)")}>
+            <IconButton onClick={p.onRun} aria-label={t("run cell")} sx={{ color: "success.main" }}>
+              <PlayArrowRounded fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        )
+      )}
       <Select
         value={p.cell.kind}
         onChange={(e) => p.onKind(e.target.value as CellKind)}
@@ -113,6 +134,13 @@ export function CellHeader(p: CellHeaderProps) {
           {p.hidden ? <Code fontSize="small" /> : <CodeOff fontSize="small" />}
         </IconButton>
       </Tooltip>
+      {plans && (
+        <Tooltip title={t("Query plans")}>
+          <IconButton onClick={p.onPlans} aria-label={t("query plans")} sx={{ color: "text.disabled" }}>
+            <AccountTreeOutlined fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      )}
       {p.hasOutput && (
         <Tooltip title={p.outputHidden ? t("Show output") : t("Hide output")}>
           <IconButton onClick={p.onToggleOutput} aria-label={p.outputHidden ? t("show output") : t("hide output")} sx={{ color: p.outputHidden ? "secondary.main" : "text.disabled" }}>

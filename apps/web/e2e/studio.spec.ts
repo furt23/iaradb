@@ -48,8 +48,26 @@ test("interrupts a running cell", async ({ page }) => {
   const interrupt = page.getByRole("button", { name: "Interrupt", exact: true });
   await expect(interrupt).toBeEnabled();
   await interrupt.click();
-  await expect(loop.getByText("KeyboardInterrupt").first()).toBeVisible();
+  // stopping is not an error: a note, no traceback
+  await expect(loop.getByText("Execution stopped")).toBeVisible();
+  await expect(loop.getByText("KeyboardInterrupt")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Run all" })).toBeEnabled();
+});
+
+test("a cell's run button stops the whole run while one goes on", async ({ page }) => {
+  await newNotebook(page, "notebooks/e2e_stop_from_cell.py");
+  const loop = await addCell(page, "Python");
+  await setCode(loop, "import time\nwhile True:\n    time.sleep(0.05)");
+  const after = await addCell(page, "Python");
+  await setCode(after, "print('ran after')");
+  await page.getByRole("button", { name: "Run all" }).click();
+  // the other cell offers to stop the run, not to queue another one
+  const stop = after.getByRole("button", { name: "stop the run" });
+  await expect(stop).toBeEnabled();
+  await stop.click();
+  await expect(loop.getByText("Execution stopped")).toBeVisible();
+  await expect(after.getByRole("button", { name: "run cell" })).toBeVisible();
+  await expect(after.getByText("ran after")).toHaveCount(0);
 });
 
 test("SQL editor runs and explains queries", async ({ page }) => {

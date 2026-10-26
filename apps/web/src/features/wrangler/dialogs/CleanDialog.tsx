@@ -1,6 +1,5 @@
 "use client";
 
-import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
@@ -14,6 +13,7 @@ import Tab from "@mui/material/Tab";
 import Tabs from "@mui/material/Tabs";
 import TextField from "@mui/material/TextField";
 import type { ColumnInfo } from "@iara/protocol";
+import { useTranslation } from "react-i18next";
 import { useEffect, useState } from "react";
 
 import type { FillNullStrategy, WranglerStep } from "../types";
@@ -28,6 +28,7 @@ interface Props {
 }
 
 export function CleanDialog({ open, columns, defaultColumn, onClose, onApply }: Props) {
+  const { t } = useTranslation();
   const [tab, setTab] = useState<"fill" | "drop" | "dedup">("fill");
   const [column, setColumn] = useState<string>(defaultColumn || columns[0]?.name || "");
   const [fillStrategy, setFillStrategy] = useState<FillNullStrategy>("median");
@@ -47,21 +48,23 @@ export function CleanDialog({ open, columns, defaultColumn, onClose, onApply }: 
       const val = isConst ? (!Number.isNaN(numVal) && constantVal.trim() !== "" ? numVal : constantVal) : undefined;
       onApply({
         id: `fill_${Date.now()}`,
-        label: `Fill nulls in ${column} (${fillStrategy}${isConst ? `: ${constantVal}` : ""})`,
+        label: isConst
+          ? t("Fill nulls in {{column}} ({{strategy}}: {{value}})", { column, strategy: t(fillStrategy), value: constantVal })
+          : t("Fill nulls in {{column}} ({{strategy}})", { column, strategy: t(fillStrategy) }),
         enabled: true,
         op: { kind: "fill_null", column, strategy: fillStrategy, value: val },
       });
     } else if (tab === "drop") {
       onApply({
         id: `drop_nulls_${Date.now()}`,
-        label: `Drop rows with null in ${column}`,
+        label: t("Drop rows with null in {{column}}", { column }),
         enabled: true,
         op: { kind: "drop_nulls", columns: [column] },
       });
     } else if (tab === "dedup") {
       onApply({
         id: `dedup_${Date.now()}`,
-        label: dedupBy === "row" ? "Remove duplicate rows" : `One row per ${column}`,
+        label: dedupBy === "row" ? t("Remove duplicate rows") : t("One row per {{column}}", { column }),
         enabled: true,
         op: { kind: "deduplicate", subset: dedupBy === "row" ? [] : [column] },
       });
@@ -71,17 +74,17 @@ export function CleanDialog({ open, columns, defaultColumn, onClose, onApply }: 
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
-      <DialogTitle>Clean and impute</DialogTitle>
+      <DialogTitle>{t("Clean and impute")}</DialogTitle>
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ px: 2, borderBottom: 1, borderColor: "divider" }}>
-        <Tab value="fill" label="Fill nulls" />
-        <Tab value="drop" label="Drop nulls" />
-        <Tab value="dedup" label="Deduplicate" />
+        <Tab value="fill" label={t("Fill nulls")} />
+        <Tab value="drop" label={t("Drop nulls")} />
+        <Tab value="dedup" label={t("Deduplicate")} />
       </Tabs>
       <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, pt: 2 }}>
         {(tab !== "dedup" || dedupBy === "column") && (
           <FormControl fullWidth size="small">
-            <InputLabel>Column</InputLabel>
-            <Select value={column} label="Column" onChange={(e) => setColumn(e.target.value)}>
+            <InputLabel>{t("Column")}</InputLabel>
+            <Select value={column} label={t("Column")} onChange={(e) => setColumn(e.target.value)}>
               {columns.map((c) => (
                 <MenuItem key={c.name} value={c.name}>
                   {c.name} ({typeLabel(c.type)})
@@ -94,18 +97,18 @@ export function CleanDialog({ open, columns, defaultColumn, onClose, onApply }: 
         {tab === "fill" && (
           <>
             <FormControl fullWidth size="small">
-              <InputLabel>Fill with</InputLabel>
-              <Select value={fillStrategy} label="Fill with" onChange={(e) => setFillStrategy(e.target.value as FillNullStrategy)}>
-                <MenuItem value="median">Median (numeric)</MenuItem>
-                <MenuItem value="mean">Mean / Average (numeric)</MenuItem>
-                <MenuItem value="mode">Mode (most frequent value)</MenuItem>
-                <MenuItem value="constant">Constant value</MenuItem>
+              <InputLabel>{t("Fill with")}</InputLabel>
+              <Select value={fillStrategy} label={t("Fill with")} onChange={(e) => setFillStrategy(e.target.value as FillNullStrategy)}>
+                <MenuItem value="median">{t("Median (numeric)")}</MenuItem>
+                <MenuItem value="mean">{t("Mean / Average (numeric)")}</MenuItem>
+                <MenuItem value="mode">{t("Mode (most frequent value)")}</MenuItem>
+                <MenuItem value="constant">{t("Constant value")}</MenuItem>
               </Select>
             </FormControl>
 
             {fillStrategy === "constant" && (
               <TextField
-                label="Value"
+                label={t("Value")}
                 size="small"
                 fullWidth
                 value={constantVal}
@@ -116,26 +119,20 @@ export function CleanDialog({ open, columns, defaultColumn, onClose, onApply }: 
           </>
         )}
 
-        {tab === "drop" && (
-          <Box sx={{ color: "text.secondary", fontSize: 13 }}>
-            Rows with a <code>null</code> or missing value in <strong>{column}</strong> will be removed from the dataset.
-          </Box>
-        )}
-
         {tab === "dedup" && (
           <FormControl fullWidth size="small">
-            <InputLabel>Duplicates</InputLabel>
-            <Select value={dedupBy} label="Duplicates" onChange={(e) => setDedupBy(e.target.value as "row" | "column")}>
-              <MenuItem value="row">Rows equal in every column</MenuItem>
-              <MenuItem value="column">Rows with the same {column} (any one is kept)</MenuItem>
+            <InputLabel>{t("Duplicates")}</InputLabel>
+            <Select value={dedupBy} label={t("Duplicates")} onChange={(e) => setDedupBy(e.target.value as "row" | "column")}>
+              <MenuItem value="row">{t("Rows equal in every column")}</MenuItem>
+              <MenuItem value="column">{t("Rows with the same {{column}} (any one is kept)", { column })}</MenuItem>
             </Select>
           </FormControl>
         )}
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose}>{t("Cancel")}</Button>
         <Button variant="contained" onClick={handleApply}>
-          Apply
+          {t("Apply")}
         </Button>
       </DialogActions>
     </Dialog>

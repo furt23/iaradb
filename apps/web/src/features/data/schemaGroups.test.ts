@@ -9,7 +9,7 @@ const SALES: CatalogInfo = { name: "sales", description: "Sales", isDefault: fal
 
 function table(catalog: string, schema: string, name: string): CatalogTable {
   const display = catalog === "demo" ? (schema === "main" ? name : `${schema}.${name}`) : `${catalog}.${schema}.${name}`;
-  return { name: display, catalog, schema, table: name, path: `${name}.parquet`, format: "parquet" };
+  return { name: display, catalog, schema, table: name, full: `${catalog}.${schema}.${name}`, path: `${name}.parquet`, format: "parquet" };
 }
 
 const schema = (catalog: string, name: string, description: string | null = null): CatalogSchema => ({ catalog, name, description });

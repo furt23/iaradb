@@ -40,6 +40,10 @@ impl Operator for MeasuredOp {
     fn describe(&self) -> String {
         self.inner.describe()
     }
+
+    fn node(&self) -> Option<usize> {
+        Some(self.node.id())
+    }
 }
 
 /// A source (a scan: fetching and decoding) reporting to a plan node.
@@ -73,6 +77,10 @@ impl Source for MeasuredSource {
 
     fn resident(&self) -> bool {
         self.inner.resident()
+    }
+
+    fn node(&self) -> Option<usize> {
+        Some(self.node.id())
     }
 }
 
@@ -118,6 +126,10 @@ impl<S: Sink> Sink for MeasuredSink<'_, S> {
 
     fn name(&self) -> String {
         self.inner.name()
+    }
+
+    fn node(&self) -> Option<usize> {
+        Some(self.node.id())
     }
 }
 

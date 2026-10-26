@@ -121,48 +121,41 @@ export function LibrariesTab({ cluster: c, onChanged }: { cluster: ClusterView; 
         </Box>
       )}
       {!libraries.length ? (
-        <Typography sx={{ color: "text.secondary" }}>
-          {t("No library: the cluster has the engine, pyarrow and marimo. Add pip packages here.")}
-        </Typography>
+        <Typography sx={{ color: "text.secondary" }}>{t("No libraries added yet.")}</Typography>
       ) : (
-        <>
-          <Paper variant="outlined">
-            <Table size="small" aria-label="libraries">
-              <TableHead>
-                <TableRow>
-                  <TableCell>{t("Library")}</TableCell>
-                  <TableCell>{t("Status")}</TableCell>
-                  <TableCell align="right" />
+        <Paper variant="outlined">
+          <Table size="small" aria-label="libraries">
+            <TableHead>
+              <TableRow>
+                <TableCell>{t("Library")}</TableCell>
+                <TableCell>{t("Status")}</TableCell>
+                <TableCell align="right" />
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {libraries.map((spec) => (
+                <TableRow key={spec}>
+                  <TableCell sx={{ fontFamily: "monospace", overflowWrap: "anywhere" }}>{spec}</TableCell>
+                  <TableCell>
+                    <StatusChip running={running} status={c.libraryStatus?.[spec]} />
+                  </TableCell>
+                  <TableCell align="right">
+                    {c.canManage && (
+                      <IconButton
+                        size="small"
+                        disabled={pending}
+                        aria-label={t("remove {{spec}}", { spec })}
+                        onClick={() => save(libraries.filter((s) => s !== spec))}
+                      >
+                        <DeleteOutline fontSize="small" />
+                      </IconButton>
+                    )}
+                  </TableCell>
                 </TableRow>
-              </TableHead>
-              <TableBody>
-                {libraries.map((spec) => (
-                  <TableRow key={spec}>
-                    <TableCell sx={{ fontFamily: "monospace", overflowWrap: "anywhere" }}>{spec}</TableCell>
-                    <TableCell>
-                      <StatusChip running={running} status={c.libraryStatus?.[spec]} />
-                    </TableCell>
-                    <TableCell align="right">
-                      {c.canManage && (
-                        <IconButton
-                          size="small"
-                          disabled={pending}
-                          aria-label={t("remove {{spec}}", { spec })}
-                          onClick={() => save(libraries.filter((s) => s !== spec))}
-                        >
-                          <DeleteOutline fontSize="small" />
-                        </IconButton>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </Paper>
-          <Typography variant="caption" sx={{ display: "block", mt: 1, color: "text.disabled" }}>
-            {t("Removed libraries leave the machine at its next start.")}
-          </Typography>
-        </>
+              ))}
+            </TableBody>
+          </Table>
+        </Paper>
       )}
     </>
   );

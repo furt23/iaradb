@@ -157,7 +157,7 @@ export function CatalogPanel({
         )}
         {!error && tables.length === 0 && (
           <Typography variant="body2" sx={{ color: "text.secondary", p: 1.5 }}>
-            {t("No tables yet: add a Parquet or CSV dataset to query it by name.")}
+            {t("No tables yet")}
           </Typography>
         )}
       </Box>

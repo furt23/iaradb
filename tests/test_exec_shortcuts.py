@@ -138,3 +138,18 @@ def test_to_pandas_leaves_the_frame_intact(t: pa.Table) -> None:
     first = df.to_pandas()
     second = df.to_pandas()
     assert len(first) == len(second) == df.height == N
+
+
+def test_to_pandas_decimals_stay_exact() -> None:
+    import decimal
+
+    import pandas as pd
+
+    t = pa.table({"d": pa.array([decimal.Decimal("1.25"), None, decimal.Decimal("-3.10")], pa.decimal128(15, 2)), "i": [1, 2, 3]})
+    out = ia.from_arrow(t).to_pandas()
+    assert out["d"].dtype == pd.ArrowDtype(pa.decimal128(15, 2))
+    assert out["d"].tolist()[0] == decimal.Decimal("1.25") and pd.isna(out["d"].tolist()[1])
+    assert out["i"].dtype == "int64"
+    # a mapper of the caller still applies
+    mapped = ia.from_arrow(t).to_pandas(types_mapper=lambda ty: pd.Int64Dtype() if ty == pa.int64() else None)
+    assert mapped["i"].dtype == pd.Int64Dtype() and mapped["d"].dtype == pd.ArrowDtype(pa.decimal128(15, 2))

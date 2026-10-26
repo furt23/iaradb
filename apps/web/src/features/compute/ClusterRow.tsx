@@ -66,11 +66,9 @@ export function ClusterRow({ cluster: c, now, actions, cloud }: { cluster: Clust
             {c.name}
           </Typography>
           {c.isDefault && <Chip size="small" label={t("default")} />}
-          {c.job && <Chip size="small" variant="outlined" label={t("job run")} title={t("Made for a job run: terminated when the run ends")} />}
-          {c.spot && <Chip size="small" variant="outlined" color="info" label={t("spot")} title={t("Spot machine: cheaper, AWS may reclaim it")} />}
-          {c.state === "running" && c.spot && c.runningSpot === false && (
-            <Chip size="small" variant="outlined" label={t("on-demand")} title={t("No spot capacity at start: running on-demand")} />
-          )}
+          {c.job && <Chip size="small" variant="outlined" label={t("job run")} title={t("Terminated when the run ends")} />}
+          {c.spot && <Chip size="small" variant="outlined" color="info" label={t("spot")} title={t("AWS may reclaim this machine")} />}
+          {c.state === "running" && c.spot && c.runningSpot === false && <Chip size="small" variant="outlined" label={t("on-demand")} />}
           <StateChip cluster={c} />
         </Box>
         <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.5 }}>
@@ -94,11 +92,9 @@ export function ClusterRow({ cluster: c, now, actions, cloud }: { cluster: Clust
       </Box>
       <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, flexShrink: 0 }}>
         {!c.isDefault && !c.job && (
-          <Tooltip title={t("The SQL editor, the catalog and new notebooks run on the default cluster")}>
-            <Button size="small" onClick={makeDefault}>
-              {t("Make default")}
-            </Button>
-          </Tooltip>
+          <Button size="small" onClick={makeDefault}>
+            {t("Make default")}
+          </Button>
         )}
         {c.kind === "ec2" && (
           <>

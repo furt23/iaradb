@@ -24,7 +24,7 @@ use crate::exec::pipeline::{Emit, Source};
 use crate::exec::query::QueryHandle;
 use crate::exec::topk_bound::{TopKBound, ordinal_at};
 use crate::expr::Expr;
-use crate::io::ScanBound;
+use crate::io::{ScanBound, ScanJoinKeys};
 use crate::io::object::config;
 use crate::io::object::prefetch::{self, FetchGroups, Prefetcher};
 
@@ -71,6 +71,8 @@ pub struct ScanRequest<'a> {
     pub row_numbers: bool,
     /// a top k's running bound (files laid out like the table only)
     pub bound: Option<&'a ScanBound>,
+    /// hash joins' build keys, tested while decoding (files laid out like the table only)
+    pub joins: &'a [ScanJoinKeys],
 }
 
 impl ParquetSource {
@@ -113,7 +115,7 @@ impl ParquetSource {
         };
         let bound = req.bound.filter(|_| !req.conform);
         if !req.conform && req.fetch.is_none() {
-            src.late_filter = LateFilter::new(req.table_schema, &src.projection, req.filters, bound);
+            src.late_filter = LateFilter::new(req.table_schema, &src.projection, req.filters, bound, req.joins);
         }
         if let Some(b) = bound {
             let ranges = morsel_ranges(&src.files, &src.morsels, req.table_schema.field(b.column).name());
@@ -208,6 +210,15 @@ fn numbered_metas(files: &[Arc<ParquetFile>]) -> Result<Vec<ArrowReaderMetadata>
 
 /// Per morsel, the ordinal range of a column's row-group statistics and
 /// whether it has NULLs (None: unknown).
+/// What a scan reads, as its description names it: the file without its
+/// extension, or the folder of several files.
+fn scanned(files: &[Arc<ParquetFile>]) -> &str {
+    let Some(first) = files.first() else { return "" };
+    let mut parts = first.name.trim_end_matches(['/', '\\']).rsplit(['/', '\\']);
+    let file = parts.next().unwrap_or("");
+    if files.len() == 1 { file.split('.').next().unwrap_or(file) } else { parts.next().unwrap_or(file) }
+}
+
 fn morsel_ranges(files: &[Arc<ParquetFile>], morsels: &[Morsel], column: &str) -> Vec<Option<(i64, i64, bool)>> {
     let per_file: Vec<Vec<Option<(i64, i64, bool)>>> = files
         .iter()
@@ -316,7 +327,7 @@ impl Source for ParquetSource {
         };
         let Some(columns) = &self.columns else {
             let part = Part { meta, row_group: m.row_group, rows: m.range, limit: self.fetch, schema: &self.schema };
-            let Some(late) = &self.late_filter else { return decode(input, mask, &part, None, emit) };
+            let Some(late) = self.late_filter.as_ref().filter(|l| !l.idle()) else { return decode(input, mask, &part, None, emit) };
             // timed with the operators above: they filter what the scan did not
             let rg = f.meta.metadata().row_group(m.row_group);
             let chunks: i64 = (0..rg.num_columns()).filter(|&c| mask.leaf_included(c)).map(|c| rg.column(c).uncompressed_size()).sum();
@@ -337,13 +348,16 @@ impl Source for ParquetSource {
     }
 
     fn describe(&self) -> String {
+        let joins = self.late_filter.as_ref().map(|l| l.join_columns()).unwrap_or_default();
         format!(
-            "ParquetScan[files={}, row_groups={}/{}, morsels={}, columns={}]",
+            "ParquetScan[{}, files={}, row_groups={}/{}, morsels={}, columns={}{}]",
+            scanned(&self.files),
             self.files.len(),
             self.row_groups_kept,
             self.row_groups_total,
             self.morsels.len(),
-            self.projection.len()
+            self.projection.len(),
+            if joins.is_empty() { String::new() } else { format!(", join_filter=[{}]", joins.join(", ")) }
         )
     }
 }

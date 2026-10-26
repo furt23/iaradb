@@ -127,6 +127,16 @@ def test_inputs_run_first_only_when_they_have_no_value(session: KernelSession):
     assert result["ran"] == ["b"] and session.notebook.view()["states"]["b"]["output"]["text"] == "2"
 
 
+def test_an_input_edited_to_define_a_name_runs_first(session: KernelSession):
+    session.notebook.create("notebooks/d1.py")
+    cells = [py("a", "y = 1"), py("b", "f.upper('x')")]
+    run(session, cells)
+    # a now defines what b reads: its value lacks it, so it runs before b
+    cells[0] = py("a", "f = str\ny = 1")
+    result, _ = run(session, cells, ["b"])
+    assert result["ran"] == ["a", "b"] and session.notebook.view()["states"]["b"]["output"]["text"] == "'X'"
+
+
 def test_with_autorun_edited_ancestors_run_first(session: KernelSession):
     session.notebook.create("notebooks/d.py")
     cells = [py("a", "a = 1"), py("b", "b = a * 2\nb")]
@@ -139,10 +149,21 @@ def test_with_autorun_edited_ancestors_run_first(session: KernelSession):
     assert view["states"]["a"]["stale"] is False  # the kernel had not seen the edit yet
 
 
-def test_errors_block_dependents(session: KernelSession):
+def test_a_failed_cell_stops_the_run(session: KernelSession):
+    session.notebook.create("notebooks/f.py")
+    cells = [py("a", "a = 1"), py("b", "b = 1 / 0"), py("c", "c = a + 1"), py("d", "d = 2")]
+    result, _ = run(session, cells)
+    assert result == {"ran": ["a", "b"], "interrupted": False}
+    states = session.notebook.view()["states"]
+    assert states["b"]["status"] == "error" and states["b"]["output"]["ename"] == "ZeroDivisionError"
+    # the cells after the failure never started: they are idle, as before the run
+    assert states["c"]["status"] == "idle" and states["d"]["status"] == "idle"
+
+
+def test_errors_block_dependents_when_the_run_goes_on(session: KernelSession):
     session.notebook.create("notebooks/e.py")
     cells = [py("a", "a = 1 / 0"), py("b", "b = a + 1"), py("r", "print(z)\nz = 1"), py("y", "z = 2")]
-    run(session, cells)
+    session.notebook.run(cells, None, lambda *a: None, stop_on_error=False)
     states = session.notebook.view()["states"]
     assert states["a"]["status"] == "error" and states["a"]["output"]["ename"] == "ZeroDivisionError"
     assert "1 / 0" in states["a"]["output"]["traceback"]
@@ -200,6 +221,8 @@ def test_interrupt_python_loop(session: KernelSession):
     assert result["interrupted"] is True and result["ran"] == ["loop"]
     states = session.notebook.view()["states"]
     assert states["loop"]["status"] == "cancelled"
+    # stopping is not an error: no KeyboardInterrupt traceback
+    assert states["loop"]["output"] is None
     assert states["after"]["status"] == "idle"
 
 
@@ -211,7 +234,8 @@ def test_interrupt_query(session: KernelSession):
     result, _ = run(session, [SETUP, sql("q", exploding, "q")])
     assert time.monotonic() - t0 < 10
     assert result["interrupted"]
-    assert session.notebook.view()["states"]["q"]["output"]["ename"] in ("QueryCancelled", "KeyboardInterrupt")
+    q = session.notebook.view()["states"]["q"]
+    assert q["status"] == "cancelled" and q["output"] is None
 
 
 def test_result_paging_and_sorting(session: KernelSession):
@@ -267,6 +291,15 @@ def test_frames_show_on_preview_only(session: KernelSession):
     assert pq.read_table(session.ws.root / path).num_rows == 1000
 
 
+def test_several_previews_are_tables_named_after_their_frames(session: KernelSession):
+    session.notebook.create("notebooks/pv2.py")
+    code = "a = ws.table('sales')\nb = ws.table('regions').collect()\na.preview(3)\nb.preview()\nws.table('sales').preview(2)"
+    run(session, [SETUP, py("two", code)])
+    out = session.notebook.view()["states"]["two"]["output"]
+    assert out["type"] == "tables"
+    assert [(t.get("name"), t["result"]["num_rows"]) for t in out["tables"]] == [("a", 3), ("b", 4), (None, 2)]
+
+
 def test_variables(session: KernelSession):
     session.notebook.create("notebooks/j.py")
     run(session, [SETUP, py("v", "nums = [1, 2, 3]\ndf = ws.table('sales').collect()")])
@@ -284,6 +317,14 @@ def test_catalog(session: KernelSession, workspace: Path):
     session.handlers()["catalog.add"]({"name": "sales_copy", "path": "data/sales.parquet"}, lambda *a: None)
     assert "sales_copy" in (workspace / "iara.toml").read_text()
     assert session.ws.sql("select count(*) from sales_copy").collect().item() == 1000
+
+
+def test_catalog_table_counts_only_what_metadata_holds(session: KernelSession, workspace: Path):
+    (workspace / "data" / "people.csv").write_text("id,name\n1,a\n2,b\n")
+    session.handlers()["catalog.add"]({"name": "people", "path": "data/people.csv"}, lambda *a: None)
+    info = session.handlers()["catalog.table"]({"name": "people"}, lambda *a: None)
+    # a CSV would be read whole to count it: the details leave the count out
+    assert info["num_rows"] is None and [c["name"] for c in info["columns"]] == ["id", "name"]
 
 
 def test_scratch_sql_and_explain(session: KernelSession):
@@ -385,6 +426,29 @@ def test_a_notebook_runs_headless_as_opened(session: KernelSession, workspace: P
     assert rec.states(view["cells"][-1]["id"])[-1] == "done"
 
 
+def test_parse_gives_the_cells_and_runs_nothing(session: KernelSession, workspace: Path):
+    nb = marimo_io.new_notebook(workspace / "notebooks" / "read.py")
+    nb.cells.append(Cell("b", "python", "open('ran.txt', 'w').write('x')"))
+    out = call(session, "notebook.parse", {"path": "notebooks/read.py", "source": marimo_io.serialize(nb)})
+    assert [(c["id"], c["setup"]) for c in out["cells"]] == [("setup", True), ("b", False)]
+    assert out["cells"][1]["code"] == "open('ran.txt', 'w').write('x')"
+    assert not (workspace / "ran.txt").exists() and not (workspace / "notebooks" / "ran.txt").exists()
+    # nothing was opened: the session has no notebook
+    assert session.notebook.notebook is None
+
+
+def test_render_and_template_write_sources_without_running(session: KernelSession, workspace: Path):
+    new = call(session, "notebook.template", {"path": "notebooks/new.py"})["source"]
+    cells = call(session, "notebook.parse", {"path": "notebooks/new.py", "source": new})["cells"]
+    assert [c["id"] for c in cells] == ["setup"]
+    edited = [*cells, py("b", "x = 1 + 1")]
+    source = call(session, "notebook.render", {"path": "notebooks/new.py", "source": new, "cells": edited})["source"]
+    again = call(session, "notebook.parse", {"path": "notebooks/new.py", "source": source})["cells"]
+    assert [(c["id"], c["code"]) for c in again] == [("setup", cells[0]["code"]), ("b", "x = 1 + 1")]
+    assert 'marimo.App(width="medium")' in source  # the app options are kept
+    assert session.notebook.notebook is None and not (workspace / "notebooks" / "new.py").exists()
+
+
 def test_the_setup_cell_runs_first_and_its_names_reach_every_cell(session: KernelSession, workspace: Path):
     nb = marimo_io.new_notebook(workspace / "notebooks" / "hidden.py")
     view = call(session, "notebook.open", {"path": "notebooks/hidden.py", "source": marimo_io.serialize(nb)})
@@ -417,7 +481,8 @@ def test_a_failing_setup_cell_blocks_the_others(session: KernelSession):
     cells = [{**py("setup", "import nothing_here"), "setup": True}, py("a", "x = 1")]
     result, rec = run(session, cells, ["a"])
     assert result["ran"] == ["setup"]
-    assert rec.states("setup")[-1] == "error" and rec.states("a")[-1] == "error"
+    # the run stopped at the setup cell: the cell after it is back to idle, never ran
+    assert rec.states("setup")[-1] == "error" and rec.states("a")[-1] == "idle"
 
 
 def test_cells_describe_the_frames_they_make(session: KernelSession):

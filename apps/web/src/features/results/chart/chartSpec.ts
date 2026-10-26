@@ -2,6 +2,7 @@
 
 import type { CellValue, ChartData, ChartSpec, ColumnInfo } from "@iara/protocol";
 
+import type { PickValue } from "@/lib/dashboards/types";
 import { isNumericType } from "@/lib/format";
 
 export function isTemporalType(type: string): boolean {
@@ -28,7 +29,7 @@ export function fitSpec(spec: ChartSpec, columns: ColumnInfo[]): ChartSpec {
   const names = new Set(columns.map((c) => c.name));
   return {
     ...spec,
-    x: names.has(spec.x) ? spec.x : (columns[0]?.name ?? ""),
+    x: spec.kind === "counter" || names.has(spec.x) ? spec.x : (columns[0]?.name ?? ""),
     y: spec.y.filter((y) => names.has(y)),
     group: spec.group && names.has(spec.group) ? spec.group : null,
   };
@@ -37,6 +38,12 @@ export function fitSpec(spec: ChartSpec, columns: ColumnInfo[]): ChartSpec {
 /** Why the spec cannot be drawn yet, or null. */
 export function specProblem(spec: ChartSpec, columns: ColumnInfo[]): string | null {
   const type = (name: string) => columns.find((c) => c.name === name)?.type;
+  if (spec.kind === "counter") {
+    if (spec.agg === "none") return "A counter needs an aggregation.";
+    if (spec.agg === "count") return null;
+    if (spec.y.length !== 1) return "Pick a value column.";
+    return isNumericType(type(spec.y[0]) ?? "") ? null : "Values must be numeric to be summed or averaged.";
+  }
   if (!type(spec.x)) return "Pick a column for the x axis.";
   if (spec.kind === "histogram") return isNumericType(type(spec.x)!) ? null : "A histogram needs a numeric column.";
   const counting = spec.agg === "count";
@@ -54,6 +61,8 @@ export interface Series {
 export interface Categorical {
   /** x values, in the kernel's order */
   categories: (string | number)[];
+  /** each category's x value as the kernel sent it (a null shows as "(null)" in `categories`) */
+  raw: CellValue[];
   series: Series[];
 }
 
@@ -73,7 +82,7 @@ function key(v: CellValue | undefined): string | number {
   return typeof v === "number" ? v : v === null || v === undefined ? "(null)" : String(v);
 }
 
-/** Bars, lines and areas: one series per value column, or per group value. */
+/** Bars, pies, lines and areas: one series per value column, or per group value. */
 export function toCategorical(data: ChartData, spec: ChartSpec): Categorical {
   if (spec.kind === "histogram") {
     const start = data.columns.indexOf("bin_start");
@@ -86,17 +95,32 @@ export function toCategorical(data: ChartData, spec: ChartSpec): Categorical {
   const x = data.columns.indexOf(spec.x);
   const g = spec.group ? data.columns.indexOf(spec.group) : -1;
   const values = data.columns.map((c, i) => i).filter((i) => i !== x && i !== g);
-  return pivot(data.rows, (r) => key(r[x]), g, values, values.map((i) => data.columns[i]));
+  return pivot(data.rows, (r) => key(r[x]), g, values, values.map((i) => data.columns[i]), (r) => r[x]);
 }
 
-function pivot(rows: CellValue[][], xOf: (r: CellValue[]) => string | number, group: number, values: number[], names: string[]): Categorical {
+/** What a click on category `i` picks: its x value, or undefined when there is no such category or it is not a plain value (a list or struct has nothing to compare). */
+export function pickOf(c: Categorical, i: number | null | undefined): PickValue | undefined {
+  const v = i == null ? undefined : c.raw[i];
+  return v === undefined || (typeof v === "object" && v !== null) ? undefined : v;
+}
+
+function pivot(
+  rows: CellValue[][],
+  xOf: (r: CellValue[]) => string | number,
+  group: number,
+  values: number[],
+  names: string[],
+  rawOf: (r: CellValue[]) => CellValue = xOf,
+): Categorical {
   const categories: (string | number)[] = [];
+  const raw: CellValue[] = [];
   const index = new Map<string | number, number>();
   for (const r of rows) {
     const k = xOf(r);
     if (!index.has(k)) {
       index.set(k, categories.length);
       categories.push(k);
+      raw.push(rawOf(r));
     }
   }
   const series = new Map<string, Series>();
@@ -112,7 +136,7 @@ function pivot(rows: CellValue[][], xOf: (r: CellValue[]) => string | number, gr
       at(label).data[i] = num(r[v]);
     });
   }
-  return { categories, series: [...series.values()] };
+  return { categories, raw, series: [...series.values()] };
 }
 
 /** Scatter plots: one series of points per value column, or per group value. */

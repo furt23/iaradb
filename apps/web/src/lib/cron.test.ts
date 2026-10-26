@@ -41,5 +41,6 @@ describe("cron", () => {
     expect(describeCron("0 9 * * 1")).toBe("every Monday at 09:00 UTC");
     expect(describeCron("15 2 1 * *")).toBe("monthly on day 1 at 02:15 UTC");
     expect(describeCron("0 9 1-7 * 1")).toBe("0 9 1-7 * 1 (UTC)");
+    expect(describeCron("0 6,12,18 * * 1-5")).toBe("weekdays at 06:00, 12:00, 18:00 UTC");
   });
 });

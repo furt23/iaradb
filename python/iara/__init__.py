@@ -33,9 +33,11 @@ from iara._iara import (
     interrupt,
     memory_usage,
     num_threads,
+    record_plans,
     running_queries,
     set_memory_limit,
     set_num_threads,
+    take_recorded_plans,
 )
 from iara import _window
 from iara import widgets
@@ -66,6 +68,8 @@ __all__ = [
     "interrupt",
     "cancel_query",
     "running_queries",
+    "record_plans",
+    "take_recorded_plans",
     "Struct",
     "List",
     "scan_parquet",
@@ -957,7 +961,11 @@ class LazyFrame:
     def profile(self) -> tuple[DataFrame, dict[str, Any]]:
         """Collect, also returning the run profile: `{id, elapsed_ms, cancelled,
         memory_peak, spilled_bytes, pipelines: [{source, operators, sink,
-        morsels_total, morsels_done, rows_in, rows_out, elapsed_ms, finished}]}`."""
+        morsels_total, morsels_done, rows_in, rows_out, elapsed_ms, finished}],
+        pending: [{source, sink, morsels}]}`. ``pending`` lists the pipelines
+        planned and not started yet (``morsels`` is ``None`` when only the run
+        knows it); the queue is approximate when the run diverges from the plan
+        (a spill, a recursive CTE)."""
         df, prof = self._lf.collect_profiled()
         return DataFrame(df), prof
 
@@ -1126,9 +1134,23 @@ class DataFrame:
         return pa.RecordBatchReader.from_stream(self._df).read_all()
 
     def to_pandas(self, **kwargs: Any) -> Any:
+        import pandas as pd
+        import pyarrow as pa
+
         # dates as datetime64 columns, as Polars converts them, not one Python object per value
         kwargs.setdefault("date_as_object", False)
-        return self.to_arrow().to_pandas(**kwargs)
+        # one block per column: numeric columns without NULLs share the Arrow buffers
+        kwargs.setdefault("split_blocks", True)
+        user_mapper = kwargs.pop("types_mapper", None)
+
+        def types_mapper(t: Any) -> Any:
+            mapped = user_mapper(t) if user_mapper else None
+            if mapped is None and pa.types.is_decimal(t):
+                # exact and zero-copy, not one decimal.Decimal object per value
+                return pd.ArrowDtype(t)
+            return mapped
+
+        return self.to_arrow().to_pandas(types_mapper=types_mapper, **kwargs)
 
     def to_polars(self) -> Any:
         import polars as pl
@@ -1529,6 +1551,13 @@ class SessionContext:
         child._ctx = self._ctx.fork()
         return child
 
+    def restricted(self, allow: list[str]) -> SessionContext:
+        """A new session limited to reading the tables ``allow`` covers (``*``,
+        catalog, catalog.schema, catalog.schema.table); files and writes are refused."""
+        child = SessionContext.__new__(SessionContext)
+        child._ctx = self._ctx.restricted([str(a).lower() for a in allow])
+        return child
+
     def set_warehouse(self, path: str | os.PathLike[str] | None, storage_options: StorageOptions | None = None) -> SessionContext:
         """Where ``CREATE TABLE name AS ...`` writes the table: Delta in
         ``<path>/name/`` (a folder or ``s3://`` prefix), ``<path>/schema/name/``
@@ -1664,7 +1693,8 @@ def preview(frame: Any, n: int = PREVIEW_ROWS) -> None:
     """Show the first ``n`` rows of a frame (a LazyFrame runs with a limit).
 
     In a Studio notebook they become the cell's table output, which pages,
-    sorts, charts and downloads (the download has all the rows). Elsewhere
+    sorts, charts and downloads (the download has all the rows); several
+    calls in a cell show one tab per frame. Elsewhere
     they are printed. A frame a cell ends with is not shown on its own:
     ``collect()`` only collects.
     """

@@ -26,14 +26,14 @@ import { appendConfigEntry, kernelConfigFor } from "../workspace/sources";
 export async function tableInfo(name: string): Promise<ActionResult<TableInfo>> {
   return attempt(async () => {
     await requireUser();
-    return kernels.workspace().request("catalog.table", { name });
+    return kernels.metadata("catalog.table", { name });
   });
 }
 
 export async function tableHistory(name: string, limit = 100): Promise<ActionResult<DeltaCommit[]>> {
   return attempt(async () => {
     await requireUser();
-    return kernels.workspace().request("catalog.history", { table: name, limit });
+    return kernels.metadata("catalog.history", { table: name, limit });
   });
 }
 
@@ -41,7 +41,7 @@ export async function tableHistory(name: string, limit = 100): Promise<ActionRes
 export async function catalogSchema(): Promise<ActionResult<Record<string, { name: string; type: string }[]>>> {
   return attempt(async () => {
     await requireUser();
-    const columns = await kernels.workspace().request("catalog.schema", {});
+    const columns = await kernels.metadata("catalog.schema", {});
     return withCatalogNames(columns, await defaultCatalog());
   });
 }
@@ -91,7 +91,7 @@ export async function addTable(
     const display = displayName(target, d);
     const ref = await kernels.workspace().request("catalog.add", { name: display, path, format, persist: false });
     await kernels.exclusive(() => appendConfigEntry(tableEntry(name, ref.path, format, c === d ? undefined : c)));
-    return { name: display, path: ref.path, format: ref.format, catalog: target.catalog };
+    return { name: display, path: ref.path, format: ref.format, catalog: target.catalog, full: ref.full };
   });
 }
 

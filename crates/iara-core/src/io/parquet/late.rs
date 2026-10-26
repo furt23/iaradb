@@ -74,6 +74,7 @@ impl LateRows for ParquetRows {
             conform: false,
             row_numbers: true,
             bound,
+            joins: &[],
         };
         let inner = ParquetSource::try_new(req)?;
         // the row numbers become positions

@@ -58,7 +58,8 @@ path = "data/events"
 ## Notebooks
 
 - A notebook is a `.py` file in marimo format. Each cell is a function: its parameters are the variables it reads and its return values are the variables it defines. The file runs with `python notebook.py`. A notebook that redefines a variable in several cells does not run in marimo itself.
-- Running a cell runs it, and the cells it reads from that have no value yet. The cells that read its values are marked stale; they run when you run them. Kernel → Run dependent cells automatically (a per-notebook choice, kept by the browser) runs them right away instead, as marimo does. Run all, and changing a widget, run everything that depends on it.
+- Running a cell runs it, and the cells it reads from that have no value yet. The cells that read its values are marked stale; they run when you run them. Kernel → Run dependent cells automatically (a per-notebook choice, kept by the browser) runs them right away instead, as marimo does. Run all stops at the first cell that fails, as a notebook does; the cells after it keep their state. Changing a widget runs everything that depends on it, failures included.
+- Keys (Ctrl, or Cmd on Mac): Shift+Enter or Ctrl+Enter runs the cell. Ctrl+Shift+Enter runs the cells above it. Ctrl+Alt+Enter runs it and the cells below. Ctrl+. stops the run. Ctrl+F opens find and replace over every cell with code showing: match case, regular expression (replacements may use `$1`) and whole word, Enter for the next match, Shift+Enter for the previous, and Replace or Replace all.
 - A variable can be redefined by later cells (`df = df.filter(...)`). A cell reads the nearest definition above it. A variable defined by one cell only is read from that cell wherever it is.
 - Python and SQL cells share data. A DataFrame from a Python cell can be queried by name in SQL, and a SQL cell's result is a variable in later Python cells.
 - Notebooks and queries have an 8-character id, so links such as `/notebooks/12yd3sx9` survive renames and moves. A cell has an id too, and "Copy link to cell" links to it.
@@ -116,7 +117,7 @@ A schema can have a `location` (`[schemas.<name>]`, an `s3://` URL or a workspac
 
 ## Jobs
 
-A job runs notebooks or SQL files on a cron schedule (UTC) or on demand, on an existing cluster or on a new one that is removed afterwards. Studio keeps run history, durations, statuses and logs. Each job is a file `jobs/<id>.toml` in the workspace.
+A job runs notebooks, SQL files or published dashboards on a cron schedule (UTC) or on demand, on an existing cluster or on a new one that is removed afterwards. Studio keeps run history, durations, statuses and logs. Each job is a file `jobs/<id>.toml` in the workspace.
 
 ```toml
 name = "Nightly sales"
@@ -147,6 +148,7 @@ webhook = "https://example.com/hooks/sales"
 ```
 
 - A job has either one `target` or one or more `[[task]]` tables. A file with only `target` is a single task keyed `main`.
+- A `target` is a notebook (`.py`), a query file (`.sql`) or a dashboard folder (`dashboards/<slug>`). A dashboard task renders the published dashboard's initial view (no filter values, no chart picks) on the job's cluster, once for each set of read grants among the people who can open it, and stores the renders in the Studio's data folder. A viewer who opens the dashboard with no filters and no chart picks gets the stored render at once, with the time it was made, even when the cluster is stopped; filtered views still run live. Republishing the dashboard or changing the grants ignores the stored renders until the next run. The task fails when the dashboard is not published or every widget failed, and keeps the previous renders. "Schedule refresh" in the dashboard editor opens the new-job dialog with the dashboard as target.
 - `key` names the task: letters, digits, `_` and `-`. `depends_on` lists the tasks that run first. The graph of tasks must not have cycles.
 - `run_if` sets when a task runs, from how its upstream tasks ended: `all_success` (default), `all_done`, `at_least_one_success`, `none_failed` or `all_failed`.
 - `max_retries` (0 to 10) and `retry_backoff_seconds` (0 to 3600) retry a failed task. `timeout_minutes` (1 to 1440) limits one task. Without it, the job's timeout applies.
@@ -157,7 +159,7 @@ Run with parameters… starts a run with other values for that run only; they wi
 
 ## Clusters
 
-The Compute section creates and manages AWS clusters. A Local entry, which runs kernels as child processes of Studio, exists only in development or with `IARA_LOCAL_COMPUTE=1` (`iara serve` sets it); in a production build run any other way, including the Docker image, there is none, so notebooks run on clusters. Local kernels get a short list of environment variables (the basics, `AWS_*` storage keys and the engine settings), not Studio's own environment. Cluster kernels run as an unprivileged user without sudo. See [storage-and-cloud.md](storage-and-cloud.md#clusters-on-aws).
+The Compute section creates and manages AWS clusters. A Local entry, which runs kernels as child processes of Studio, exists only in development or with `IARA_LOCAL_COMPUTE=1` (`iara serve` sets it); in a production build run any other way, including the Docker image, there is none, so notebooks run on clusters. Local kernels get a short list of environment variables (the basics, `AWS_*` storage keys and the engine settings), not Studio's own environment. Cluster kernels run as an unprivileged user without sudo. Catalog reads need no cluster: a table's details (columns, row count, size, statistics), its Delta history, the columns for SQL completion and the plans of the AI tools come from a kernel Studio runs itself, which only answers those requests and never runs notebook code. Row counts come from Parquet footers and the Delta log; CSV and JSON tables show none, since counting them would read them whole. A notebook whose cluster is not running still opens, is edited and saved (Studio parses and writes the file without running it); its run controls appear once the cluster runs. Previews and queries run on a cluster. See [storage-and-cloud.md](storage-and-cloud.md#clusters-on-aws).
 
 ## Data Wrangler
 
@@ -166,6 +168,57 @@ The Data Wrangler builds a cleaning recipe on a table or a query result: open th
 - Steps: filter, fill or drop nulls, remove duplicates, trim, change case, replace (text or regex), split, rename, cast, drop columns, round, one-hot encode, sort. Steps can be switched off, and selecting one shows the data up to it.
 - The recipe runs in the kernel as one SQL query over all rows. The grid shows its first 500 rows; the bar under each column header and the column statistics (nulls, distinct values, min, max, mean, median, most frequent values) count all rows.
 - Code shows that query, and the same query from Python (`ws.sql(...)`).
+
+## Data permissions
+
+Admins grant read access to `*` (everything), a catalog, a schema or a table. A grant goes to an email, to all editors, or to all viewers. Use "Permissions…" on a catalog, schema or table in the Data panel; only admins (`IARA_ADMIN_EMAILS`) see it.
+
+- Grants are kept in `grants.json` in Studio's data folder (`IARA_STUDIO_DATA`, `/data` in Docker), out of reach of kernels on clusters.
+- Without that file, editors read everything and viewers read nothing. Admins are never limited.
+- The engine applies grants while it plans each query, so no query can get around them. A query that reads a table without a grant fails. Reading files directly (`read_parquet(...)`, `FROM 's3://...'`) and writing are refused.
+- A grant on a view covers what the view reads.
+
+Grants apply wherever Studio runs the query on someone's behalf:
+- a dashboard, in the editor and when published: each viewer's own grants apply, and two viewers with different grants never share cached results;
+- publishing: refused when a dataset reads a table the publisher has no grant on;
+- Ask;
+- the MCP server.
+
+They do not apply yet to notebooks, the SQL editor or the Data panel's previews: an editor running code there reads what the team bucket allows. With the Local cluster on, notebook code runs as Studio's user and can change `grants.json` itself.
+
+## Ask
+
+"Ask" in the dashboard editor turns a question into a dataset (one SQL query) and a chart or table.
+
+1. `gpt-6-luna`, with low reasoning effort, picks up to five of the tables you can read.
+2. `gpt-6-luna`, with medium reasoning effort, writes the query and the widget.
+3. Studio checks the proposal like any saved dataset and widget, and has the engine plan the query with your grants. When a check fails, the error goes back to the model, up to three attempts.
+4. You see the query, the tables used and a preview. Add to dashboard saves the dataset, the widget and its place on the canvas; Change asks for another proposal with your note; Cancel saves nothing.
+
+Ask needs `OPENAI_API_KEY` in Studio's environment; kernels never receive it. Table names and columns of the chosen tables are sent to OpenAI (requests are sent with `store: false`); the rows are not. A question waiting for your decision is kept in memory for 30 minutes and is lost if Studio restarts.
+
+## MCP server
+
+Studio serves the Model Context Protocol at `/api/mcp` (Streamable HTTP, JSON responses), so Claude Code, Cursor or another MCP client can read the catalog and query it. The tools only read:
+
+| Tool | Does |
+|---|---|
+| `list_tables` | The tables you may read. |
+| `describe_table` | Columns and row count of one of them. |
+| `explain_sql` | The plan of a query, without running it. |
+| `run_sql` | Runs one query: at most 500 rows, 30 seconds. |
+| `list_files` | The workspace's notebooks, SQL files and text files. |
+| `read_file` | The text of one of them (a notebook as its Python source). |
+
+Only `run_sql` needs a cluster: it runs on its own kernel on the default cluster, with your grants. The other tools are answered by Studio. Each query must be a single SELECT: Studio wraps it as a subquery, so any other statement fails to parse.
+
+With sign-in on, create a token under the account menu → "Connect an AI client…". The token is shown once:
+
+```bash
+claude mcp add --transport http iara https://studio-<team>.example.com/api/mcp --header "Authorization: Bearer <token>"
+```
+
+Tokens are kept as SHA-256 hashes in `tokens.json` in Studio's data folder, and can be revoked from the same dialog. A token stops working as soon as its email leaves `IARA_ALLOWED_EMAILS`; viewers cannot use the MCP server. With sign-in off, no token is needed.
 
 ## Navigation
 
@@ -184,3 +237,4 @@ The Data Wrangler builds a cleaning recipe on a table or a query result: open th
 | `IARA_RESULT_MEMORY` | `128MB` | Largest result kept in memory. |
 | `IARA_STUDIO_DIR` | the checkout's `apps/web` | Where `iara serve` finds the web app. |
 | `IARA_SCHEDULER` | on | `0` turns the job scheduler off. |
+| `OPENAI_API_KEY` | | Key for Iara and Ask (OpenAI API). Without it, they answer that the key is not set. |

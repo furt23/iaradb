@@ -86,7 +86,7 @@ export function RemoteDialog({
             value={branch}
             onChange={(e) => setBranch(e.target.value)}
             error={Boolean(errors.branch)}
-            helperText={errors.branch ?? "Pulls and pushes use this branch of origin"}
+            helperText={errors.branch}
           />
           <TextField
             label="Personal access token"
@@ -95,7 +95,7 @@ export function RemoteDialog({
             value={token}
             onChange={(e) => setToken(e.target.value)}
             placeholder={remote?.hasToken ? "unchanged" : ""}
-            helperText="Stored on the server and never shown again. Needs read and write access to the repository."
+            helperText="Never shown again. Needs read and write access to the repository."
           />
           {remote?.hasToken && (
             <Typography variant="body2" sx={{ color: "text.secondary" }}>

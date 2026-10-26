@@ -91,7 +91,7 @@ export function GitPanel({ status, error, log }: GitPanelProps) {
     <Box sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       <PageHeader
         title={t("Git")}
-        subtitle={status ? `on ${status.branch ?? "detached HEAD"}${status.upstream ? ` · tracking ${status.upstream} (+${status.ahead} −${status.behind})` : ""}` : "version control of the workspace"}
+        subtitle={status ? `on ${status.branch ?? "detached HEAD"}${status.upstream ? ` · tracking ${status.upstream} (+${status.ahead} −${status.behind})` : ""}` : undefined}
         actions={
           <Button startIcon={<Refresh />} onClick={() => router.refresh()} sx={{ color: "text.secondary" }}>
             {t("Refresh")}
@@ -103,7 +103,7 @@ export function GitPanel({ status, error, log }: GitPanelProps) {
         <Box sx={{ p: 3 }}>
           <Typography sx={{ color: "error.main", whiteSpace: "pre-wrap", fontFamily: "'JetBrains Mono Variable', monospace", fontSize: 13 }}>{error}</Typography>
           <Typography sx={{ color: "text.secondary", mt: 1 }}>
-            {t("The workspace is not a usable Git repository. Connect a repository above to create one, or check that Git trusts the workspace.")}
+            {t("Connect a repository above to create one.")}
           </Typography>
         </Box>
       ) : (

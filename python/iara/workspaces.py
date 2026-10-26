@@ -317,13 +317,19 @@ class Workspace:
         """Where created tables go: a local folder (absolute) or a URL."""
         return resolve_path(self.warehouse or "warehouse", self.root)
 
-    def sql(self, query: str, params: Any = None, **tables: Any) -> LazyFrame:
+    def sql(self, query: str, params: Any = None, allow: list[str] | None = None, **tables: Any) -> LazyFrame:
         """Run SQL over the catalog plus extra tables given as keyword arguments
         (DataFrames, LazyFrames, pyarrow / pandas / polars tables; other values
         are ignored, so notebooks can pass every name a query mentions).
         ``params`` (reserved, so not a table name) binds the placeholders: a
-        list or tuple for ``$1``, ``$2`` / ``?``, a dict for ``:name`` / ``$name``."""
+        list or tuple for ``$1``, ``$2`` / ``?``, a dict for ``:name`` / ``$name``.
+        ``allow`` (reserved too) is a read allow list: the query may read only the
+        tables it covers, files and writes are refused."""
         extra = {n: as_table(v) for n, v in tables.items() if is_table_like(v)}
+        if allow is not None:
+            if is_write(query):
+                raise PermissionError("only queries are allowed here")
+            return self._scratch(extra).restricted(allow).sql(query, params)
         if is_write(query):
             return self._write(query, extra, params)
         return self._scratch(extra).sql(query, params)

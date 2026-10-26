@@ -62,6 +62,16 @@ def ensure_role(iam: Any, team: str, bucket: str) -> None:
         iam.add_role_to_instance_profile(InstanceProfileName=name, RoleName=name)
 
 
+def ensure_spot_role(iam: Any) -> None:
+    """EC2 Spot's service-linked role (one per account). The Studio's key may not create it, so a first Spot launch fails without it."""
+    try:
+        iam.create_service_linked_role(AWSServiceName="spot.amazonaws.com")
+        log("created the EC2 Spot service-linked role")
+    except Exception as e:  # noqa: BLE001 - botocore errors are dynamic classes
+        if error_code(e) not in ("InvalidInput", "EntityAlreadyExists"):  # AWS answers InvalidInput when it exists
+            raise
+
+
 def ensure_security_group(ec2: Any, team: str) -> str:
     """The team's security group in the default VPC; returns its id."""
     name = security_group_name(team)
@@ -143,6 +153,7 @@ def setup(sess: Any, team: str, *, new_key: bool = False) -> tuple[str, str] | N
     bucket = artifacts_bucket(sess)
     ensure_bucket(sess.client("s3"), bucket, sess.region_name)
     ensure_role(iam, team, bucket)
+    ensure_spot_role(iam)
     group = ensure_security_group(ec2, team)
     account = account_id(sess)
     doc = policies.studio_user_policy(account=account, region=sess.region_name, team=team, artifacts_bucket=bucket, security_group_id=group)

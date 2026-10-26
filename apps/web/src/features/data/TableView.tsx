@@ -104,7 +104,7 @@ export function TableView({ table }: { table: TableRef }) {
             </Typography>
           )}
           <Box sx={{ display: "flex", gap: 4, mt: 1.5 }}>
-            <Stat label={t("Rows")} value={stat((i) => formatCount(i.num_rows))} />
+            <Stat label={t("Rows")} value={stat((i) => (i.num_rows === null ? "–" : formatCount(i.num_rows)))} />
             <Stat label={t("Columns")} value={stat((i) => String(i.columns.length))} />
             <Stat label={t("Files")} value={stat((i) => formatCount(i.files))} />
             <Stat label={t("Size")} value={stat((i) => formatBytes(i.bytes))} />

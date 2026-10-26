@@ -58,6 +58,12 @@ pub fn compile(pat: &str, flags: &str) -> Result<Arc<Regex>> {
     regex_for(pat, &o)
 }
 
+/// [`compile`], as this thread's clone (warm search caches of its own).
+pub fn compile_local(pat: &str, flags: &str) -> Result<Arc<Regex>> {
+    let o = Opts::parse(flags)?;
+    Ok(local_regex(pat, &o)?.0)
+}
+
 fn regex_for(pat: &str, o: &Opts) -> Result<Arc<Regex>> {
     let key = (pat.to_string(), o.key.clone());
     if let Some(r) = CACHE.lock().get(&key) {
@@ -82,6 +88,7 @@ fn regex_for(pat: &str, o: &Opts) -> Result<Arc<Regex>> {
 /// from the text: up to the first line break (or the end, with the `s`
 /// flag). `^https?://([^/]+)/.*$` then backtracks over the scheme and host,
 /// not the whole URL.
+#[derive(Clone)]
 struct Tail {
     head: Regex,
     /// the `.` also matches line breaks
@@ -104,6 +111,32 @@ fn tail_for(pat: &str, o: &Opts, full: &Regex) -> Option<Arc<Tail>> {
     }
     cache.insert(key, t.clone());
     t
+}
+
+thread_local! {
+    /// This thread's own clones of the cached regexes and split tails: a
+    /// clone has its own search caches (lazy DFA states, backtracker), which
+    /// stay warm from batch to batch and are never taken in turns.
+    static LOCAL: std::cell::RefCell<HashMap<Key, (Arc<Regex>, Option<Arc<Tail>>)>> = std::cell::RefCell::new(HashMap::new());
+}
+
+/// The regex of `pat` and its split tail, as this thread's clones.
+fn local_regex(pat: &str, o: &Opts) -> Result<(Arc<Regex>, Option<Arc<Tail>>)> {
+    let key = (pat.to_string(), o.key.clone());
+    if let Some(v) = LOCAL.with(|m| m.borrow().get(&key).cloned()) {
+        return Ok(v);
+    }
+    let shared = regex_for(pat, o)?;
+    let re = Arc::new(Regex::clone(&shared));
+    let tail = tail_for(pat, o, &shared).map(|t| Arc::new(Tail::clone(&t)));
+    LOCAL.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.len() > 512 {
+            m.clear();
+        }
+        m.insert(key, (re.clone(), tail.clone()));
+    });
+    Ok((re, tail))
 }
 
 fn split_tail(pat: &str, o: &Opts, full: &Regex) -> Option<Tail> {
@@ -142,12 +175,13 @@ struct Captures {
 }
 
 impl Captures {
-    fn new(full: Arc<Regex>, pat: &str, o: &Opts) -> Self {
-        let tail = tail_for(pat, o, &full).map(|t| {
+    fn new(pat: &str, o: &Opts) -> Result<Self> {
+        let (full, tail) = local_regex(pat, o)?;
+        let tail = tail.map(|t| {
             let locs = t.head.capture_locations();
             (t, locs)
         });
-        Self { full_locs: full.capture_locations(), full, tail }
+        Ok(Self { full_locs: full.capture_locations(), full, tail })
     }
 
     /// The first match's span and its groups.
@@ -196,18 +230,33 @@ fn setup_pattern(args: &[ColumnarValue], flags_at: usize) -> Result<Option<(Arc<
     let flags = const_str(args.get(flags_at))?.unwrap_or_default();
     let o = Opts::parse(&flags)?;
     let Some(pat) = const_str(args.get(1))? else { return Ok(None) };
-    Ok(Some((regex_for(&pat, &o)?, o, pat)))
+    let (re, _) = local_regex(&pat, &o)?;
+    Ok(Some((re, o, pat)))
 }
 
 fn subject(args: &[ColumnarValue], m: usize) -> Result<ArrayRef> {
     args[0].clone().into_array(m)
 }
 
-/// The rows of a Utf8 or Utf8View subject.
-fn texts(a: &ArrayRef) -> Box<dyn Iterator<Item = Option<&str>> + '_> {
+/// What a memo knows a row by: the 16-byte view of a string of up to 12
+/// bytes (which holds it whole: no hashing of a slice), else its string.
+/// (Equal long strings rarely share views once views are compacted.)
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum MemoKey<'a> {
+    View(u128),
+    Text(&'a str),
+}
+
+/// The rows of a Utf8 or Utf8View subject with their memo keys.
+fn keyed_texts(a: &ArrayRef) -> Box<dyn Iterator<Item = Option<(MemoKey<'_>, &str)>> + '_> {
     match a.as_string_view_opt() {
-        Some(v) => Box::new(v.iter()),
-        None => Box::new(a.as_string::<i32>().iter()),
+        Some(v) => Box::new(v.views().iter().enumerate().map(move |(i, &view)| {
+            v.is_valid(i).then(|| {
+                let t = v.value(i);
+                (if view as u32 <= 12 { MemoKey::View(view) } else { MemoKey::Text(t) }, t)
+            })
+        })),
+        None => Box::new(a.as_string::<i32>().iter().map(|t| t.map(|t| (MemoKey::Text(t), t)))),
     }
 }
 
@@ -218,7 +267,7 @@ const MEMO_PROBE: usize = 512;
 /// string that repeats (a URL or referer seen on many rows) is evaluated
 /// once. The memo turns itself off when its first rows repeat too little.
 struct Memo<'a, V> {
-    map: hashbrown::HashMap<&'a str, V, foldhash::fast::FixedState>,
+    map: hashbrown::HashMap<MemoKey<'a>, V, foldhash::fast::FixedState>,
     rows: usize,
     hits: usize,
     on: bool,
@@ -229,17 +278,17 @@ impl<'a, V: Copy> Memo<'a, V> {
         Self { map: hashbrown::HashMap::with_capacity_and_hasher(256, Default::default()), rows: 0, hits: 0, on: true }
     }
 
-    fn get_or(&mut self, s: &'a str, f: impl FnOnce(&str) -> V) -> V {
+    fn get_or(&mut self, key: MemoKey<'a>, s: &'a str, f: impl FnOnce(&str) -> V) -> V {
         if !self.on {
             return f(s);
         }
         self.rows += 1;
-        if let Some(&v) = self.map.get(s) {
+        if let Some(&v) = self.map.get(&key) {
             self.hits += 1;
             return v;
         }
         let v = f(s);
-        self.map.insert(s, v);
+        self.map.insert(key, v);
         // under one repeat in ten: hashing costs more than it saves
         if self.rows == MEMO_PROBE && self.hits * 10 < MEMO_PROBE {
             self.on = false;
@@ -252,8 +301,8 @@ impl<'a, V: Copy> Memo<'a, V> {
 /// `f` over the subject's strings, once per distinct string (see [`Memo`]).
 fn memo_map<V: Copy>(a: &ArrayRef, mut f: impl FnMut(&str) -> V, mut each: impl FnMut(Option<V>)) {
     let mut memo = Memo::new();
-    for t in texts(a) {
-        each(t.map(|t| memo.get_or(t, &mut f)));
+    for t in keyed_texts(a) {
+        each(t.map(|(k, t)| memo.get_or(k, t, &mut f)));
     }
 }
 
@@ -267,13 +316,13 @@ fn map_texts(a: &ArrayRef, mut f: impl FnMut(&str, &mut String) -> bool) -> Arra
     let mut valid = BooleanBufferBuilder::new(n);
     let mut out = String::new();
     let mut memo = Memo::new();
-    for t in texts(a) {
+    for t in keyed_texts(a) {
         let ok = match t {
             None => false,
-            Some(t) => {
+            Some((key, t)) => {
                 // (start, length) of the value in `data`, or None for NULL
                 let mut fresh = false;
-                let at = memo.get_or(t, |t| {
+                let at = memo.get_or(key, t, |t| {
                     fresh = true;
                     out.clear();
                     let ok = f(t, &mut out);
@@ -325,7 +374,7 @@ pub fn extract(args: &[ColumnarValue], m: usize) -> Result<ArrayRef> {
     };
     let a = subject(args, m)?;
     // capture slots reused across rows (no allocation per row)
-    let mut caps = Captures::new(re.clone(), &pat, &o);
+    let mut caps = Captures::new(&pat, &o)?;
     Ok(map_texts(&a, |text, out| {
         let hit = if group == 0 {
             re.find(text).map(|x| x.as_str())
@@ -349,7 +398,7 @@ pub fn replace(args: &[ColumnarValue], m: usize) -> Result<ArrayRef> {
         // the first match: its capture slots reused across rows, the
         // replacement written straight into the output
         let pieces = pieces(&rep, &o);
-        let mut caps = Captures::new(re.clone(), &pat, &o);
+        let mut caps = Captures::new(&pat, &o)?;
         return Ok(map_texts(&a, |text, out| {
             let Some(((start, end), locs)) = caps.find(text) else {
                 out.push_str(text);
@@ -473,7 +522,7 @@ mod tests {
             let o = Opts::parse(flags).unwrap();
             let full = regex_for(pat, &o).unwrap();
             assert!(tail_for(pat, &o, &full).is_some(), "{pat} splits");
-            let mut caps = Captures::new(full.clone(), pat, &o);
+            let mut caps = Captures::new(pat, &o).unwrap();
             let mut locs = full.capture_locations();
             for t in texts {
                 let want = full.captures_read(&mut locs, t).map(|m| {

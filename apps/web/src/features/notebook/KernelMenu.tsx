@@ -19,6 +19,8 @@ import { useTranslation } from "@/i18n";
 
 export interface KernelMenuProps {
   running: boolean;
+  /** without a running cluster only the outputs and the setup code are offered */
+  canRun: boolean;
   onInterrupt(): void;
   onRestart(): void;
   onRestartAndClear(): void;
@@ -41,7 +43,7 @@ function Item({ icon, children, ...props }: MenuItemProps & { icon: ReactNode })
 }
 
 /** The kernel's actions: interrupt, restarts, clearing outputs. */
-export function KernelMenu({ running, onInterrupt, onRestart, onRestartAndClear, onRestartAndRunAll, onClearOutputs, onShowSetup, autorun, onAutorun }: KernelMenuProps) {
+export function KernelMenu({ running, canRun, onInterrupt, onRestart, onRestartAndClear, onRestartAndRunAll, onClearOutputs, onShowSetup, autorun, onAutorun }: KernelMenuProps) {
   const { t } = useTranslation();
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const run = (fn: () => void) => () => {
@@ -65,28 +67,34 @@ export function KernelMenu({ running, onInterrupt, onRestart, onRestartAndClear,
         </span>
       </Tooltip>
       <Menu anchorEl={anchor} open={anchor !== null} onClose={() => setAnchor(null)}>
-        <Item icon={<StopCircleOutlined fontSize="small" />} disabled={!running} onClick={run(onInterrupt)}>
-          {t("Interrupt")}
-        </Item>
-        <Divider />
-        <Item icon={<RestartAlt fontSize="small" />} onClick={run(onRestart)}>
-          {t("Restart")}
-        </Item>
-        <Item icon={<RestartAlt fontSize="small" />} onClick={run(onRestartAndClear)}>
-          {t("Restart and clear outputs")}
-        </Item>
-        <Item icon={<PlayCircleOutline fontSize="small" />} onClick={run(onRestartAndRunAll)}>
-          {t("Restart and run all")}
-        </Item>
-        <Divider />
+        {/* each item is its own child: MUI's Menu warns about fragments */}
+        {canRun && (
+          <Item icon={<StopCircleOutlined fontSize="small" />} disabled={!running} onClick={run(onInterrupt)}>
+            {t("Interrupt")}
+          </Item>
+        )}
+        {canRun && <Divider />}
+        {canRun && (
+          <Item icon={<RestartAlt fontSize="small" />} onClick={run(onRestart)}>
+            {t("Restart")}
+          </Item>
+        )}
+        {canRun && (
+          <Item icon={<RestartAlt fontSize="small" />} onClick={run(onRestartAndClear)}>
+            {t("Restart and clear outputs")}
+          </Item>
+        )}
+        {canRun && (
+          <Item icon={<PlayCircleOutline fontSize="small" />} onClick={run(onRestartAndRunAll)}>
+            {t("Restart and run all")}
+          </Item>
+        )}
+        {canRun && <Divider />}
         <Item icon={<ClearAll fontSize="small" />} onClick={run(onClearOutputs)}>
           {t("Clear all outputs")}
         </Item>
-        <Divider />
-        <Tooltip
-          placement="left"
-          title={t("Off: the cells that read a cell's values are marked stale when it runs, and run when you run them. On: they run right away.")}
-        >
+        {canRun && <Divider />}
+        {canRun && (
           <Item
             icon={autorun ? <Check fontSize="small" sx={{ color: "primary.main" }} /> : <span />}
             role="menuitemcheckbox"
@@ -95,7 +103,7 @@ export function KernelMenu({ running, onInterrupt, onRestart, onRestartAndClear,
           >
             {t("Run dependent cells automatically")}
           </Item>
-        </Tooltip>
+        )}
         {onShowSetup && <Divider />}
         {onShowSetup && (
           <Item icon={<CodeOutlined fontSize="small" />} onClick={run(onShowSetup)}>

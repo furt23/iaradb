@@ -3,12 +3,13 @@ title: Column Expressions (Expr)
 description: Constructing column references, literals, and wildcard expressions.
 ---
 
-In Iara, an `Expr` represents a lazily evaluated computation over columns and rows. Expressions compile into vectorized Apache Arrow execution kernels. The functions that build them live in the `iara.functions` module, imported as `F` in these docs (`sum`, `min`, `max`, `all` and `len` are aggregates there, so import the module rather than `*`).
+## How it works
 
-```python
-import iara
-from iara import functions as F
-```
+An `Expr` is a description of a computation, not a value. `F.col("price") * 1.2` builds a small tree and holds no data. Nothing runs until the frame is collected (`collect()`, `show()`, a write). The engine then evaluates each expression on a batch of rows at a time, as whole Arrow arrays, so an operator handles a batch in one call rather than one row at a time. The optimizer may rewrite the tree before it runs, but the result is the same as evaluating it as written.
+
+Most functions and operators return null when an input is null. Result types follow from the inputs: mixed integer and float operands give Float64, `/` on integers gives Float64, and functions such as `sqrt`, `exp` and `round` return Float64. Integer `+`, `-` and `*` wrap around on overflow instead of raising an error. The branches of `when` and the arguments of `coalesce` are unified to a common type, but text and numbers do not unify.
+
+In `select`, `group_by` and `sort`, a Python string is a column name. Anywhere else, such as `then("gold")`, a string is a literal. An unknown column name is not checked when the expression is built. It fails when the plan is built, with a `Column not found` error that lists the available columns.
 
 ---
 
@@ -19,6 +20,8 @@ Constructs an expression referencing a column by name. Passing `"*"` references 
 ```python
 F.col(name: str, *more: str) -> Expr | list[Expr]
 ```
+
+The name is resolved when the plan is built, not when the expression is written. In a `select`, the wildcard `"*"` expands to every column of the frame.
 
 #### Example
 ```python
@@ -40,6 +43,8 @@ Constructs a literal constant expression. Python numbers, strings, booleans, dat
 F.lit(value: Any) -> Expr
 ```
 
+The Arrow type of the literal follows the Python type: `int` is Int64 (UInt64 above the Int64 range), `float` is Float64, `bool` is Boolean, `str` is Utf8, `bytes` is Binary, `datetime.date` is Date, and `decimal.Decimal` is a decimal. A naive `datetime.datetime` is stored as given, with no time zone; an aware one is converted to UTC first. `None` gives a null literal.
+
 #### Example
 ```python
 >>> F.lit(42)
@@ -57,6 +62,8 @@ Returns a wildcard expression selecting all columns. Equivalent to `F.col("*")`.
 ```python
 F.all() -> Expr
 ```
+
+In a `select`, it keeps every column of the frame.
 
 ---
 

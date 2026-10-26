@@ -9,6 +9,12 @@ The `iara` root package provides entry-point constructors, file scanners, SQL qu
 import iara
 ```
 
+## How it works
+
+The functions fall into two groups. Sources (`scan_*`, `sql`, `workspace`) describe data without reading it. `scan_*` and `sql` return a `LazyFrame`, a plan that runs when it is collected or written. `read_*` and `from_*` return a `DataFrame` already held in memory: `read_*` is a scan followed by `collect()`, and `from_*` converts a Python or Arrow object into the engine's record batches.
+
+The engine settings (`set_num_threads`, `set_memory_limit`, `set_storage_options`) are per process, not per frame. They apply to every query that runs afterwards in the same process. The thread count can only be set before the first query runs (see [Engine Control](/top-level/engine/)).
+
 ## Function Summary
 
 ### I/O & Constructors
@@ -34,9 +40,10 @@ import iara
 | [`iara.set_memory_limit(limit)`][engine] | Sets the maximum memory threshold before out-of-core disk spilling occurs. |
 | [`iara.memory_usage()`][engine] | Returns current memory pool allocation, peak, and spill statistics. |
 | [`iara.running_queries()`][engine] | Lists IDs and runtime details of queries actively in progress. |
-| [`iara.interrupt(query_id)`][engine] | Interrupts and cancels a running query by ID. |
+| [`iara.interrupt()`][engine] / [`iara.cancel_query(query_id)`][engine] | Cancels every running query, or one query by ID. |
 | [`iara.set_storage_options(prefix, options)`][engine] | Sets default S3/R2 storage settings for a bucket or URL prefix. |
 | [`iara.storage_requests()`][engine] | Returns cumulative object store request counts (`list`, `head`, `get`, `bytes`). |
+| [`iara.list_files(pattern, ...)`][engine] | Lists the data files a path, folder, glob or URL expands to, with their sizes. |
 
 [io]: /top-level/io/
 [engine]: /top-level/engine/

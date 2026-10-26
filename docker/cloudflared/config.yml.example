@@ -10,5 +10,9 @@ ingress:
     service: http://docs:8080
   - hostname: studio-default.workhouse.dev
     service: http://studio-default:3870
+  # optional view-only hostname (IARA_VIEW_HOST): the same Studio service. Do not set httpHostHeader:
+  # the Studio tells the two hostnames apart by the Host header.
+  - hostname: view-default.workhouse.dev
+    service: http://studio-default:3870
   # everything else
   - service: http_status:404

@@ -18,6 +18,7 @@ import { RUN_IFS, type RunIf } from "@/lib/jobs";
 
 import type { TaskDraft, TaskFieldErrors } from "./jobForm";
 import { ParamRows } from "./ParamRows";
+import { TargetPicker } from "./TargetPicker";
 
 const RUN_IF_LABELS: Record<RunIf, string> = {
   all_success: "All upstream tasks succeeded",
@@ -49,7 +50,6 @@ export function TaskEditor({
   onRemove(): void;
   autoFocus?: boolean;
 }) {
-  const options = [...new Set([...targets, ...(draft.target ? [draft.target] : [])])];
   const size = single ? "medium" : "small";
   const keyField = (
     <TextField
@@ -63,23 +63,15 @@ export function TaskEditor({
     />
   );
   const targetField = (
-    <TextField
-      select
-      size={size}
-      label="Runs"
+    <TargetPicker
       value={draft.target}
-      onChange={(e) => onChange({ target: e.target.value })}
+      targets={targets}
+      onChange={(target) => onChange({ target })}
+      size={size}
       error={Boolean(errors.target)}
-      helperText={errors.target ?? (single ? "A notebook (every cell, in order) or a query file (each statement)" : undefined)}
-      sx={{ flex: 1, minWidth: 0 }}
+      helperText={errors.target ?? (single ? "A notebook or a query file" : undefined)}
       autoFocus={autoFocus}
-    >
-      {options.map((t) => (
-        <MenuItem key={t} value={t}>
-          {t}
-        </MenuItem>
-      ))}
-    </TextField>
+    />
   );
   const upstream = others.filter((o) => o.key.trim());
 
@@ -98,7 +90,6 @@ export function TaskEditor({
               label="Depends on"
               value={draft.dependsOn}
               onChange={(e) => onChange({ dependsOn: typeof e.target.value === "string" ? e.target.value.split(",") : e.target.value })}
-              helperText="Runs after these tasks"
               slotProps={{
                 select: {
                   multiple: true,
@@ -120,7 +111,7 @@ export function TaskEditor({
             </TextField>
           )}
           {!single && draft.dependsOn.length > 0 && (
-            <TextField select size="small" label="Run if" value={draft.runIf} onChange={(e) => onChange({ runIf: e.target.value as RunIf })} helperText="Decided by how the tasks above ended">
+            <TextField select size="small" label="Run if" value={draft.runIf} onChange={(e) => onChange({ runIf: e.target.value as RunIf })}>
               {RUN_IFS.map((r) => (
                 <MenuItem key={r} value={r}>
                   {RUN_IF_LABELS[r]}

@@ -1,4 +1,9 @@
-"""The 22 TPC-H queries (validation parameters), in SQL."""
+"""The 22 TPC-H queries (validation parameters), in SQL.
+
+Constant date and decimal arithmetic from the spec (`date '1998-12-01' - interval '90' day`,
+`0.06 - 0.01`) is written out as literals, as `tpch_polars.py` does: engines that evaluate
+`0.06 + 0.01` in floating point otherwise drop Q6's 0.07 discounts, and some SQL frontends
+cannot plan date-interval arithmetic."""
 
 QUERIES: dict[int, str] = {
     1: """
@@ -12,7 +17,7 @@ select l_returnflag, l_linestatus,
        avg(l_discount) as avg_disc,
        count(*) as count_order
 from lineitem
-where l_shipdate <= date '1998-12-01' - interval '90' day
+where l_shipdate <= date '1998-09-02'
 group by l_returnflag, l_linestatus
 order by l_returnflag, l_linestatus
 """,
@@ -41,7 +46,7 @@ limit 10
     4: """
 select o_orderpriority, count(*) as order_count
 from orders
-where o_orderdate >= date '1993-07-01' and o_orderdate < date '1993-07-01' + interval '3' month
+where o_orderdate >= date '1993-07-01' and o_orderdate < date '1993-10-01'
   and exists (select * from lineitem where l_orderkey = o_orderkey and l_commitdate < l_receiptdate)
 group by o_orderpriority
 order by o_orderpriority
@@ -51,15 +56,15 @@ select n_name, sum(l_extendedprice * (1 - l_discount)) as revenue
 from customer, orders, lineitem, supplier, nation, region
 where c_custkey = o_custkey and l_orderkey = o_orderkey and l_suppkey = s_suppkey
   and c_nationkey = s_nationkey and s_nationkey = n_nationkey and n_regionkey = r_regionkey
-  and r_name = 'ASIA' and o_orderdate >= date '1994-01-01' and o_orderdate < date '1994-01-01' + interval '1' year
+  and r_name = 'ASIA' and o_orderdate >= date '1994-01-01' and o_orderdate < date '1995-01-01'
 group by n_name
 order by revenue desc
 """,
     6: """
 select sum(l_extendedprice * l_discount) as revenue
 from lineitem
-where l_shipdate >= date '1994-01-01' and l_shipdate < date '1994-01-01' + interval '1' year
-  and l_discount between 0.06 - 0.01 and 0.06 + 0.01 and l_quantity < 24
+where l_shipdate >= date '1994-01-01' and l_shipdate < date '1995-01-01'
+  and l_discount between 0.05 and 0.07 and l_quantity < 24
 """,
     7: """
 select supp_nation, cust_nation, l_year, sum(volume) as revenue
@@ -109,7 +114,7 @@ select c_custkey, c_name, sum(l_extendedprice * (1 - l_discount)) as revenue,
        c_acctbal, n_name, c_address, c_phone, c_comment
 from customer, orders, lineitem, nation
 where c_custkey = o_custkey and l_orderkey = o_orderkey
-  and o_orderdate >= date '1993-10-01' and o_orderdate < date '1993-10-01' + interval '3' month
+  and o_orderdate >= date '1993-10-01' and o_orderdate < date '1994-01-01'
   and l_returnflag = 'R' and c_nationkey = n_nationkey
 group by c_custkey, c_name, c_acctbal, c_phone, n_name, c_address, c_comment
 order by revenue desc
@@ -133,7 +138,7 @@ select l_shipmode,
 from orders, lineitem
 where o_orderkey = l_orderkey and l_shipmode in ('MAIL', 'SHIP')
   and l_commitdate < l_receiptdate and l_shipdate < l_commitdate
-  and l_receiptdate >= date '1994-01-01' and l_receiptdate < date '1994-01-01' + interval '1' year
+  and l_receiptdate >= date '1994-01-01' and l_receiptdate < date '1995-01-01'
 group by l_shipmode
 order by l_shipmode
 """,
@@ -152,13 +157,13 @@ select 100.00 * sum(case when p_type like 'PROMO%' then l_extendedprice * (1 - l
        / sum(l_extendedprice * (1 - l_discount)) as promo_revenue
 from lineitem, part
 where l_partkey = p_partkey and l_shipdate >= date '1995-09-01'
-  and l_shipdate < date '1995-09-01' + interval '1' month
+  and l_shipdate < date '1995-10-01'
 """,
     15: """
 with revenue as (
     select l_suppkey as supplier_no, sum(l_extendedprice * (1 - l_discount)) as total_revenue
     from lineitem
-    where l_shipdate >= date '1996-01-01' and l_shipdate < date '1996-01-01' + interval '3' month
+    where l_shipdate >= date '1996-01-01' and l_shipdate < date '1996-04-01'
     group by l_suppkey
 )
 select s_suppkey, s_name, s_address, s_phone, total_revenue
@@ -215,7 +220,7 @@ where s_suppkey in (
       and ps_availqty > (
           select 0.5 * sum(l_quantity) from lineitem
           where l_partkey = ps_partkey and l_suppkey = ps_suppkey
-            and l_shipdate >= date '1994-01-01' and l_shipdate < date '1994-01-01' + interval '1' year))
+            and l_shipdate >= date '1994-01-01' and l_shipdate < date '1995-01-01'))
   and s_nationkey = n_nationkey and n_name = 'CANADA'
 order by s_name
 """,

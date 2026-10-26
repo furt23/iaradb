@@ -28,7 +28,6 @@ export function AnalyzeIndex({ analyses, schema }: { analyses: AnalysisSummary[]
     <Box sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       <PageHeader
         title={t("Analyze")}
-        subtitle={t("Profile a query: its plan, pipelines and time per operator")}
         actions={
           <Button variant="contained" color="secondary" startIcon={<InsightsOutlined />} onClick={run} disabled={pending || !query.trim()}>
             {t("Analyze")}
@@ -40,9 +39,6 @@ export function AnalyzeIndex({ analyses, schema }: { analyses: AnalysisSummary[]
         <Paper variant="outlined" sx={{ overflow: "hidden", flexShrink: 0 }}>
           <CodeEditor value={query} onChange={setQuery} language="sql" schema={schema} onRun={run} onRunInPlace={run} minHeight={120} maxHeight={260} autoFocus />
         </Paper>
-        <Typography variant="body2" sx={{ color: "text.secondary", flexShrink: 0 }}>
-          {t("Every catalog table is available by name. Analyzing runs the query in full, so its result is counted, not shown.")}
-        </Typography>
         <Typography variant="h3" sx={{ flexShrink: 0 }}>
           {t("Recent analyses")}
         </Typography>

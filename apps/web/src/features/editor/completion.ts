@@ -47,7 +47,8 @@ async function fallback(ctx: CompletionContext): Promise<CompletionResult | null
 
 function kernelSource(complete: NonNullable<EditorAssist["complete"]>): CompletionSource {
   return async (ctx) => {
-    const word = ctx.matchBefore(/\w+$/);
+    // a lone character asks the kernel for everything: wait for two (or a `.`, or Ctrl+Space)
+    const word = ctx.matchBefore(/\w{2,}$/);
     const member = ctx.matchBefore(/\.\w*$/);
     if (!ctx.explicit && !word && !member) return null;
     const abort = new AbortController();
@@ -61,5 +62,5 @@ function kernelSource(complete: NonNullable<EditorAssist["complete"]>): Completi
 
 /** Autocompletion from the kernel (jedi over the cell and the notebook's values). */
 export function kernelCompletion(complete: NonNullable<EditorAssist["complete"]>): Extension {
-  return autocompletion({ override: [kernelSource(complete)], activateOnTypingDelay: 60, maxRenderedOptions: 200 });
+  return autocompletion({ override: [kernelSource(complete)], activateOnTypingDelay: 180, maxRenderedOptions: 200 });
 }

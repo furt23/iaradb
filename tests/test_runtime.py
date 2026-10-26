@@ -84,6 +84,7 @@ def test_progress_reports_pipelines(ctx):
     running = wait_for_running()
     p = running[0]["pipelines"][0]
     assert {"source", "operators", "sink", "morsels_total", "morsels_done", "rows_in", "rows_out", "elapsed_ms", "finished"} <= p.keys()
+    assert isinstance(running[0]["pending"], list)
     ia.interrupt()
     t.join(timeout=10)
 

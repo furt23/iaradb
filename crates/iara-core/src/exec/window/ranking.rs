@@ -12,8 +12,9 @@ use crate::exec::window::layout::Layout;
 use crate::expr::WindowFunc;
 
 pub fn evaluate(f: &WindowFunctionExpr, layout: &Layout) -> Result<ArrayRef> {
-    let ps = layout.peer_start();
-    let pe = layout.peer_end();
+    // peer groups only for the functions that read them
+    let ps = || layout.peer_start();
+    let pe = || layout.peer_end();
     let sorted: ArrayRef = match f.func {
         WindowFunc::RowNumber => ints(layout, true, |p, rows, out| {
             for (k, o) in out.iter_mut().enumerate() {
@@ -21,12 +22,14 @@ pub fn evaluate(f: &WindowFunctionExpr, layout: &Layout) -> Result<ArrayRef> {
             }
         })?,
         WindowFunc::Rank => ints(layout, true, |p, rows, out| {
+            let ps = ps();
             for (k, o) in out.iter_mut().enumerate() {
                 *o = (ps[rows.start + k] as usize - p.start) as i64 + 1;
             }
         })?,
         // a running count of peer groups: whole partitions only
         WindowFunc::DenseRank => ints(layout, false, |p, _, out| {
+            let ps = ps();
             let mut g = 0;
             for (k, o) in out.iter_mut().enumerate() {
                 let i = p.start + k;
@@ -37,6 +40,7 @@ pub fn evaluate(f: &WindowFunctionExpr, layout: &Layout) -> Result<ArrayRef> {
             }
         })?,
         WindowFunc::PercentRank => floats(layout, |p, rows, out| {
+            let ps = ps();
             let n = p.len();
             for (k, o) in out.iter_mut().enumerate() {
                 let rank = ps[rows.start + k] as usize - p.start;
@@ -44,6 +48,7 @@ pub fn evaluate(f: &WindowFunctionExpr, layout: &Layout) -> Result<ArrayRef> {
             }
         })?,
         WindowFunc::CumeDist => floats(layout, |p, rows, out| {
+            let pe = pe();
             let n = p.len() as f64;
             for (k, o) in out.iter_mut().enumerate() {
                 *o = (pe[rows.start + k] as usize - p.start) as f64 / n;

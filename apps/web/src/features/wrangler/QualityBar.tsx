@@ -2,15 +2,20 @@
 
 import Box from "@mui/material/Box";
 import Tooltip from "@mui/material/Tooltip";
+import { useTranslation } from "react-i18next";
 import type { ColumnQuality } from "@iara/protocol";
 
 /** Share of valid (green), null (grey) and empty-string (amber) values of a column, over all rows. */
 export function QualityBar({ quality }: { quality: ColumnQuality }) {
+  const { t } = useTranslation();
   const { total, nulls, empty } = quality;
   if (total === 0) return null;
   const valid = total - nulls - empty;
   const pct = (n: number) => (n / total) * 100;
-  const tip = `${valid} valid, ${nulls} null${empty > 0 ? `, ${empty} empty` : ""} of ${total}`;
+  const tip =
+    empty > 0
+      ? t("{{valid}} valid, {{nulls}} null, {{empty}} empty of {{total}}", { valid, nulls, empty, total })
+      : t("{{valid}} valid, {{nulls}} null of {{total}}", { valid, nulls, total });
   return (
     <Tooltip title={tip} arrow placement="top">
       <Box sx={{ display: "flex", height: 3, width: "100%", borderRadius: 1, overflow: "hidden", my: 0.5, bgcolor: "divider" }}>

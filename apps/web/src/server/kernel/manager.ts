@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { NotebookView, WidgetValue } from "@iara/protocol";
+import type { NotebookView, ParamsOf, ResultOf, WidgetValue } from "@iara/protocol";
 
 import { isWithin, movedPath } from "@/lib/paths";
 
@@ -13,14 +13,18 @@ import { config, type StudioConfig } from "../config";
 import { bucketKeys, bucketProxy, proxyEnv, teamBucketOf } from "../storage/bucketProxy";
 import { catalogRegion } from "../workspace/catalogStore";
 import { exists } from "../workspace/files";
-import { readNotebookSource, writeNotebookSource } from "../workspace/sources";
+import { kernelConfigText, readNotebookSource, writeNotebookSource } from "../workspace/sources";
 import { bootstrap } from "./bootstrap";
 import { KernelClient, KernelError } from "./client";
-import { jobKernel, type KernelKey, notebookKernel, notebookPath, WORKSPACE_KERNEL } from "./keys";
+import { ASSISTANT_KERNEL, dashboardKernel, jobKernel, type KernelKey, notebookKernel, notebookPath, WORKSPACE_KERNEL } from "./keys";
 import { localLauncher } from "./launchers/local";
 import { remoteCommand } from "./launchers/remoteCommand";
 import { ssh2Transport, sshExec } from "./launchers/ssh2";
 import type { Launcher } from "./launchers/types";
+
+/** What the metadata kernel answers: catalog reads that touch table logs, footers and schemas (never the rows), and notebook sources parsed or written, never run. */
+export const METADATA_METHODS = ["catalog.list", "catalog.table", "catalog.history", "catalog.schema", "sql.explain", "notebook.parse", "notebook.render", "notebook.template"] as const;
+export type MetadataMethod = (typeof METADATA_METHODS)[number];
 
 /** how long saves to a renamed notebook's old path follow it to the new one */
 const RENAME_GRACE_MS = 60_000;
@@ -43,8 +47,8 @@ export interface KernelStatus {
  */
 export class KernelManager {
   private readonly kernels = new Map<KernelKey, KernelClient>();
-  /** the cluster of each job run's kernel */
-  private readonly jobClusters = new Map<KernelKey, string>();
+  /** the cluster of each job run's or dashboard's kernel */
+  private readonly pinned = new Map<KernelKey, string>();
   /** notebook kernels whose notebook is open in the kernel */
   private readonly opened = new WeakSet<KernelClient>();
   private readonly clusterOf = new WeakMap<KernelClient, string>();
@@ -53,6 +57,8 @@ export class KernelManager {
   /** widget values by notebook: a restarted kernel opens its notebook with them (kernels forget values) */
   private readonly widgetValues = new Map<string, Record<string, WidgetValue>>();
   private chain: Promise<unknown> = Promise.resolve();
+  /** the metadata kernel, kept apart from the cluster kernels (no cluster, no status row), and the catalog it was last given */
+  private meta: { kernel: KernelClient; toml: string | null } | null = null;
   /** puts the team bucket's keys in the proxy of a cluster's machine (see storage/bucketProxy) */
   private readonly ensureProxy = bucketProxy({
     exec: (clusterId, command, stdin) => sshExec(clusters.endpoint(clusterId), command, 30_000, stdin),
@@ -68,7 +74,7 @@ export class KernelManager {
 
   /** The cluster a kernel runs on: its notebook's attachment, else the default cluster. */
   clusterFor(key: KernelKey): string {
-    const job = this.jobClusters.get(key);
+    const job = this.pinned.get(key);
     if (job) return job;
     if (key.startsWith("job:")) throw new KernelError("NoCluster", "the job run has no cluster");
     const id = clusters.clusterOf(notebookPath(key));
@@ -126,17 +132,51 @@ export class KernelManager {
     return this.get(WORKSPACE_KERNEL);
   }
 
+  /** The assistant's kernel (its AI tools' queries), on the default cluster. */
+  forAssistant(): KernelClient {
+    return this.get(ASSISTANT_KERNEL);
+  }
+
+  /**
+   * Catalog reads (tables, a table's details and history, the columns, query
+   * plans) in a kernel the Studio runs itself, so they need no cluster. Only
+   * METADATA_METHODS ever reach it: no user code runs beside the bucket keys
+   * it is given. It reads the catalog again whenever the Studio's copy changed.
+   */
+  async metadata<M extends MetadataMethod>(method: M, params: ParamsOf<M>): Promise<ResultOf<M>> {
+    if (!METADATA_METHODS.includes(method)) throw new KernelError("NotMetadata", `${method} is not a catalog read`);
+    if (!this.meta?.kernel.alive) {
+      const launcher = localLauncher(this.cfg);
+      this.meta = { kernel: new KernelClient({ transport: launcher.start("metadata"), label: "metadata", localRoot: launcher.localRoot, bootstrap }), toml: null };
+    }
+    const meta = this.meta;
+    const toml = await kernelConfigText("local");
+    if (toml !== meta.toml) {
+      await meta.kernel.request("workspace.configure", { toml });
+      meta.toml = toml;
+    }
+    return meta.kernel.request(method, params);
+  }
+
   /** A kernel of its own for a task of a job run (`id`: `<run>:<task>`), on the run's cluster (its activity keeps the cluster up). */
   forJob(id: string, clusterId: string): KernelClient {
     const key = jobKernel(id);
-    this.jobClusters.set(key, clusterId);
+    this.pinned.set(key, clusterId);
     return this.get(key);
   }
 
   endJob(id: string): void {
     const key = jobKernel(id);
     this.restart(key);
-    this.jobClusters.delete(key);
+    this.pinned.delete(key);
+  }
+
+  /** A dashboard's kernel, on `clusterId` (none: the default cluster). */
+  forDashboard(id: string, clusterId?: string): KernelClient {
+    const key = dashboardKernel(id);
+    if (clusterId) this.pinned.set(key, clusterId);
+    else this.pinned.delete(key);
+    return this.get(key);
   }
 
   /** What the notebook's widgets hold now (from the kernel), for when its kernel restarts. */
@@ -269,7 +309,7 @@ export class KernelManager {
    * (its run would lose its state).
    */
   async restartNow(key: KernelKey): Promise<void> {
-    if (notebookPath(key) === null && key !== WORKSPACE_KERNEL) {
+    if (notebookPath(key) === null && key !== WORKSPACE_KERNEL && key !== ASSISTANT_KERNEL) {
       throw new KernelError("JobKernel", "a job run's kernel cannot be restarted: cancel the run instead");
     }
     this.restart(key);
@@ -308,11 +348,18 @@ export class KernelManager {
         this.kernels.delete(key);
       }
     }
+    const meta = this.meta?.kernel;
+    if (meta && (!meta.alive || (!meta.busy && Date.now() - meta.lastUsed > limit))) {
+      meta.shutdown();
+      this.meta = null;
+    }
   }
 
   shutdownAll(): void {
     for (const k of this.kernels.values()) k.shutdown(200);
     this.kernels.clear();
+    this.meta?.kernel.shutdown(200);
+    this.meta = null;
   }
 }
 

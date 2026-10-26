@@ -171,9 +171,31 @@ pub struct SessionState {
     schema_locations: RwLock<HashMap<SchemaName, (String, StorageOptions)>>,
 }
 
+/// The catalog tables a restricted context may read, as an allow list.
+#[derive(Debug)]
+pub struct ReadPolicy {
+    /// `*`, `catalog`, `catalog.schema` or `catalog.schema.table`, lowercase
+    pub allow: Vec<String>,
+}
+
+impl ReadPolicy {
+    /// Whether an entry of the list covers the table `catalog.schema.table`.
+    pub fn covers(&self, catalog: &str, schema: &str, table: &str) -> bool {
+        let (c, s, t) = (catalog.to_ascii_lowercase(), schema.to_ascii_lowercase(), table.to_ascii_lowercase());
+        self.allow.iter().any(|a| a == "*" || *a == c || *a == format!("{c}.{s}") || *a == format!("{c}.{s}.{t}"))
+    }
+
+    fn covers_table(&self, t: &TableName) -> bool {
+        self.covers(&t.catalog, &t.schema, &t.table)
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct SessionContext {
     state: Arc<SessionState>,
+    /// what the context may read (none: everything); a restricted context
+    /// refuses files and statements that write
+    policy: Option<Arc<ReadPolicy>>,
 }
 
 impl SessionContext {
@@ -186,7 +208,37 @@ impl SessionContext {
     /// given to the registry belong to, and the one the session starts in).
     pub fn with_default_catalog(name: &str) -> Result<Self> {
         let name = parse_catalog(name)?;
-        Ok(Self { state: Arc::new(SessionState { catalog: RwLock::new(Catalog::new(&name)), ..Default::default() }) })
+        Ok(Self { state: Arc::new(SessionState { catalog: RwLock::new(Catalog::new(&name)), ..Default::default() }), policy: None })
+    }
+
+    /// This context limited by an allow list (the tables and settings are
+    /// shared, not copied): its queries read only the tables the list covers
+    /// (see [`ReadPolicy`]; `[]` covers none), and files and statements other
+    /// than queries are refused.
+    pub fn restricted(&self, allow: Vec<String>) -> SessionContext {
+        let allow = allow.into_iter().map(|a| a.trim().to_ascii_lowercase()).collect();
+        SessionContext { state: self.state.clone(), policy: Some(Arc::new(ReadPolicy { allow })) }
+    }
+
+    /// The allow list of a restricted context.
+    pub fn read_policy(&self) -> Option<&ReadPolicy> {
+        self.policy.as_deref()
+    }
+
+    /// Fail unless a table may be read (always when the context is not restricted).
+    fn check_read(&self, name: &TableName) -> Result<()> {
+        match &self.policy {
+            Some(p) if !p.covers_table(name) => Err(WhError::Plan(format!("no read grant on table {}", name.key()))),
+            _ => Ok(()),
+        }
+    }
+
+    /// Fail if the context is restricted: files are not catalog tables.
+    pub(crate) fn check_files(&self) -> Result<()> {
+        match self.policy {
+            Some(_) => Err(WhError::Plan("reading files directly is not allowed here; query a catalog table".into())),
+            None => Ok(()),
+        }
     }
 
     /// A new context starting with this one's tables, catalogs, schemas and
@@ -203,6 +255,7 @@ impl SessionContext {
                 warehouse: RwLock::new(warehouse),
                 schema_locations: RwLock::new(schema_locations),
             }),
+            policy: self.policy.clone(),
         }
     }
 
@@ -396,9 +449,11 @@ impl SessionContext {
     }
 
     /// The display names of all the tables, sorted (see [`TableName::display`]).
+    /// A restricted context lists only the tables it may read.
     pub fn table_names(&self) -> Vec<String> {
         let catalog = self.state.catalog.read();
-        let mut v = catalog.display(&catalog.tables.keys().cloned().collect::<Vec<_>>());
+        let readable: Vec<TableName> = catalog.tables.keys().filter(|t| self.policy.as_ref().is_none_or(|p| p.covers_table(t))).cloned().collect();
+        let mut v = catalog.display(&readable);
         v.sort();
         v
     }
@@ -596,8 +651,14 @@ impl SessionContext {
         }
     }
 
+    /// Every read of a table goes through here, so a restricted context
+    /// refuses an uncovered one before loading it. A view that is covered
+    /// may read what it reads: the grant is on the view.
     pub(crate) fn entry(&self, name: &TableName) -> Result<Option<TableEntry>> {
         let slot = self.state.catalog.read().tables.get(name).cloned();
+        if slot.is_some() {
+            self.check_read(name)?;
+        }
         Ok(match slot {
             None => None,
             Some(Slot::Entry(e)) => Some(e),
@@ -624,11 +685,13 @@ impl SessionContext {
     }
 
     pub fn read_parquet_with(&self, path: &str, storage: &StorageOptions) -> Result<LazyFrame> {
+        self.check_files()?;
         self.scan_provider(path, Arc::new(ParquetTable::try_new_with(path, storage)?))
     }
 
     /// A Delta table, at a version or its newest.
     pub fn read_delta(&self, path: &str, storage: &StorageOptions, version: Option<crate::delta::VersionSpec>) -> Result<LazyFrame> {
+        self.check_files()?;
         self.scan_provider(path, Arc::new(crate::delta::DeltaTable::open(path, storage, version)?))
     }
 
@@ -643,6 +706,7 @@ impl SessionContext {
     }
 
     pub fn read_csv_with(&self, path: &str, options: CsvOptions, storage: &StorageOptions) -> Result<LazyFrame> {
+        self.check_files()?;
         self.scan_provider(path, Arc::new(CsvTable::try_new_with(path, options, storage)?))
     }
 
@@ -697,6 +761,7 @@ impl SessionContext {
                 let plan = crate::sql::plan_sql(self, query, params)?;
                 Ok(LazyFrame::new(Arc::new(plan), self.clone()))
             }
+            _ if self.policy.is_some() => Err(WhError::Plan("only queries are allowed here".into())),
             command => crate::sql::write::run(self, command, params),
         }
     }

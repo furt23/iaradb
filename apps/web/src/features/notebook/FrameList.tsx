@@ -57,7 +57,7 @@ function Frame({ frame }: { frame: FrameInfo }) {
             </Box>
           ))}
           {frame.kind === "LazyFrame" && (
-            <Box sx={{ gridColumn: "1 / -1", color: "text.disabled", pt: 0.5 }}>{t("Not run yet: .preview() shows its first rows")}</Box>
+            <Box sx={{ gridColumn: "1 / -1", color: "text.disabled", pt: 0.5 }}>{t("Not run yet")}</Box>
           )}
         </Box>
       )}

@@ -381,6 +381,14 @@ impl Sink for WindowSink {
         if batches.is_empty() {
             return Ok(Windowed::Batches(vec![]));
         }
-        Ok(Windowed::Batches(self.eval.evaluate_batches(batches)?))
+        // the output follows the input batches: tiny ones (a selective join's) joined first
+        let schema = batches[0].schema();
+        let batches = crate::exec::pipeline::coalesce_small(&schema, batches, crate::io::parquet::batch_size())?;
+        let t0 = std::time::Instant::now();
+        let out = self.eval.evaluate_batches(batches)?;
+        if crate::exec::pipeline::profiling() {
+            eprintln!("[iara]   window evaluate: {:.2}ms", t0.elapsed().as_secs_f64() * 1000.0);
+        }
+        Ok(Windowed::Batches(out))
     }
 }

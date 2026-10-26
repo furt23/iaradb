@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from iara import widgets
+from iara.kernel.analyze import analyzed_node
 from iara.kernel.history import History
 from iara.kernel.notebook.analysis import WORKSPACE_VAR, sql_placeholders
 from iara.kernel.notebook.graph import CellDeps
@@ -31,12 +32,48 @@ class Outcome:
     elapsed_ms: float = 0.0
     #: the frames the cell made (see ``display.frame_info``)
     frames: list[dict[str, Any]] = field(default_factory=list)
+    #: the engine queries the cell ran, with their plans (``analyze.analyze_query`` shape)
+    queries: list[dict[str, Any]] = field(default_factory=list)
+
+
+#: queries kept per cell (a loop of small queries must not bloat the cell's state)
+MAX_QUERIES = 10
+#: previews shown per cell (the last ones)
+MAX_PREVIEWS = 10
 
 
 def is_cancellation(exc: BaseException) -> bool:
     import iara as ia
 
     return isinstance(exc, (KeyboardInterrupt, ia.QueryCancelled))
+
+
+def take_plans() -> list[dict[str, Any]]:
+    """The engine's query runs recorded since the last call (none if the engine does not record them)."""
+    import iara as ia
+
+    take = getattr(ia, "take_recorded_plans", None)
+    return take() if take else []
+
+
+def queries_of(cell: Cell) -> list[dict[str, Any]]:
+    """The runs recorded since the last call, as ``QueryAnalysis`` dicts: the last ``MAX_QUERIES``."""
+    code = cell.code if cell.kind == "sql" else ""
+    now = int(time.time() * 1000)
+    out = []
+    for p in take_plans()[-MAX_QUERIES:]:
+        q = {
+            "query": code,
+            "at": now,
+            "rows": p["rows"],
+            "plan": analyzed_node(p["plan"]),
+            "text": p["text"],
+            "profile": p["profile"],
+        }
+        if p.get("requests") is not None:  # only when the engine reports them, as the type says
+            q["requests"] = p["requests"]
+        out.append(q)
+    return out
 
 
 class CellRunner:
@@ -48,12 +85,21 @@ class CellRunner:
 
     # -- SQL -----------------------------------------------------------------
     def query(
-        self, ws: Workspace, sql: str, tables: dict[str, Any], label: str, source: str, params: dict[str, Any] | None = None
+        self,
+        ws: Workspace,
+        sql: str,
+        tables: dict[str, Any],
+        label: str,
+        source: str,
+        params: dict[str, Any] | None = None,
+        allow: list[str] | None = None,
     ) -> tuple[dict[str, Any], Any]:
         """Run a query with its profile and plan: ``(table output, DataFrame)``."""
         t0 = time.perf_counter()
-        # params go in only when given, so a query without them runs as ever
+        # params and allow go in only when given, so a query without them runs as ever
         bound = {"params": params} if params else {}
+        if allow is not None:  # [] grants nothing, so test None, not truthiness
+            bound["allow"] = allow
         try:
             output, df = run_query(self.results, ws.sql(sql, **bound, **tables), label)
         except BaseException as e:
@@ -78,7 +124,7 @@ class CellRunner:
 
         filename = f"<cell {cell.id}>"
         label = cell.name if cell.name != "_" else "value"
-        # `preview(frame)` in the cell: its last call is the cell's output
+        # `preview(frame)` in the cell: its calls are the cell's output (several: one tab each)
         previews: list[tuple[Any, int]] = []
         token = ia._preview_sink.set(lambda frame, n: previews.append((frame, n)))
         try:
@@ -88,9 +134,18 @@ class CellRunner:
         if res.error is not None:
             raise _UserError(res.error, filename)
         self.last_frames = frames_of(res.defs, res.value)
-        if previews:
-            frame, n = previews[-1]
+        if len(previews) == 1:
+            frame, n = previews[0]
             return preview_output(self.results, frame, label, n), res.defs
+        if previews:
+            names = {id(v): k for k, v in {**inputs, **res.defs}.items() if not k.startswith("_")}
+            tables = []
+            for frame, n in previews[-MAX_PREVIEWS:]:
+                name = names.get(id(frame))
+                out = preview_output(self.results, frame, name or label, n)
+                if out is not None and out["type"] == "table":
+                    tables.append({**out, "name": name} if name else out)
+            return ({"type": "tables", "tables": tables} if tables else None), res.defs
         return display(res.value, self.results, label), res.defs
 
     # -- any cell ------------------------------------------------------------
@@ -106,6 +161,7 @@ class CellRunner:
 
         t0 = time.perf_counter()
         self.last_frames: list[dict[str, Any]] = []
+        take_plans()  # runs left over from earlier cells are not this cell's
         try:
             with capture(stream), watch(progress), self.interruptor.interruptible():
                 if cell.kind == "sql":
@@ -115,9 +171,11 @@ class CellRunner:
         except BaseException as e:  # noqa: BLE001
             elapsed = (time.perf_counter() - t0) * 1000
             exc, filename = (e.exc, e.filename) if isinstance(e, _UserError) else (e, None)
-            status = "cancelled" if is_cancellation(exc) else "error"
-            return Outcome(status, error_output(exc, filename), elapsed_ms=elapsed)
-        return Outcome("done", output, values, (time.perf_counter() - t0) * 1000, self.last_frames)
+            if is_cancellation(exc):
+                # the user stopped it: not an error, so no traceback (the Studio says it was stopped)
+                return Outcome("cancelled", None, elapsed_ms=elapsed, queries=queries_of(cell))
+            return Outcome("error", error_output(exc, filename), elapsed_ms=elapsed, queries=queries_of(cell))
+        return Outcome("done", output, values, (time.perf_counter() - t0) * 1000, self.last_frames, queries=queries_of(cell))
 
 
 class _UserError(Exception):

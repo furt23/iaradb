@@ -24,11 +24,20 @@ describe("layoutTree", () => {
     expect([l.width, l.height]).toEqual([BOX.width, BOX.height]);
   });
 
-  it("puts leaves side by side and centers a parent over its children", () => {
+  it("puts leaves side by side and centers a parent under its children", () => {
     const l = layoutTree(node("join", node("probe"), node("build")));
-    expect(find(l.boxes, "probe")).toMatchObject({ left: 0, top: row });
-    expect(find(l.boxes, "build")).toMatchObject({ left: step, top: row });
-    expect(find(l.boxes, "join")).toMatchObject({ left: step / 2, top: 0 });
+    expect(find(l.boxes, "probe")).toMatchObject({ left: 0, top: 0 });
+    expect(find(l.boxes, "build")).toMatchObject({ left: step, top: 0 });
+    expect(find(l.boxes, "join")).toMatchObject({ left: step / 2, top: row });
+  });
+
+  it("draws the deepest nodes on top and the root on the bottom row", () => {
+    // root -> [a -> [a1], b]: a1 on top, a and b on the middle row
+    const l = layoutTree(node("root", node("a", node("a1")), node("b")));
+    expect(find(l.boxes, "a1").top).toBe(0);
+    expect(find(l.boxes, "a").top).toBe(row);
+    expect(find(l.boxes, "b").top).toBe(row);
+    expect(find(l.boxes, "root").top).toBe(2 * row);
   });
 
   it("gives leaves consecutive slots in order, whatever their depth", () => {
@@ -47,11 +56,11 @@ describe("layoutTree", () => {
     expect(find(l.boxes, "a1").depth).toBe(2);
   });
 
-  it("links each parent to its children, bottom to top", () => {
+  it("links each child's bottom to its parent's top", () => {
     const l = layoutTree(node("join", node("probe"), node("build")));
     expect(l.links).toEqual([
-      { from: "0", to: "0.0", x1: step / 2 + BOX.width / 2, y1: BOX.height, x2: BOX.width / 2, y2: row },
-      { from: "0", to: "0.1", x1: step / 2 + BOX.width / 2, y1: BOX.height, x2: step + BOX.width / 2, y2: row },
+      { from: "0.0", to: "0", x1: BOX.width / 2, y1: BOX.height, x2: step / 2 + BOX.width / 2, y2: row },
+      { from: "0.1", to: "0", x1: step + BOX.width / 2, y1: BOX.height, x2: step / 2 + BOX.width / 2, y2: row },
     ]);
   });
 

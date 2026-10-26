@@ -9,14 +9,16 @@ use arrow::record_batch::RecordBatch;
 
 use crate::error::{Result, WhError};
 use crate::exec::aggregate::AggregateExpr;
-use crate::exec::join::joined_schema;
+use crate::exec::join::{int_like, joined_schema};
+use crate::exec::join_filter::{JoinKeyFilter, value_preserving};
 use crate::exec::ops::nullable_schema;
 use crate::exec::pipeline::Source;
 use crate::exec::topk_bound::TopKBound;
 use crate::exec::window::{WindowFunctionExpr, WindowSpec};
+use crate::io::ScanJoinKeys;
 use crate::io::work_table::WorkTable;
 use crate::expr::{AggFunc, Expr, Operator, SortExpr, WindowFunc, split_conjunction};
-use crate::logical::{JoinType, LogicalPlan};
+use crate::logical::{JoinType, LogicalPlan, Scan};
 use crate::physical::expr::{PhysExpr, PhysSortExpr, cast_expr, create_physical_expr};
 use crate::scalar::Scalar;
 use crate::schema::PlanSchema;
@@ -38,7 +40,16 @@ pub enum PhysicalPlan {
     Source { source: Arc<dyn Source>, schema: SchemaRef },
     Filter { input: Box<PhysicalPlan>, predicate: PhysExpr, projection: Option<Vec<usize>>, schema: SchemaRef },
     Project { input: Box<PhysicalPlan>, exprs: Vec<PhysExpr>, schema: SchemaRef },
-    Aggregate { input: Box<PhysicalPlan>, group_exprs: Vec<PhysExpr>, aggs: Vec<AggregateExpr>, schema: SchemaRef },
+    Aggregate {
+        input: Box<PhysicalPlan>,
+        group_exprs: Vec<PhysExpr>,
+        aggs: Vec<AggregateExpr>,
+        schema: SchemaRef,
+        /// the planner's estimate of the input rows
+        est_rows: Option<f64>,
+        /// a LIMIT right above (no ORDER BY between): this many groups will do
+        fetch: Option<usize>,
+    },
     HashJoin {
         probe: Box<PhysicalPlan>,
         build: Box<PhysicalPlan>,
@@ -51,6 +62,8 @@ pub enum PhysicalPlan {
         order: Option<Vec<usize>>,
         /// semi/anti join executed by building the (smaller) preserved side
         mark_build: bool,
+        /// the build keys, which a scan under the probe side tests while it decodes
+        join_filter: Option<Arc<JoinKeyFilter>>,
     },
     NestedLoopJoin {
         probe: Box<PhysicalPlan>,
@@ -149,13 +162,14 @@ impl PhysicalPlan {
                 join(group_exprs),
                 aggs.iter().map(|a| a.name.clone()).collect::<Vec<_>>().join(", ")
             ),
-            PhysicalPlan::HashJoin { join_type, probe_keys, build_keys, filter, order, mark_build, .. } => format!(
-                "HashJoin({join_type:?}): probe=[{}] build=[{}]{}{}{}",
+            PhysicalPlan::HashJoin { join_type, probe_keys, build_keys, filter, order, mark_build, join_filter, .. } => format!(
+                "HashJoin({join_type:?}): probe=[{}] build=[{}]{}{}{}{}",
                 join(probe_keys),
                 join(build_keys),
                 if filter.is_some() { " +filter" } else { "" },
                 if order.is_some() { " (sides swapped)" } else { "" },
-                if *mark_build { " (build=preserved side, mark matches)" } else { "" }
+                if *mark_build { " (build=preserved side, mark matches)" } else { "" },
+                join_filter.as_ref().map(|f| format!(" join_filter=[{}]", f.column())).unwrap_or_default()
             ),
             PhysicalPlan::NestedLoopJoin { join_type, .. } => format!("NestedLoopJoin({join_type:?})"),
             PhysicalPlan::Sort { keys, fetch, .. } => {
@@ -709,7 +723,20 @@ fn stats_aggregate(a: &crate::logical::Aggregate) -> Result<Option<PhysicalPlan>
 thread_local! {
     /// Scans being planned under a top k (by address), with the top k's
     /// running bound and whether the scan's source took it.
-    static BOUNDED_SCANS: std::cell::RefCell<Vec<(*const crate::logical::Scan, crate::io::ScanBound, bool)>> = const { std::cell::RefCell::new(Vec::new()) };
+    static BOUNDED_SCANS: std::cell::RefCell<Vec<(*const Scan, crate::io::ScanBound, bool)>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// Scans being planned as the probe side of a hash join (by address),
+    /// with the join's build keys on one of their columns.
+    static JOIN_SCANS: std::cell::RefCell<Vec<(*const Scan, ScanJoinKeys)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// A LIMIT over a grouping with no ORDER BY between: any `n` groups will do,
+/// and the grouping may stop once it has that many complete ones.
+fn limit_groups(plan: &mut PhysicalPlan, n: usize) {
+    match plan {
+        PhysicalPlan::Project { input, .. } => limit_groups(input, n),
+        PhysicalPlan::Aggregate { group_exprs, fetch, .. } if !group_exprs.is_empty() => *fetch = Some(n),
+        _ => {}
+    }
 }
 
 fn swap_order(nl: usize, nr: usize) -> Vec<usize> {
@@ -720,15 +747,21 @@ fn swap_order(nl: usize, nr: usize) -> Vec<usize> {
 pub fn create_physical_plan(plan: &LogicalPlan) -> Result<PhysicalPlan> {
     Ok(match plan {
         LogicalPlan::Scan(s) => {
-            let bounded = BOUNDED_SCANS.with(|m| {
-                let mut m = m.borrow_mut();
-                let (_, b, used) = m.iter_mut().rev().find(|(p, ..)| std::ptr::eq(*p, s))?;
-                let source = s.source.create_bounded_source(s.projection.as_deref(), &s.filters, b)?;
-                *used = true;
-                Some(source)
-            });
-            let source = match bounded {
-                Some(source) => source?,
+            let bound_at = BOUNDED_SCANS.with(|m| m.borrow().iter().rposition(|(p, ..)| std::ptr::eq(*p, s)));
+            let bound = bound_at.map(|i| BOUNDED_SCANS.with(|m| m.borrow()[i].1.clone()));
+            let joins: Vec<ScanJoinKeys> = JOIN_SCANS.with(|m| m.borrow().iter().filter(|(p, _)| std::ptr::eq(*p, s)).map(|(_, j)| j.clone()).collect());
+            let gated = if bound.is_some() || !joins.is_empty() {
+                s.source.create_gated_source(s.projection.as_deref(), &s.filters, bound.as_ref(), &joins)
+            } else {
+                None
+            };
+            let source = match gated {
+                Some(source) => {
+                    if let Some(i) = bound_at {
+                        BOUNDED_SCANS.with(|m| m.borrow_mut()[i].2 = true);
+                    }
+                    source?
+                }
                 None => s.source.create_source(s.projection.as_deref(), &s.filters, s.fetch)?,
             };
             let schema = source.schema();
@@ -839,6 +872,8 @@ pub fn create_physical_plan(plan: &LogicalPlan) -> Result<PhysicalPlan> {
                 group_exprs,
                 aggs,
                 schema: Arc::new(Schema::new(fields)),
+                est_rows: Some(estimate_rows(&a.input)),
+                fetch: None,
             }
         }
         LogicalPlan::Join(j) => plan_join(j, plan)?,
@@ -881,7 +916,11 @@ pub fn create_physical_plan(plan: &LogicalPlan) -> Result<PhysicalPlan> {
             PhysicalPlan::Sort { input: Box::new(input), keys, fetch: s.fetch, schema, bound }
         }
         LogicalPlan::Limit(l) => {
-            PhysicalPlan::Limit { input: Box::new(create_physical_plan(&l.input)?), skip: l.skip, fetch: l.fetch }
+            let mut input = create_physical_plan(&l.input)?;
+            if let Some(f) = l.fetch {
+                limit_groups(&mut input, l.skip.saturating_add(f));
+            }
+            PhysicalPlan::Limit { input: Box::new(input), skip: l.skip, fetch: l.fetch }
         }
         LogicalPlan::Union(u) => {
             let inputs = u.inputs.iter().map(|i| create_physical_plan(i)).collect::<Result<Vec<_>>>()?;
@@ -1003,7 +1042,35 @@ fn plan_join(j: &crate::logical::Join, _plan: &LogicalPlan) -> Result<PhysicalPl
     if crate::exec::pipeline::profiling() {
         eprintln!("[iara] plan {:?} join on {} keys: left est {l_est:.0}, right est {r_est:.0}, swap {swap}", j.join_type, j.on.len());
     }
-    let probe = create_physical_plan(probe_l)?;
+    let probe_plan_schema = probe_l.schema();
+    let build_plan_schema = build_l.schema();
+    let mut probe_keys = vec![];
+    let mut build_keys = vec![];
+    // the scan under the probe side that tests a single key against the build keys while decoding
+    let mut gate = None;
+    for (l, r) in &j.on {
+        let (pk, bk) = if swap { (r, l) } else { (l, r) };
+        let (cpk, cbk) = (compile(pk, probe_plan_schema)?, compile(bk, build_plan_schema)?);
+        let (pt, bt) = (cpk.data_type(), cbk.data_type());
+        let common = comparison_common(&pt, &bt)
+            .ok_or_else(|| WhError::Plan(format!("cannot join {pt} with {bt}")))?;
+        // probe rows without a match are dropped: executed inner, semi and right (build side preserved) joins, and marking ones
+        let drops_unmatched = mark_build || matches!(exec_type, JoinType::Inner | JoinType::Semi | JoinType::Right);
+        if j.on.len() == 1 && drops_unmatched {
+            gate = join_filter_target(probe_l, pk, &pt, &common);
+        }
+        probe_keys.push(cast_expr(cpk, &common)?);
+        build_keys.push(cast_expr(cbk, &common)?);
+    }
+    if let Some((scan, keys)) = &gate {
+        JOIN_SCANS.with(|m| m.borrow_mut().push((*scan, keys.clone())));
+    }
+    let probe = create_physical_plan(probe_l);
+    if gate.is_some() {
+        JOIN_SCANS.with(|m| m.borrow_mut().pop());
+    }
+    let probe = probe?;
+    let join_filter = gate.map(|(_, g)| g.keys).filter(|k| k.attached());
     let build = create_physical_plan(build_l)?;
     let joined = joined_schema(&probe.schema(), &build.schema());
     let order = (swap && !mark_build).then(|| swap_order(nl, nr));
@@ -1015,8 +1082,6 @@ fn plan_join(j: &crate::logical::Join, _plan: &LogicalPlan) -> Result<PhysicalPl
             Some(o) => Arc::new(Schema::new(o.iter().map(|&i| joined.field(i).clone()).collect::<Vec<_>>())),
         },
     };
-    let probe_plan_schema = probe_l.schema();
-    let build_plan_schema = build_l.schema();
     let filter = match &j.filter {
         Some(f) => {
             let js = PlanSchema::join(probe_plan_schema, build_plan_schema);
@@ -1038,18 +1103,6 @@ fn plan_join(j: &crate::logical::Join, _plan: &LogicalPlan) -> Result<PhysicalPl
             order,
         });
     }
-    let mut probe_keys = vec![];
-    let mut build_keys = vec![];
-    for (l, r) in &j.on {
-        let (pk, bk) = if swap { (r, l) } else { (l, r) };
-        let pk = compile(pk, probe_plan_schema)?;
-        let bk = compile(bk, build_plan_schema)?;
-        let (pt, bt) = (pk.data_type(), bk.data_type());
-        let common = comparison_common(&pt, &bt)
-            .ok_or_else(|| WhError::Plan(format!("cannot join {pt} with {bt}")))?;
-        probe_keys.push(cast_expr(pk, &common)?);
-        build_keys.push(cast_expr(bk, &common)?);
-    }
     Ok(PhysicalPlan::HashJoin {
         probe: Box::new(probe),
         build: Box::new(build),
@@ -1061,5 +1114,49 @@ fn plan_join(j: &crate::logical::Join, _plan: &LogicalPlan) -> Result<PhysicalPl
         schema: out_schema,
         order,
         mark_build,
+        join_filter,
     })
+}
+
+/// The scan a hash join can test its build keys on while the scan decodes:
+/// the scan under `probe` (through filters, plain column projections and
+/// aliases, which only drop rows or pass them on) that the join's probe key
+/// `key` of type `key_type`, compared as `common`, reads as a column, and the
+/// build keys on its column. The key may be cast, if the cast keeps values.
+fn join_filter_target(probe: &LogicalPlan, key: &Expr, key_type: &DataType, common: &DataType) -> Option<(*const Scan, ScanJoinKeys)> {
+    if !int_like(common) {
+        return None;
+    }
+    let mut col = match key.unalias_ref() {
+        Expr::Cast { expr, .. } => expr.unalias_ref().as_column()?.clone(),
+        e => e.as_column()?.clone(),
+    };
+    let mut plan = probe;
+    loop {
+        match plan {
+            // nothing else is planned with the scan: a subquery could read the same scan
+            LogicalPlan::Filter(f) if !f.predicate.contains_subquery() => plan = f.input.as_ref(),
+            LogicalPlan::Projection(p) if !p.exprs.iter().any(|e| e.contains_subquery()) => {
+                let i = p.schema.maybe_index_of(&col).ok()??;
+                col = p.exprs[i].unalias_ref().as_column()?.clone();
+                plan = p.input.as_ref();
+            }
+            LogicalPlan::SubqueryAlias(a) => {
+                let i = a.schema.maybe_index_of(&col).ok()??;
+                col = a.input.schema().column(i);
+                plan = a.input.as_ref();
+            }
+            LogicalPlan::Scan(scan) if scan.fetch.is_none() => {
+                let i = scan.schema.maybe_index_of(&col).ok()??;
+                let column = scan.projection.as_ref().map_or(i, |p| p[i]);
+                let field = scan.source.schema().field(column).clone();
+                if !value_preserving(field.data_type(), key_type) || !value_preserving(key_type, common) {
+                    return None;
+                }
+                let keys = Arc::new(JoinKeyFilter::new(field.name(), field.data_type().clone()));
+                return Some((scan as *const Scan, ScanJoinKeys { column, keys }));
+            }
+            _ => return None,
+        }
+    }
 }

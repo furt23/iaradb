@@ -68,7 +68,7 @@ export function HistoryTable({ entries }: { entries: HistoryEntry[] }) {
     <Box sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       <PageHeader
         title={t("Query history")}
-        subtitle={t("Every query run in this workspace (click one to open it in the SQL editor)")}
+        subtitle={t("Click a query to open it in the SQL editor.")}
         actions={
           <TextField
             size="small"

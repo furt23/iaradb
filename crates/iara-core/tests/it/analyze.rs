@@ -10,6 +10,7 @@ use arrow::record_batch::RecordBatch;
 use iara_core::SessionContext;
 use iara_core::exec::metrics::PlanMetrics;
 use iara_core::physical::analyze::{AnalyzedNode, analyze, analyzed_plan};
+use iara_core::physical::execute::planned_pipelines;
 
 const FACTS: i64 = 200_000;
 const DIMS: i64 = 100;
@@ -115,29 +116,31 @@ fn a_plain_run_measures_nothing() {
     assert_eq!(shape(&analyzed), shape(&plain));
 }
 
+/// One query for every kind of node.
+const NODE_QUERIES: [&str; 16] = [
+    "select * from facts where v = 7",
+    "select name from dims order by name desc limit 5",
+    "select * from facts order by v desc, k limit 10",
+    "select k, v from facts order by v, k",
+    "select k from facts where v < 3 union all select k from dims",
+    "select k, row_number() over (partition by k order by v) as rn from facts where v < 50",
+    "select f.k from facts f where exists (select 1 from dims d where d.k = f.k and d.k < 10)",
+    "select count(*) from facts f where f.k not in (select k from dims where k < 90)",
+    // the small side is the one kept: semi / anti joins that mark build rows
+    "select d.name from dims d where d.k in (select k from facts where v < 5)",
+    "select d.name from dims d where not exists (select 1 from facts f where f.k = d.k and f.v < 5 and d.k < 50)",
+    "select d.name, f.v from dims d left join facts f on d.k = f.k and f.v = 1",
+    "select count(*) from dims a, dims b where a.k < b.k",
+    "select a.k, b.k from (select k from dims where k < 10) a full join (select k from dims where k > 5 and k < 20) b on a.k = b.k",
+    "with recursive r(n) as (select 1 union all select n + 1 from r where n < 20) select n from r",
+    "select k from facts offset 1000 limit 20",
+    "select 1 as one",
+];
+
 #[test]
 fn every_kind_of_node_reports_and_the_root_counts_the_result() {
     let ctx = context();
-    let queries = [
-        "select * from facts where v = 7",
-        "select name from dims order by name desc limit 5",
-        "select * from facts order by v desc, k limit 10",
-        "select k, v from facts order by v, k",
-        "select k from facts where v < 3 union all select k from dims",
-        "select k, row_number() over (partition by k order by v) as rn from facts where v < 50",
-        "select f.k from facts f where exists (select 1 from dims d where d.k = f.k and d.k < 10)",
-        "select count(*) from facts f where f.k not in (select k from dims where k < 90)",
-        // the small side is the one kept: semi / anti joins that mark build rows
-        "select d.name from dims d where d.k in (select k from facts where v < 5)",
-        "select d.name from dims d where not exists (select 1 from facts f where f.k = d.k and f.v < 5 and d.k < 50)",
-        "select d.name, f.v from dims d left join facts f on d.k = f.k and f.v = 1",
-        "select count(*) from dims a, dims b where a.k < b.k",
-        "select a.k, b.k from (select k from dims where k < 10) a full join (select k from dims where k > 5 and k < 20) b on a.k = b.k",
-        "with recursive r(n) as (select 1 union all select n + 1 from r where n < 20) select n from r",
-        "select k from facts offset 1000 limit 20",
-        "select 1 as one",
-    ];
-    for q in queries {
+    for q in NODE_QUERIES {
         let lf = ctx.sql(q).unwrap_or_else(|e| panic!("{q}: {e}"));
         let (_, batches) = lf.collect().unwrap();
         let want: usize = batches.iter().map(|b| b.num_rows()).sum();
@@ -147,6 +150,44 @@ fn every_kind_of_node_reports_and_the_root_counts_the_result() {
         }
         assert_eq!(a.rows, want as u64, "{q}");
         assert_eq!(rows_of(&a.plan), want as u64, "{q}: the root's rows_out");
+    }
+}
+
+/// What the walk lists leaves out what only the run knows: a materialized
+/// result's morsels, the operators of a union's inputs.
+fn same_source(planned: &str, real: &str) -> bool {
+    match planned {
+        "Materialized" | "SemiJoinMarked" => real.starts_with(planned),
+        _ if planned.starts_with("Union(") => real.starts_with("Union("),
+        _ => planned == real,
+    }
+}
+
+#[test]
+fn the_planned_pipelines_are_the_ones_the_run_starts() {
+    let ctx = context();
+    for q in NODE_QUERIES {
+        let lf = ctx.sql(q).unwrap_or_else(|e| panic!("{q}: {e}"));
+        let phys = lf.physical_plan().unwrap();
+        for stream in [false, true] {
+            let stats = if stream { lf.stream(&mut |_| Ok(()), &mut |_| Ok(())).unwrap().1 } else { lf.collect_profiled().unwrap().2 };
+            let what = format!("{q} (stream: {stream})");
+            assert!(stats.pending.is_empty(), "{what}: still pending {:?}", stats.pending);
+            let planned = planned_pipelines(&phys, stream);
+            let (want, ran): (Vec<_>, Vec<_>) = (
+                planned.iter().map(|p| (&p.sink, &p.source)).collect(),
+                stats.pipelines.iter().map(|p| (&p.sink, &p.source)).collect(),
+            );
+            assert_eq!(want.len(), ran.len(), "{what}: planned {want:?}, ran {ran:?}");
+            for (p, r) in planned.iter().zip(&stats.pipelines) {
+                assert_eq!(p.sink, r.sink, "{what}");
+                assert!(same_source(&p.source, &r.source), "{what}: planned {:?}, ran {:?}", p.source, r.source);
+                // a recursive term's work table is empty when planned
+                if !r.source.starts_with("WorkTableScan") {
+                    assert!(p.morsels.is_none_or(|m| m == r.morsels_total), "{what}: {} morsels planned, {} ran", p.morsels.unwrap(), r.morsels_total);
+                }
+            }
+        }
     }
 }
 

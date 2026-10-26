@@ -19,6 +19,7 @@
 //! groups are bound by cache misses, and these overlap.
 
 mod dep;
+mod packed;
 mod table;
 
 use std::sync::Arc;
@@ -32,6 +33,7 @@ use arrow::row::{RowConverter, SortField};
 use crate::error::Result;
 use crate::hash::{NativeKey, combine, hash_bytes, hash_u64, hash_u128};
 use dep::DepRecords;
+use packed::PackedKeys;
 use table::{IdTable, PREFETCH_AHEAD};
 
 pub trait ColumnInterner: Send + Sync {
@@ -726,6 +728,8 @@ enum Composite {
     Two { map: IdTable<u64>, keys: Vec<u64>, small: Box<[u32; 4096]> },
     /// keyed by the hash of the tuple of column ids; equal hashes compare the tuples
     Many { k: usize, map: IdTable<u64>, ids: Vec<u32>, hashes: Vec<u64> },
+    /// the whole key in up to four words ([`packed`])
+    Packed(Box<PackedKeys>),
 }
 
 pub struct GroupKeys {
@@ -737,7 +741,15 @@ pub struct GroupKeys {
     dep: Option<Dependent>,
     /// integer key columns not yet tried as the dependent-mode lead
     candidates: Vec<usize>,
+    /// keys may be packed (off once a NULL had no bit in the packed key)
+    pack: bool,
+    /// groups the caller expects (see [`GroupKeys::reserve`])
+    reserved: usize,
 }
+
+/// Groups past which column-id keys move to packed keys ([`packed`]): past
+/// the pairs of ids below 64 that `Composite::Two` looks up directly.
+const PACK_AFTER: usize = 1 << 12;
 
 impl GroupKeys {
     pub fn try_new(types: &[DataType]) -> Result<Self> {
@@ -753,6 +765,8 @@ impl GroupKeys {
             scratch: vec![vec![]; types.len()],
             dep: None,
             candidates,
+            pack: true,
+            reserved: 0,
         };
         keys.next_mode()?;
         Ok(keys)
@@ -780,9 +794,27 @@ impl GroupKeys {
     }
 
     pub fn reserve(&mut self, n: usize) {
+        self.reserved = self.reserved.max(n);
         if let Some(d) = &mut self.dep {
             self.interners[d.lead].reserve(n);
             d.recs.reserve(n);
+            return;
+        }
+        if self.packs_later() {
+            // past the switch to packed keys only the interned columns stay
+            for (j, i) in self.interners.iter_mut().enumerate() {
+                if packed::raw_bits(&self.types[j]).is_none() {
+                    i.reserve(n);
+                }
+            }
+            match &mut self.composite {
+                Some(Composite::Two { map, keys, .. }) => {
+                    map.reserve(n.min(PACK_AFTER + 1), |&e| hash_u64(e));
+                    keys.reserve(n.min(PACK_AFTER + 1));
+                }
+                Some(Composite::Many { map, .. }) => map.reserve(n.min(PACK_AFTER + 1), |&e| e),
+                _ => {}
+            }
             return;
         }
         for i in &mut self.interners {
@@ -794,6 +826,7 @@ impl GroupKeys {
                 keys.reserve(n);
             }
             Some(Composite::Many { map, .. }) => map.reserve(n, |&e| e),
+            Some(Composite::Packed(p)) => p.reserve(n),
             None => {}
         }
     }
@@ -806,6 +839,7 @@ impl GroupKeys {
             None => self.interners[0].len(),
             Some(Composite::Two { keys, .. }) => keys.len(),
             Some(Composite::Many { k, ids, .. }) => ids.len() / k,
+            Some(Composite::Packed(p)) => p.len(),
         }
     }
 
@@ -823,6 +857,19 @@ impl GroupKeys {
         let Some(comp) = &mut self.composite else {
             return self.interners[0].intern_masked(&cols[0], mask, out);
         };
+        if let Composite::Packed(p) = comp {
+            if !p.accepts(cols) {
+                self.unpack()?;
+                return self.intern_masked(cols, mask, out);
+            }
+            for (j, c) in cols.iter().enumerate() {
+                if p.by_id(j) {
+                    self.interners[j].intern_masked(c, mask, &mut self.scratch[j])?;
+                }
+            }
+            p.intern(cols, &self.scratch, Some(mask), out);
+            return Ok(());
+        }
         for (j, c) in cols.iter().enumerate() {
             self.interners[j].intern_masked(c, mask, &mut self.scratch[j])?;
         }
@@ -891,8 +938,9 @@ impl GroupKeys {
                     out.push(id);
                 }
             }
+            Composite::Packed(_) => unreachable!("packed keys return above"),
         }
-        Ok(())
+        self.repack()
     }
 
     pub fn intern(&mut self, cols: &[ArrayRef], out: &mut Vec<u32>) -> Result<()> {
@@ -917,6 +965,19 @@ impl GroupKeys {
         let Some(comp) = &mut self.composite else {
             return self.interners[0].intern(&cols[0], out);
         };
+        if let Composite::Packed(p) = comp {
+            if !p.accepts(cols) {
+                self.unpack()?;
+                return self.intern(cols, out);
+            }
+            for (j, c) in cols.iter().enumerate() {
+                if p.by_id(j) {
+                    self.interners[j].intern(c, &mut self.scratch[j])?;
+                }
+            }
+            p.intern(cols, &self.scratch, None, out);
+            return Ok(());
+        }
         for (j, c) in cols.iter().enumerate() {
             self.interners[j].intern(c, &mut self.scratch[j])?;
         }
@@ -985,8 +1046,9 @@ impl GroupKeys {
                     out.push(id);
                 }
             }
+            Composite::Packed(_) => unreachable!("packed keys return above"),
         }
-        Ok(())
+        self.repack()
     }
 
     /// Materialise the key columns of all groups (in group id order).
@@ -997,6 +1059,9 @@ impl GroupKeys {
         let Some(comp) = &self.composite else {
             return Ok(vec![self.interners[0].values()?]);
         };
+        if let Composite::Packed(p) = comp {
+            return p.emit(&self.types, &self.interners);
+        }
         let k = self.interners.len();
         let mut out = Vec::with_capacity(k);
         for (j, interner) in self.interners.iter().enumerate() {
@@ -1007,10 +1072,90 @@ impl GroupKeys {
                     .map(|key| if j == 0 { (key >> 32) as u32 } else { *key as u32 })
                     .collect(),
                 Composite::Many { ids, .. } => ids.iter().skip(j).step_by(k).copied().collect(),
+                Composite::Packed(_) => unreachable!("packed keys return above"),
             };
             out.push(take(&vals, &UInt32Array::from(idx), None)?);
         }
         Ok(out)
+    }
+
+    /// Column-id keys that move to packed keys once they are many.
+    fn packs_later(&self) -> bool {
+        self.pack
+            && matches!(self.composite, Some(Composite::Two { .. } | Composite::Many { .. }))
+            && packed::Layout::new(&self.types).is_some_and(|l| l.has_raw())
+    }
+
+    /// A key column rows can be partitioned by alone (any subset of the key
+    /// keeps equal keys together): the dependent-mode lead, else a column
+    /// of 32 bits or more with at least half as many values as there are
+    /// groups. Partitions then stay balanced, and the other columns (strings)
+    /// are not hashed for it.
+    pub fn partition_column(&self) -> Option<usize> {
+        if let Some(d) = &self.dep {
+            return Some(d.lead);
+        }
+        let n = self.len();
+        if self.types.len() < 2 || n < 1024 {
+            return None;
+        }
+        let keys = self.emit().ok()?;
+        let mut best: Option<(usize, usize)> = None;
+        let mut hashes = vec![0u64; n];
+        for (j, k) in keys.iter().enumerate() {
+            if packed::raw_bits(k.data_type()).is_none_or(|b| b < 32) {
+                continue;
+            }
+            crate::hash::hash_array(k, &mut hashes, true).ok()?;
+            let mut h = hashes.clone();
+            h.sort_unstable();
+            h.dedup();
+            if h.len() * 2 >= n && best.is_none_or(|(_, d)| h.len() > d) {
+                best = Some((j, h.len()));
+            }
+        }
+        best.map(|(j, _)| j)
+    }
+
+    /// Move large column-id keys to packed keys, keeping the groups' ids: the
+    /// interned columns keep their interners, the others are kept by value.
+    fn repack(&mut self) -> Result<()> {
+        if !self.pack || self.dep.is_some() || self.len() <= PACK_AFTER || matches!(self.composite, None | Some(Composite::Packed(_))) {
+            return Ok(());
+        }
+        let Some(layout) = packed::Layout::new(&self.types).filter(|l| l.has_raw()) else {
+            self.pack = false;
+            return Ok(());
+        };
+        let n = self.len();
+        let reps = self.emit()?;
+        let mut p = PackedKeys::new(layout);
+        for j in 0..self.types.len() {
+            if !p.by_id(j) {
+                self.interners[j] = make_interner(&self.types[j])?;
+            }
+        }
+        p.reserve(self.reserved.max(n));
+        self.composite = Some(Composite::Packed(Box::new(p)));
+        let mut ids = vec![];
+        self.intern(&reps, &mut ids)?;
+        debug_assert!(ids.len() == n && ids.iter().enumerate().all(|(i, &g)| g as usize == i));
+        Ok(())
+    }
+
+    /// Leave packed keys for interned column ids (a NULL in a column that has
+    /// no NULL bit), keeping the ids of the groups seen so far.
+    fn unpack(&mut self) -> Result<()> {
+        let n = self.len();
+        let reps = self.emit()?;
+        self.pack = false;
+        self.next_mode()?;
+        if n > 0 {
+            let mut ids = vec![];
+            self.intern(&reps, &mut ids)?;
+            debug_assert!(ids.iter().enumerate().all(|(i, &g)| g as usize == i));
+        }
+        Ok(())
     }
 
     /// Dependent mode: the key columns of groups `0..n`.
@@ -1030,3 +1175,5 @@ impl GroupKeys {
 
 #[cfg(test)]
 mod dep_tests;
+#[cfg(test)]
+mod packed_tests;

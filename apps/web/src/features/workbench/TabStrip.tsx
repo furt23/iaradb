@@ -87,7 +87,7 @@ function PaneActions({ pane }: { pane: Pane }) {
   const many = state.panes.length > 1;
   return (
     <Box sx={{ display: "flex", alignItems: "center", px: 0.5, gap: 0.25, flexShrink: 0 }}>
-      <Tooltip title={state.panes.length < MAX_PANES ? "Split: open another pane (up to 4)" : "Four panes at most"}>
+      <Tooltip title={state.panes.length < MAX_PANES ? "Split: open another pane" : "Four panes at most"}>
         <span>
           <IconButton aria-label="split pane" disabled={state.panes.length >= MAX_PANES} onClick={() => act({ type: "split", pane: pane.id })}>
             <VerticalSplitOutlined fontSize="small" />
@@ -102,7 +102,7 @@ function PaneActions({ pane }: { pane: Pane }) {
         </Tooltip>
       )}
       {many && (
-        <Tooltip title="Close pane (its tabs join the next pane)">
+        <Tooltip title="Close pane">
           <IconButton aria-label="close pane" onClick={() => act({ type: "closePane", pane: pane.id })}>
             <CloseRounded fontSize="small" />
           </IconButton>

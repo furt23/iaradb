@@ -15,7 +15,7 @@
     "data": "/home/ec2-user/data/sf10",
     "runs": 3,
     "timeout": 600,
-    "date": "2026-10-18",
+    "date": "2026-10-22",
     "machine": "x86_64",
     "cpus": 16,
     "ram_gb": 61.8,
@@ -28,7 +28,17 @@
      "chdb": "4.4.0",
      "spark": "4.2.0",
      "daft": "0.7.26"
-    }
+    },
+    "rerun": [
+     {
+      "date": "2026-10-23",
+      "file": "tpch_sf10.json"
+     },
+     {
+      "date": "2026-10-23",
+      "file": "tpch_sf10_polars.json"
+     }
+    ]
    },
    "engines": [
     "iara",
@@ -43,12 +53,12 @@
     {
      "label": "Q1",
      "ms": {
-      "iara": 257.2,
-      "duckdb": 283.2,
-      "polars": 409.3,
-      "datafusion": 459.9,
-      "chdb": 499.9,
-      "spark": 8640.0,
+      "iara": 231.6,
+      "duckdb": 288.1,
+      "polars": 415.3,
+      "datafusion": 463.2,
+      "chdb": 512.6,
+      "spark": 9297.3,
       "daft": null
      },
      "notes": {
@@ -58,93 +68,90 @@
     {
      "label": "Q2",
      "ms": {
-      "iara": 48.3,
-      "duckdb": 71.6,
-      "polars": 50.2,
-      "datafusion": 117.1,
-      "chdb": 130.3,
-      "spark": 937.4,
-      "daft": 187.9
+      "iara": 29.5,
+      "duckdb": 71.7,
+      "polars": 50.3,
+      "datafusion": 112.9,
+      "chdb": 124.3,
+      "spark": 863.1,
+      "daft": 189.2
      },
      "notes": {}
     },
     {
      "label": "Q3",
      "ms": {
-      "iara": 185.1,
-      "duckdb": 219.1,
-      "polars": 178.2,
-      "datafusion": 279.3,
-      "chdb": 579.4,
-      "spark": 2519.6,
-      "daft": 411.6
+      "iara": 158.0,
+      "duckdb": 213.2,
+      "polars": 168.3,
+      "datafusion": 282.9,
+      "chdb": 557.0,
+      "spark": 2356.5,
+      "daft": 417.8
      },
      "notes": {}
     },
     {
      "label": "Q4",
      "ms": {
-      "iara": 92.4,
-      "duckdb": 154.3,
-      "polars": 105.1,
-      "datafusion": 145.2,
-      "chdb": 214.7,
-      "spark": 1881.1,
-      "daft": 430.2
+      "iara": 78.3,
+      "duckdb": 153.8,
+      "polars": 106.5,
+      "datafusion": 143.2,
+      "chdb": 218.8,
+      "spark": 1984.2,
+      "daft": 452.6
      },
      "notes": {}
     },
     {
      "label": "Q5",
      "ms": {
-      "iara": 192.7,
-      "duckdb": 257.6,
-      "polars": 193.5,
-      "datafusion": 429.7,
-      "chdb": 502.4,
-      "spark": 3968.1,
-      "daft": 344.9
+      "iara": 180.8,
+      "duckdb": 263.8,
+      "polars": 195.6,
+      "datafusion": 431.0,
+      "chdb": 522.9,
+      "spark": 4171.4,
+      "daft": 370.2
      },
      "notes": {}
     },
     {
      "label": "Q6",
      "ms": {
-      "iara": 94.5,
-      "duckdb": 109.5,
-      "polars": 88.4,
-      "datafusion": 164.0,
-      "chdb": 188.3,
-      "spark": 535.4,
-      "daft": 1330.8
+      "iara": 83.1,
+      "duckdb": 109.1,
+      "polars": 91.0,
+      "datafusion": 165.1,
+      "chdb": 198.8,
+      "spark": 551.9,
+      "daft": 1482.1
      },
-     "notes": {
-      "chdb": "wrong result: row 0: (752448391.6111,) != (1230113636.0101,)",
-      "daft": "wrong result: row 0: (752448391.6111,) != (1230113636.0101,)"
-     }
+     "notes": {}
     },
     {
      "label": "Q7",
      "ms": {
-      "iara": 211.5,
-      "duckdb": 243.1,
-      "polars": 410.8,
-      "datafusion": 637.9,
-      "chdb": 456.4,
-      "spark": 3695.2,
-      "daft": 346.5
+      "iara": 189.9,
+      "duckdb": 237.0,
+      "polars": 402.5,
+      "datafusion": 609.5,
+      "chdb": 425.3,
+      "spark": 3684.8,
+      "daft": 352.9
      },
      "notes": {}
     },
     {
      "label": "Q8",
      "ms": {
-      "iara": 241.2,
-      "duckdb": 320.7,
-      "polars": 217.9,
-      "datafusion": 489.0,
-      "chdb": 1207.5,
-      "spark": 1754.8,
+      "iara": 212.9,
+      "duckdb": 308.9,
+      "polars": 214.4,
+      "datafusion": 472.9,
+      "chdb": 1152.3,
+      "spark": 1698.6,
       "daft": null
      },
      "notes": {
@@ -154,12 +161,12 @@
     {
      "label": "Q9",
      "ms": {
-      "iara": 412.7,
-      "duckdb": 537.9,
-      "polars": 356.1,
-      "datafusion": 759.2,
-      "chdb": 1384.5,
-      "spark": 3485.2,
+      "iara": 352.1,
+      "duckdb": 532.5,
+      "polars": 343.8,
+      "datafusion": 745.2,
+      "chdb": 1363.0,
+      "spark": 3527.5,
       "daft": null
      },
      "notes": {
@@ -169,64 +176,64 @@
     {
      "label": "Q10",
      "ms": {
-      "iara": 283.4,
-      "duckdb": 283.5,
-      "polars": 259.8,
-      "datafusion": 378.9,
-      "chdb": 605.1,
-      "spark": 2037.7,
-      "daft": 1852.9
+      "iara": 248.8,
+      "duckdb": 289.2,
+      "polars": 268.5,
+      "datafusion": 386.2,
+      "chdb": 618.8,
+      "spark": 1939.4,
+      "daft": 1892.7
      },
      "notes": {}
     },
     {
      "label": "Q11",
      "ms": {
-      "iara": 55.2,
-      "duckdb": 62.2,
-      "polars": 59.9,
-      "datafusion": 97.9,
-      "chdb": 99.9,
-      "spark": 418.4,
-      "daft": 200.5
+      "iara": 43.3,
+      "duckdb": 58.1,
+      "polars": 63.9,
+      "datafusion": 93.4,
+      "chdb": 89.8,
+      "spark": 441.2,
+      "daft": 198.8
      },
      "notes": {}
     },
     {
      "label": "Q12",
      "ms": {
-      "iara": 93.6,
-      "duckdb": 161.8,
-      "polars": 102.9,
-      "datafusion": 243.4,
-      "chdb": 429.7,
-      "spark": 1260.7,
-      "daft": 2012.6
+      "iara": 85.2,
+      "duckdb": 158.4,
+      "polars": 106.6,
+      "datafusion": 246.5,
+      "chdb": 436.1,
+      "spark": 1301.0,
+      "daft": 2051.0
      },
      "notes": {}
     },
     {
      "label": "Q13",
      "ms": {
-      "iara": 228.8,
-      "duckdb": 359.0,
-      "polars": 272.5,
-      "datafusion": 305.2,
-      "chdb": 407.9,
-      "spark": 2477.0,
-      "daft": 730.6
+      "iara": 203.5,
+      "duckdb": 349.3,
+      "polars": 271.6,
+      "datafusion": 296.5,
+      "chdb": 400.6,
+      "spark": 2169.1,
+      "daft": 692.0
      },
      "notes": {}
     },
     {
      "label": "Q14",
      "ms": {
-      "iara": 129.6,
-      "duckdb": 177.6,
-      "polars": 123.5,
-      "datafusion": 177.4,
-      "chdb": 215.0,
-      "spark": 860.5,
+      "iara": 119.0,
+      "duckdb": 179.3,
+      "polars": 129.0,
+      "datafusion": 182.4,
+      "chdb": 223.7,
+      "spark": 901.9,
       "daft": null
      },
      "notes": {
@@ -236,90 +243,90 @@
     {
      "label": "Q15",
      "ms": {
-      "iara": 120.6,
-      "duckdb": 149.4,
-      "polars": 120.8,
-      "datafusion": 337.2,
-      "chdb": 399.3,
-      "spark": 1782.8,
-      "daft": 371.8
+      "iara": 108.6,
+      "duckdb": 152.4,
+      "polars": 121.9,
+      "datafusion": 348.2,
+      "chdb": 405.7,
+      "spark": 1795.9,
+      "daft": 381.5
      },
      "notes": {}
     },
     {
      "label": "Q16",
      "ms": {
-      "iara": 90.5,
-      "duckdb": 90.7,
-      "polars": 90.0,
-      "datafusion": 77.7,
-      "chdb": 117.0,
-      "spark": 803.2,
-      "daft": 213.8
+      "iara": 65.2,
+      "duckdb": 88.4,
+      "polars": 81.9,
+      "datafusion": 78.2,
+      "chdb": 109.7,
+      "spark": 846.8,
+      "daft": 208.0
      },
      "notes": {}
     },
     {
      "label": "Q17",
      "ms": {
-      "iara": 146.0,
-      "duckdb": 253.0,
-      "polars": 123.1,
-      "datafusion": 740.4,
-      "chdb": 442.1,
-      "spark": 5750.9,
-      "daft": 1485.9
+      "iara": 119.2,
+      "duckdb": 250.4,
+      "polars": 113.2,
+      "datafusion": 738.3,
+      "chdb": 403.8,
+      "spark": 5636.6,
+      "daft": 1455.3
      },
      "notes": {}
     },
     {
      "label": "Q18",
      "ms": {
-      "iara": 400.1,
-      "duckdb": 391.2,
-      "polars": 346.9,
-      "datafusion": 1017.6,
-      "chdb": 390.2,
-      "spark": 6504.7,
-      "daft": 837.9
+      "iara": 295.8,
+      "duckdb": 383.1,
+      "polars": 345.9,
+      "datafusion": 984.8,
+      "chdb": 370.8,
+      "spark": 6524.2,
+      "daft": 861.6
      },
      "notes": {}
     },
     {
      "label": "Q19",
      "ms": {
-      "iara": 221.3,
-      "duckdb": 260.0,
-      "polars": 170.2,
-      "datafusion": 274.8,
-      "chdb": 445.5,
-      "spark": 1021.8,
-      "daft": 2238.8
+      "iara": 137.7,
+      "duckdb": 257.1,
+      "polars": 163.6,
+      "datafusion": 272.1,
+      "chdb": 415.3,
+      "spark": 1017.7,
+      "daft": 2209.5
      },
      "notes": {}
     },
     {
      "label": "Q20",
      "ms": {
-      "iara": 180.1,
-      "duckdb": 207.6,
-      "polars": 260.3,
-      "datafusion": 307.5,
-      "chdb": 484.6,
-      "spark": 976.3,
-      "daft": 483.9
+      "iara": 162.6,
+      "duckdb": 222.5,
+      "polars": 271.7,
+      "datafusion": 309.5,
+      "chdb": 495.8,
+      "spark": 1001.7,
+      "daft": 509.1
      },
      "notes": {}
     },
     {
      "label": "Q21",
      "ms": {
-      "iara": 359.2,
-      "duckdb": 713.5,
-      "polars": 2131.7,
-      "datafusion": 932.0,
-      "chdb": 1461.0,
-      "spark": 6490.5,
+      "iara": 307.9,
+      "duckdb": 705.4,
+      "polars": 2104.8,
+      "datafusion": 921.7,
+      "chdb": 1391.8,
+      "spark": 6116.3,
       "daft": null
      },
      "notes": {
@@ -329,13 +336,13 @@
     {
      "label": "Q22",
      "ms": {
-      "iara": 61.3,
-      "duckdb": 101.0,
-      "polars": 59.4,
-      "datafusion": 70.0,
-      "chdb": 123.3,
-      "spark": 900.7,
-      "daft": 120.8
+      "iara": 48.6,
+      "duckdb": 100.0,
+      "polars": 55.9,
+      "datafusion": 68.0,
+      "chdb": 115.2,
+      "spark": 865.2,
+      "daft": 119.9
      },
      "notes": {}
     }
@@ -347,7 +354,7 @@
     "data": "/home/ec2-user/data/sf100",
     "runs": 3,
     "timeout": 900,
-    "date": "2026-10-18",
+    "date": "2026-10-22",
     "machine": "x86_64",
     "cpus": 16,
     "ram_gb": 61.8,
@@ -360,7 +367,17 @@
      "chdb": "4.4.0",
      "spark": "4.2.0",
      "daft": "0.7.26"
-    }
+    },
+    "rerun": [
+     {
+      "date": "2026-10-23",
+      "file": "tpch_sf100.json"
+     },
+     {
+      "date": "2026-10-23",
+      "file": "tpch_sf100_polars.json"
+     }
+    ]
    },
    "engines": [
     "iara",
@@ -375,12 +392,12 @@
     {
      "label": "Q1",
      "ms": {
-      "iara": 2472.1,
-      "duckdb": 2607.6,
-      "polars": 3985.7,
-      "datafusion": 4648.0,
-      "chdb": 4416.6,
-      "spark": 71477.2,
+      "iara": 2271.9,
+      "duckdb": 2665.7,
+      "polars": 4070.8,
+      "datafusion": 4683.5,
+      "chdb": 4432.2,
+      "spark": 73986.1,
       "daft": null
      },
      "notes": {
@@ -390,93 +407,90 @@
     {
      "label": "Q2",
      "ms": {
-      "iara": 300.0,
-      "duckdb": 622.8,
-      "polars": 213.1,
-      "datafusion": 1071.3,
-      "chdb": 859.3,
-      "spark": 10071.4,
-      "daft": 2578.9
+      "iara": 236.8,
+      "duckdb": 613.4,
+      "polars": 211.4,
+      "datafusion": 1061.3,
+      "chdb": 845.6,
+      "spark": 9593.8,
+      "daft": 2561.6
      },
      "notes": {}
     },
     {
      "label": "Q3",
      "ms": {
-      "iara": 1769.7,
-      "duckdb": 2511.4,
-      "polars": 2011.5,
-      "datafusion": 3128.0,
-      "chdb": 49964.7,
-      "spark": 23933.1,
-      "daft": 6631.2
+      "iara": 1574.7,
+      "duckdb": 2379.2,
+      "polars": 1970.4,
+      "datafusion": 3087.4,
+      "chdb": 49608.5,
+      "spark": 24461.0,
+      "daft": 6545.3
      },
      "notes": {}
     },
     {
      "label": "Q4",
      "ms": {
-      "iara": 863.7,
-      "duckdb": 1526.5,
-      "polars": 1157.4,
-      "datafusion": 1469.9,
-      "chdb": 2506.2,
-      "spark": 16120.9,
-      "daft": 5038.4
+      "iara": 820.8,
+      "duckdb": 1455.8,
+      "polars": 1190.5,
+      "datafusion": 1455.4,
+      "chdb": 2474.7,
+      "spark": 16299.3,
+      "daft": 5385.6
      },
      "notes": {}
     },
     {
      "label": "Q5",
      "ms": {
-      "iara": 2101.1,
-      "duckdb": 2939.9,
-      "polars": 2008.1,
-      "datafusion": 4587.4,
-      "chdb": 5122.8,
-      "spark": 61872.4,
-      "daft": 6439.4
+      "iara": 2059.2,
+      "duckdb": 2717.8,
+      "polars": 2121.6,
+      "datafusion": 4651.6,
+      "chdb": 5970.3,
+      "spark": 60443.1,
+      "daft": 6548.9
      },
      "notes": {}
     },
     {
      "label": "Q6",
      "ms": {
-      "iara": 859.6,
-      "duckdb": 1150.6,
-      "polars": 868.8,
-      "datafusion": 1666.7,
-      "chdb": 1884.8,
-      "spark": 6260.7,
-      "daft": 14031.6
+      "iara": 800.5,
+      "duckdb": 1242.4,
+      "polars": 891.6,
+      "datafusion": 1679.6,
+      "chdb": 2018.4,
+      "spark": 6355.5,
+      "daft": 15904.9
      },
-     "notes": {
-      "chdb": "wrong result: row 0: (7534757999.2287,) != (12330426888.4637,)",
-      "daft": "wrong result: row 0: (7534757999.2287,) != (12330426888.4637,)"
-     }
+     "notes": {}
     },
     {
      "label": "Q7",
      "ms": {
-      "iara": 2283.7,
-      "duckdb": 2984.4,
-      "polars": 4378.5,
-      "datafusion": 7567.7,
-      "chdb": 5205.0,
-      "spark": 23581.3,
-      "daft": 6037.6
+      "iara": 1921.9,
+      "duckdb": 2902.0,
+      "polars": 4326.3,
+      "datafusion": 7527.3,
+      "chdb": 5037.8,
+      "spark": 23568.9,
+      "daft": 6010.5
      },
      "notes": {}
     },
     {
      "label": "Q8",
      "ms": {
-      "iara": 2341.5,
-      "duckdb": 3696.7,
-      "polars": 2261.0,
-      "datafusion": 4658.1,
-      "chdb": 7847.8,
-      "spark": 35100.0,
+      "iara": 2174.7,
+      "duckdb": 3591.0,
+      "polars": 2236.1,
+      "datafusion": 4604.0,
+      "chdb": 7721.9,
+      "spark": 35711.2,
       "daft": null
      },
      "notes": {
@@ -486,12 +500,12 @@
     {
      "label": "Q9",
      "ms": {
-      "iara": 4369.3,
-      "duckdb": 6347.6,
-      "polars": 4802.6,
-      "datafusion": 7773.0,
-      "chdb": 224636.4,
-      "spark": 90632.8,
+      "iara": 4024.4,
+      "duckdb": 6177.3,
+      "polars": 4783.1,
+      "datafusion": 7702.5,
+      "chdb": 227234.2,
+      "spark": 85190.6,
       "daft": null
      },
      "notes": {
@@ -501,64 +515,64 @@
     {
      "label": "Q10",
      "ms": {
-      "iara": 3042.3,
-      "duckdb": 2860.5,
-      "polars": 2828.4,
-      "datafusion": 3854.2,
-      "chdb": 5752.8,
-      "spark": 19901.9,
-      "daft": 19578.8
+      "iara": 2296.6,
+      "duckdb": 2767.0,
+      "polars": 2888.0,
+      "datafusion": 3911.8,
+      "chdb": 5769.7,
+      "spark": 18222.2,
+      "daft": 20143.1
      },
      "notes": {}
     },
     {
      "label": "Q11",
      "ms": {
-      "iara": 392.3,
-      "duckdb": 487.5,
-      "polars": 567.7,
-      "datafusion": 991.1,
-      "chdb": 805.2,
-      "spark": 10084.1,
-      "daft": 3371.5
+      "iara": 346.1,
+      "duckdb": 499.8,
+      "polars": 570.6,
+      "datafusion": 989.2,
+      "chdb": 781.2,
+      "spark": 10188.0,
+      "daft": 3397.3
      },
      "notes": {}
     },
     {
      "label": "Q12",
      "ms": {
-      "iara": 859.5,
-      "duckdb": 1660.8,
-      "polars": 977.0,
-      "datafusion": 2490.2,
-      "chdb": 4463.9,
-      "spark": 13091.4,
-      "daft": 20401.0
+      "iara": 814.1,
+      "duckdb": 1715.6,
+      "polars": 999.4,
+      "datafusion": 2497.8,
+      "chdb": 4399.8,
+      "spark": 13275.1,
+      "daft": 20947.1
      },
      "notes": {}
     },
     {
      "label": "Q13",
      "ms": {
-      "iara": 2359.4,
-      "duckdb": 3714.2,
-      "polars": 3669.2,
-      "datafusion": 3721.5,
-      "chdb": 4429.1,
-      "spark": 20541.0,
-      "daft": 9892.2
+      "iara": 2180.9,
+      "duckdb": 3717.5,
+      "polars": 3623.6,
+      "datafusion": 3657.7,
+      "chdb": 4411.2,
+      "spark": 20354.2,
+      "daft": 9812.1
      },
      "notes": {}
     },
     {
      "label": "Q14",
      "ms": {
-      "iara": 1143.0,
-      "duckdb": 1988.0,
-      "polars": 1226.4,
-      "datafusion": 1856.9,
-      "chdb": 2254.4,
-      "spark": 9722.9,
+      "iara": 1137.3,
+      "duckdb": 1882.6,
+      "polars": 1258.7,
+      "datafusion": 1859.4,
+      "chdb": 2245.9,
+      "spark": 10032.8,
       "daft": null
      },
      "notes": {
@@ -568,90 +582,90 @@
     {
      "label": "Q15",
      "ms": {
-      "iara": 1144.2,
-      "duckdb": 1780.2,
-      "polars": 1221.9,
-      "datafusion": 3577.7,
-      "chdb": 4259.0,
-      "spark": 20469.5,
-      "daft": 6653.8
+      "iara": 1038.3,
+      "duckdb": 1795.0,
+      "polars": 1255.0,
+      "datafusion": 3685.2,
+      "chdb": 4242.0,
+      "spark": 21342.3,
+      "daft": 7338.3
      },
      "notes": {}
     },
     {
      "label": "Q16",
      "ms": {
-      "iara": 638.9,
-      "duckdb": 914.9,
-      "polars": 651.8,
-      "datafusion": 575.1,
-      "chdb": 952.6,
-      "spark": 16027.6,
-      "daft": 2075.4
+      "iara": 464.9,
+      "duckdb": 912.8,
+      "polars": 658.9,
+      "datafusion": 572.3,
+      "chdb": 936.7,
+      "spark": 16047.7,
+      "daft": 2075.2
      },
      "notes": {}
     },
     {
      "label": "Q17",
      "ms": {
-      "iara": 1352.9,
-      "duckdb": 3034.1,
-      "polars": 1085.6,
-      "datafusion": 8914.0,
-      "chdb": 4182.1,
-      "spark": 88996.4,
-      "daft": 20907.6
+      "iara": 1142.6,
+      "duckdb": 3022.9,
+      "polars": 1069.6,
+      "datafusion": 8926.0,
+      "chdb": 4119.0,
+      "spark": 85656.9,
+      "daft": 20791.6
      },
      "notes": {}
     },
     {
      "label": "Q18",
      "ms": {
-      "iara": 4597.0,
-      "duckdb": 4421.2,
-      "polars": 3770.5,
-      "datafusion": 13692.8,
-      "chdb": 4336.9,
-      "spark": 76625.1,
-      "daft": 12445.0
+      "iara": 4287.3,
+      "duckdb": 4418.9,
+      "polars": 3722.0,
+      "datafusion": 13602.0,
+      "chdb": 4321.1,
+      "spark": 76465.5,
+      "daft": 12317.8
      },
      "notes": {}
     },
     {
      "label": "Q19",
      "ms": {
-      "iara": 2084.4,
-      "duckdb": 2654.4,
-      "polars": 1844.1,
-      "datafusion": 2727.2,
-      "chdb": 4449.9,
-      "spark": 9745.3,
-      "daft": 22537.7
+      "iara": 1457.7,
+      "duckdb": 2649.6,
+      "polars": 1802.3,
+      "datafusion": 2688.2,
+      "chdb": 4354.1,
+      "spark": 9475.5,
+      "daft": 22514.0
      },
      "notes": {}
     },
     {
      "label": "Q20",
      "ms": {
-      "iara": 1580.0,
-      "duckdb": 2442.4,
-      "polars": 3032.1,
-      "datafusion": 3067.0,
-      "chdb": 3821.5,
-      "spark": 12793.5,
-      "daft": 7676.4
+      "iara": 1493.4,
+      "duckdb": 2468.1,
+      "polars": 3089.1,
+      "datafusion": 3093.6,
+      "chdb": 3741.7,
+      "spark": 13110.2,
+      "daft": 7897.4
      },
      "notes": {}
     },
     {
      "label": "Q21",
      "ms": {
-      "iara": 4045.2,
-      "duckdb": 7647.6,
-      "polars": 26149.5,
-      "datafusion": 12274.3,
-      "chdb": 55422.3,
-      "spark": 88510.4,
+      "iara": 3680.2,
+      "duckdb": 7743.5,
+      "polars": 25971.4,
+      "datafusion": 12216.2,
+      "chdb": 56454.2,
+      "spark": 84577.2,
       "daft": null
      },
      "notes": {
@@ -661,13 +675,13 @@
     {
      "label": "Q22",
      "ms": {
-      "iara": 460.0,
-      "duckdb": 1248.9,
-      "polars": 610.6,
-      "datafusion": 641.6,
-      "chdb": 1231.1,
-      "spark": 8135.6,
-      "daft": 1637.5
+      "iara": 412.9,
+      "duckdb": 1159.0,
+      "polars": 595.3,
+      "datafusion": 621.1,
+      "chdb": 1213.8,
+      "spark": 8184.9,
+      "daft": 1622.7
      },
      "notes": {}
     }
@@ -679,7 +693,7 @@
     "data": "/home/ec2-user/data/clickbench/hits_typed.parquet",
     "runs": 3,
     "timeout": 600,
-    "date": "2026-10-18",
+    "date": "2026-10-22",
     "machine": "x86_64",
     "cpus": 16,
     "ram_gb": 61.8,
@@ -692,7 +706,17 @@
      "chdb": "4.4.0",
      "spark": "4.2.0",
      "daft": "0.7.26"
-    }
+    },
+    "rerun": [
+     {
+      "date": "2026-10-23",
+      "file": "cb_polars.json"
+     },
+     {
+      "date": "2026-10-23",
+      "file": "cb_daft.json"
+     }
+    ]
    },
    "engines": [
     "iara",
@@ -707,313 +731,311 @@
     {
      "label": "Q0",
      "ms": {
-      "iara": 2.0,
-      "duckdb": 75.4,
-      "polars": 3.2,
-      "datafusion": 1.1,
-      "chdb": 90.3,
-      "spark": 1018.3,
-      "daft": 60.7
+      "iara": 1.4,
+      "duckdb": 58.8,
+      "polars": 1.4,
+      "datafusion": 1.0,
+      "chdb": 88.5,
+      "spark": 1043.7,
+      "daft": 57.0
      },
      "notes": {}
     },
     {
      "label": "Q1",
      "ms": {
-      "iara": 9.2,
-      "duckdb": 73.7,
-      "polars": 6.5,
-      "datafusion": 27.5,
-      "chdb": 53.2,
-      "spark": 871.8,
-      "daft": 688.8
+      "iara": 5.5,
+      "duckdb": 73.5,
+      "polars": 8.3,
+      "datafusion": 24.6,
+      "chdb": 55.9,
+      "spark": 868.9,
+      "daft": 687.6
      },
      "notes": {}
     },
     {
      "label": "Q2",
      "ms": {
-      "iara": 34.8,
-      "duckdb": 130.9,
-      "polars": 28.7,
-      "datafusion": 55.7,
-      "chdb": 108.6,
-      "spark": 893.8,
-      "daft": 95.8
+      "iara": 26.2,
+      "duckdb": 119.4,
+      "polars": 27.9,
+      "datafusion": 53.0,
+      "chdb": 99.5,
+      "spark": 882.3,
+      "daft": 99.3
      },
      "notes": {}
     },
     {
      "label": "Q3",
      "ms": {
-      "iara": 40.5,
-      "duckdb": 125.6,
-      "polars": 44.7,
-      "datafusion": 64.2,
-      "chdb": 99.9,
-      "spark": 907.9,
-      "daft": 94.0
+      "iara": 31.4,
+      "duckdb": 123.3,
+      "polars": 46.6,
+      "datafusion": 62.8,
+      "chdb": 100.3,
+      "spark": 1064.2,
+      "daft": 94.5
      },
      "notes": {}
     },
     {
      "label": "Q4",
      "ms": {
-      "iara": 358.9,
-      "duckdb": 263.7,
+      "iara": 200.6,
+      "duckdb": 262.0,
       "polars": 247.3,
-      "datafusion": 350.0,
-      "chdb": 306.7,
-      "spark": 2575.5,
-      "daft": 420.7
+      "datafusion": 325.6,
+      "chdb": 299.4,
+      "spark": 2658.1,
+      "daft": 438.5
      },
      "notes": {}
     },
     {
      "label": "Q5",
      "ms": {
-      "iara": 429.6,
-      "duckdb": 413.5,
-      "polars": 446.0,
-      "datafusion": 596.2,
-      "chdb": 480.7,
-      "spark": 2370.4,
-      "daft": 614.9
+      "iara": 380.3,
+      "duckdb": 404.4,
+      "polars": 432.8,
+      "datafusion": 586.5,
+      "chdb": 475.9,
+      "spark": 2376.4,
+      "daft": 610.0
      },
      "notes": {}
     },
     {
      "label": "Q6",
      "ms": {
-      "iara": 0.5,
-      "duckdb": 59.9,
-      "polars": 9.2,
+      "iara": 0.1,
+      "duckdb": 76.3,
+      "polars": 10.5,
       "datafusion": 0.8,
-      "chdb": 86.3,
-      "spark": 1099.6,
-      "daft": null
+      "chdb": 87.7,
+      "spark": 906.1,
+      "daft": 55.6
      },
-     "notes": {
-      "daft": "InvalidSQLException: Daft error: DaftError::External Unable to create logical plan node."
-     }
+     "notes": {}
     },
     {
      "label": "Q7",
      "ms": {
-      "iara": 9.6,
-      "duckdb": 71.3,
+      "iara": 8.9,
+      "duckdb": 91.4,
       "polars": 10.7,
-      "datafusion": 25.0,
-      "chdb": 60.3,
-      "spark": 1097.8,
-      "daft": 721.1
+      "datafusion": 26.3,
+      "chdb": 58.7,
+      "spark": 945.2,
+      "daft": 646.3
      },
      "notes": {}
     },
     {
      "label": "Q8",
      "ms": {
-      "iara": 689.9,
-      "duckdb": 386.5,
-      "polars": 546.3,
-      "datafusion": 456.1,
-      "chdb": 496.7,
-      "spark": 2904.4,
-      "daft": 1753.3
+      "iara": 352.9,
+      "duckdb": 382.4,
+      "polars": 466.4,
+      "datafusion": 459.3,
+      "chdb": 487.5,
+      "spark": 2867.6,
+      "daft": 1714.7
      },
      "notes": {}
     },
     {
      "label": "Q9",
      "ms": {
-      "iara": 757.4,
-      "duckdb": 482.0,
-      "polars": 623.6,
-      "datafusion": 569.5,
-      "chdb": 553.7,
-      "spark": 3517.2,
-      "daft": 1183.2
+      "iara": 420.7,
+      "duckdb": 476.9,
+      "polars": 628.6,
+      "datafusion": 572.5,
+      "chdb": 551.2,
+      "spark": 3379.7,
+      "daft": 1159.4
      },
      "notes": {}
     },
     {
      "label": "Q10",
      "ms": {
-      "iara": 85.4,
-      "duckdb": 174.2,
-      "polars": 100.6,
-      "datafusion": 130.2,
-      "chdb": 229.0,
-      "spark": 1306.8,
-      "daft": 1684.8
+      "iara": 74.4,
+      "duckdb": 171.5,
+      "polars": 91.7,
+      "datafusion": 127.9,
+      "chdb": 230.9,
+      "spark": 1303.0,
+      "daft": 1579.0
      },
      "notes": {}
     },
     {
      "label": "Q11",
      "ms": {
-      "iara": 100.7,
-      "duckdb": 197.0,
-      "polars": 102.9,
-      "datafusion": 147.6,
-      "chdb": 266.2,
-      "spark": 1336.0,
-      "daft": 1686.8
+      "iara": 89.1,
+      "duckdb": 192.1,
+      "polars": 101.4,
+      "datafusion": 146.0,
+      "chdb": 260.1,
+      "spark": 1365.5,
+      "daft": 1539.4
      },
      "notes": {}
     },
     {
      "label": "Q12",
      "ms": {
-      "iara": 300.3,
-      "duckdb": 456.7,
-      "polars": 360.2,
-      "datafusion": 595.2,
-      "chdb": 453.1,
-      "spark": 2369.7,
-      "daft": 3423.4
+      "iara": 241.1,
+      "duckdb": 449.0,
+      "polars": 353.3,
+      "datafusion": 594.3,
+      "chdb": 451.2,
+      "spark": 2329.2,
+      "daft": 3281.3
      },
      "notes": {}
     },
     {
      "label": "Q13",
      "ms": {
-      "iara": 405.9,
-      "duckdb": 700.7,
-      "polars": 793.0,
-      "datafusion": 719.6,
-      "chdb": 651.8,
-      "spark": 4322.9,
-      "daft": 5560.8
+      "iara": 333.5,
+      "duckdb": 698.4,
+      "polars": 632.7,
+      "datafusion": 784.9,
+      "chdb": 657.0,
+      "spark": 4274.0,
+      "daft": 5376.3
      },
      "notes": {}
     },
     {
      "label": "Q14",
      "ms": {
-      "iara": 390.4,
-      "duckdb": 501.4,
-      "polars": 371.7,
-      "datafusion": 603.7,
-      "chdb": 522.0,
-      "spark": 2440.9,
-      "daft": 3541.7
+      "iara": 343.0,
+      "duckdb": 495.2,
+      "polars": 385.5,
+      "datafusion": 602.6,
+      "chdb": 530.4,
+      "spark": 2417.5,
+      "daft": 3430.0
      },
      "notes": {}
     },
     {
      "label": "Q15",
      "ms": {
-      "iara": 293.8,
-      "duckdb": 303.0,
-      "polars": 310.1,
-      "datafusion": 384.0,
-      "chdb": 283.2,
-      "spark": 2704.4,
-      "daft": 526.5
+      "iara": 226.2,
+      "duckdb": 298.7,
+      "polars": 297.6,
+      "datafusion": 388.9,
+      "chdb": 275.3,
+      "spark": 2686.9,
+      "daft": 512.0
      },
      "notes": {}
     },
     {
      "label": "Q16",
      "ms": {
-      "iara": 1204.2,
-      "duckdb": 811.9,
-      "polars": 981.1,
-      "datafusion": 914.4,
-      "chdb": 965.1,
-      "spark": 4559.4,
-      "daft": 1466.2
+      "iara": 737.3,
+      "duckdb": 795.3,
+      "polars": 991.7,
+      "datafusion": 905.6,
+      "chdb": 960.1,
+      "spark": 4538.5,
+      "daft": 1426.4
      },
      "notes": {}
     },
     {
      "label": "Q17",
      "ms": {
-      "iara": 1208.3,
-      "duckdb": 663.1,
-      "polars": 973.8,
-      "datafusion": 907.5,
-      "chdb": 483.9,
-      "spark": 4358.7,
-      "daft": 1357.7
+      "iara": 450.5,
+      "duckdb": 655.1,
+      "polars": 989.3,
+      "datafusion": 900.2,
+      "chdb": 472.8,
+      "spark": 4309.6,
+      "daft": 1326.7
      },
      "notes": {}
     },
     {
      "label": "Q18",
      "ms": {
-      "iara": 2144.2,
-      "duckdb": 1426.9,
-      "polars": 1750.4,
-      "datafusion": 1615.0,
-      "chdb": 1719.7,
-      "spark": 7423.5,
-      "daft": 2244.9
+      "iara": 1423.2,
+      "duckdb": 1411.8,
+      "polars": 1819.7,
+      "datafusion": 1597.5,
+      "chdb": 1733.9,
+      "spark": 7399.4,
+      "daft": 2235.4
      },
      "notes": {}
     },
     {
      "label": "Q19",
      "ms": {
-      "iara": 27.5,
-      "duckdb": 94.3,
-      "polars": 34.6,
-      "datafusion": 28.3,
-      "chdb": 56.0,
-      "spark": 1103.4,
-      "daft": 84.7
+      "iara": 20.7,
+      "duckdb": 92.6,
+      "polars": 34.1,
+      "datafusion": 27.9,
+      "chdb": 58.0,
+      "spark": 884.7,
+      "daft": 84.5
      },
      "notes": {}
     },
     {
      "label": "Q20",
      "ms": {
-      "iara": 725.5,
-      "duckdb": 887.3,
-      "polars": 911.9,
-      "datafusion": 946.0,
-      "chdb": 1266.6,
-      "spark": 3143.6,
-      "daft": 1191.4
+      "iara": 642.3,
+      "duckdb": 869.9,
+      "polars": 935.9,
+      "datafusion": 937.0,
+      "chdb": 1251.5,
+      "spark": 2758.3,
+      "daft": 1187.0
      },
      "notes": {}
     },
     {
      "label": "Q21",
      "ms": {
-      "iara": 830.6,
-      "duckdb": 919.8,
-      "polars": 1010.5,
-      "datafusion": 962.6,
-      "chdb": 1243.9,
-      "spark": 3415.1,
-      "daft": 3744.4
+      "iara": 745.1,
+      "duckdb": 914.7,
+      "polars": 1026.1,
+      "datafusion": 976.1,
+      "chdb": 1268.6,
+      "spark": 3141.6,
+      "daft": 3718.7
      },
      "notes": {}
     },
     {
      "label": "Q22",
      "ms": {
-      "iara": 1439.4,
-      "duckdb": 1522.5,
-      "polars": 1239.0,
-      "datafusion": 2356.7,
-      "chdb": 1957.8,
-      "spark": 4459.8,
-      "daft": 4423.8
+      "iara": 1325.5,
+      "duckdb": 1500.1,
+      "polars": 1254.8,
+      "datafusion": 2354.6,
+      "chdb": 1962.5,
+      "spark": 4099.5,
+      "daft": 4415.1
      },
      "notes": {}
     },
     {
      "label": "Q23",
      "ms": {
-      "iara": 361.3,
-      "duckdb": 350.9,
-      "polars": 1765.4,
-      "datafusion": 4913.5,
-      "chdb": 1493.0,
-      "spark": 26020.5,
+      "iara": 183.5,
+      "duckdb": 350.2,
+      "polars": 1824.0,
+      "datafusion": 4820.1,
+      "chdb": 1512.2,
+      "spark": 24532.1,
       "daft": null
      },
      "notes": {
@@ -1023,258 +1045,249 @@
     {
      "label": "Q24",
      "ms": {
-      "iara": 57.9,
-      "duckdb": 151.7,
-      "polars": 247.1,
-      "datafusion": 126.7,
-      "chdb": 566.0,
-      "spark": 1831.3,
-      "daft": 3006.2
+      "iara": 44.5,
+      "duckdb": 148.8,
+      "polars": 254.4,
+      "datafusion": 118.8,
+      "chdb": 571.4,
+      "spark": 1432.4,
+      "daft": 2927.7
      },
      "notes": {}
     },
     {
      "label": "Q25",
      "ms": {
-      "iara": 219.7,
-      "duckdb": 321.6,
-      "polars": 156.5,
-      "datafusion": 346.9,
-      "chdb": 366.6,
-      "spark": 1500.1,
-      "daft": 398.4
+      "iara": 191.4,
+      "duckdb": 311.9,
+      "polars": 160.7,
+      "datafusion": 345.7,
+      "chdb": 356.6,
+      "spark": 1245.2,
+      "daft": 392.2
      },
      "notes": {}
     },
     {
      "label": "Q26",
      "ms": {
-      "iara": 56.0,
-      "duckdb": 144.1,
-      "polars": 294.3,
-      "datafusion": 113.9,
-      "chdb": 569.5,
-      "spark": 1600.2,
-      "daft": 3029.1
+      "iara": 45.4,
+      "duckdb": 143.9,
+      "polars": 301.0,
+      "datafusion": 121.2,
+      "chdb": 549.8,
+      "spark": 1422.3,
+      "daft": 2985.0
      },
      "notes": {}
     },
     {
      "label": "Q27",
      "ms": {
-      "iara": 1121.0,
-      "duckdb": 836.3,
-      "polars": 1157.3,
-      "datafusion": 1140.0,
-      "chdb": 1412.7,
-      "spark": 4749.2,
-      "daft": 11415.2
+      "iara": 922.5,
+      "duckdb": 832.2,
+      "polars": 958.8,
+      "datafusion": 1140.6,
+      "chdb": 1382.3,
+      "spark": 4454.2,
+      "daft": 11361.8
      },
      "notes": {}
     },
     {
      "label": "Q28",
      "ms": {
-      "iara": 2926.6,
-      "duckdb": 6592.0,
-      "polars": null,
-      "datafusion": 3573.5,
-      "chdb": 1568.8,
-      "spark": 15581.6,
-      "daft": null
+      "iara": 2351.2,
+      "duckdb": 6443.4,
+      "polars": 6747.6,
+      "datafusion": 3443.1,
+      "chdb": 1574.0,
+      "spark": 14973.6,
+      "daft": 16705.9
      },
-     "notes": {
-      "polars": "SQLInterfaceError: unsupported function 'regexp_replace'",
-      "daft": "InvalidSQLException: Daft error: DaftError::External Unable to create logical plan node."
-     }
+     "notes": {}
     },
     {
      "label": "Q29",
      "ms": {
-      "iara": 31.3,
-      "duckdb": 131.1,
-      "polars": 143.3,
-      "datafusion": 54.0,
-      "chdb": 754.0,
-      "spark": 4444.1,
-      "daft": null
+      "iara": 24.4,
+      "duckdb": 129.4,
+      "polars": 149.2,
+      "datafusion": 53.9,
+      "chdb": 790.5,
+      "spark": 4398.6,
+      "daft": 1492.1
      },
-     "notes": {
-      "daft": "InvalidSQLException: Daft error: DaftError::External Unable to create logical plan node."
-     }
+     "notes": {}
     },
     {
      "label": "Q30",
      "ms": {
-      "iara": 336.6,
-      "duckdb": 503.8,
-      "polars": 348.4,
-      "datafusion": 592.2,
-      "chdb": 768.5,
-      "spark": 2181.6,
-      "daft": 3310.6
+      "iara": 245.3,
+      "duckdb": 502.3,
+      "polars": 349.8,
+      "datafusion": 590.5,
+      "chdb": 747.5,
+      "spark": 2169.7,
+      "daft": 3286.0
      },
      "notes": {}
     },
     {
      "label": "Q31",
      "ms": {
-      "iara": 420.3,
-      "duckdb": 562.3,
-      "polars": 394.1,
-      "datafusion": 592.0,
-      "chdb": 814.9,
-      "spark": 2536.2,
-      "daft": 3417.7
+      "iara": 324.8,
+      "duckdb": 558.4,
+      "polars": 399.7,
+      "datafusion": 598.9,
+      "chdb": 803.3,
+      "spark": 2535.3,
+      "daft": 3332.8
      },
      "notes": {}
     },
     {
      "label": "Q32",
      "ms": {
-      "iara": 1842.2,
-      "duckdb": 1418.6,
-      "polars": 1504.2,
-      "datafusion": 1234.0,
-      "chdb": 2194.8,
-      "spark": 8864.5,
-      "daft": 2613.8
+      "iara": 1273.0,
+      "duckdb": 1414.0,
+      "polars": 1603.6,
+      "datafusion": 1254.0,
+      "chdb": 2190.6,
+      "spark": 8924.4,
+      "daft": 2647.9
      },
      "notes": {}
     },
     {
      "label": "Q33",
      "ms": {
-      "iara": 2039.1,
-      "duckdb": 1643.1,
-      "polars": 2268.5,
-      "datafusion": 1978.2,
-      "chdb": 2075.0,
-      "spark": 7194.5,
-      "daft": 4396.8
+      "iara": 1870.5,
+      "duckdb": 1629.5,
+      "polars": 2282.9,
+      "datafusion": 2013.8,
+      "chdb": 2060.8,
+      "spark": 7064.6,
+      "daft": 4405.2
      },
      "notes": {}
     },
     {
      "label": "Q34",
      "ms": {
-      "iara": 2041.3,
-      "duckdb": 1737.6,
-      "polars": 2290.7,
-      "datafusion": 1993.2,
-      "chdb": 2078.1,
-      "spark": 7103.8,
-      "daft": 4932.3
+      "iara": 1861.8,
+      "duckdb": 1722.1,
+      "polars": 2281.9,
+      "datafusion": 1974.0,
+      "chdb": 2072.3,
+      "spark": 7095.3,
+      "daft": 4877.3
      },
      "notes": {}
     },
     {
      "label": "Q35",
      "ms": {
-      "iara": 257.4,
-      "duckdb": 441.0,
-      "polars": null,
-      "datafusion": 357.3,
-      "chdb": 224.6,
-      "spark": 2700.6,
-      "daft": 918.7
+      "iara": 183.0,
+      "duckdb": 446.6,
+      "polars": 582.6,
+      "datafusion": 362.5,
+      "chdb": 235.3,
+      "spark": 2743.2,
+      "daft": 919.7
      },
-     "notes": {
-      "polars": "DuplicateError: group_by keys contained duplicate output name 'ClientIP'. It's possible that multiple expressions are returning the same default column name. If this is the case, try renaming the columns with `.alias"
-     }
+     "notes": {}
     },
     {
      "label": "Q36",
      "ms": {
-      "iara": 47.6,
-      "duckdb": 128.9,
-      "polars": 46.3,
-      "datafusion": 136.9,
-      "chdb": 68.9,
-      "spark": 859.6,
-      "daft": 222.8
+      "iara": 35.8,
+      "duckdb": 124.5,
+      "polars": 43.0,
+      "datafusion": 133.4,
+      "chdb": 75.5,
+      "spark": 864.9,
+      "daft": 240.7
      },
      "notes": {}
     },
     {
      "label": "Q37",
      "ms": {
-      "iara": 17.9,
-      "duckdb": 91.0,
-      "polars": 20.7,
-      "datafusion": 51.6,
-      "chdb": 49.0,
-      "spark": 814.3,
-      "daft": 143.3
+      "iara": 11.3,
+      "duckdb": 95.1,
+      "polars": 20.1,
+      "datafusion": 55.5,
+      "chdb": 46.6,
+      "spark": 840.3,
+      "daft": 135.0
      },
      "notes": {}
     },
     {
      "label": "Q38",
      "ms": {
-      "iara": 30.5,
-      "duckdb": 109.1,
-      "polars": 26.6,
-      "datafusion": 89.2,
-      "chdb": 64.2,
-      "spark": 769.7,
-      "daft": 101.6
+      "iara": 22.7,
+      "duckdb": 108.7,
+      "polars": 28.0,
+      "datafusion": 89.1,
+      "chdb": 58.1,
+      "spark": 801.6,
+      "daft": 100.5
      },
      "notes": {}
     },
     {
      "label": "Q39",
      "ms": {
-      "iara": 106.0,
-      "duckdb": 160.3,
-      "polars": 73.2,
-      "datafusion": 251.1,
-      "chdb": 84.3,
-      "spark": 1324.9,
-      "daft": 208.3
+      "iara": 77.3,
+      "duckdb": 157.2,
+      "polars": 67.6,
+      "datafusion": 255.2,
+      "chdb": 92.2,
+      "spark": 1319.9,
+      "daft": 204.2
      },
      "notes": {}
     },
     {
      "label": "Q40",
      "ms": {
-      "iara": 12.9,
-      "duckdb": 88.4,
-      "polars": 10.7,
-      "datafusion": 26.5,
-      "chdb": 43.1,
-      "spark": 808.7,
-      "daft": 88.7
+      "iara": 7.2,
+      "duckdb": 89.3,
+      "polars": 10.8,
+      "datafusion": 27.9,
+      "chdb": 41.6,
+      "spark": 810.9,
+      "daft": 93.5
      },
      "notes": {}
     },
     {
      "label": "Q41",
      "ms": {
-      "iara": 12.0,
-      "duckdb": 86.2,
-      "polars": 8.1,
-      "datafusion": 26.8,
-      "chdb": 39.9,
-      "spark": 798.5,
-      "daft": 90.9
+      "iara": 6.9,
+      "duckdb": 88.6,
+      "polars": 9.8,
+      "datafusion": 26.4,
+      "chdb": 39.1,
+      "spark": 795.1,
+      "daft": 92.4
      },
      "notes": {}
     },
     {
      "label": "Q42",
      "ms": {
-      "iara": 9.9,
-      "duckdb": 91.9,
-      "polars": null,
-      "datafusion": 30.6,
-      "chdb": 36.4,
-      "spark": 811.1,
-      "daft": 79.7
+      "iara": 6.5,
+      "duckdb": 84.4,
+      "polars": 9.6,
+      "datafusion": 28.9,
+      "chdb": 36.3,
+      "spark": 800.7,
+      "daft": 79.8
      },
-     "notes": {
-      "polars": "SQLInterfaceError: unsupported function 'date_trunc'"
-     }
+     "notes": {}
     }
    ]
   }
@@ -1283,207 +1296,210 @@
   {
    "name": "csv_groupby",
    "iara": {
-    "s": 3.38,
-    "mb": 171
+    "s": 3.05,
+    "mb": 185
    },
    "polars": {
-    "s": 6.23,
-    "mb": 525
+    "s": 5.93,
+    "mb": 464
    }
   },
   {
    "name": "csv_big_aggregate",
    "iara": {
-    "s": 110.7,
-    "mb": 140
+    "s": 104.87,
+    "mb": 138
    },
    "polars": {
-    "s": 335.16,
-    "mb": 234
+    "s": 321.05,
+    "mb": 156
    }
   },
   {
    "name": "csv_to_parquet",
    "iara": {
-    "s": 14.17,
-    "mb": 10436
+    "s": 10.21,
+    "mb": 8278
    },
    "polars": {
-    "s": 12.85,
-    "mb": 1228
+    "s": 12.56,
+    "mb": 1205
    }
   },
   {
    "name": "ndjson_groupby",
    "iara": {
-    "s": 9.36,
-    "mb": 323
+    "s": 8.48,
+    "mb": 326
    },
    "polars": {
-    "s": 8.08,
-    "mb": 616
+    "s": 7.95,
+    "mb": 595
    }
   },
   {
    "name": "many_small_files",
    "iara": {
-    "s": 1.02,
-    "mb": 251
+    "s": 0.87,
+    "mb": 263
    },
    "polars": {
-    "s": 2.12,
-    "mb": 778
+    "s": 2.09,
+    "mb": 776
    }
   },
   {
    "name": "feature_engineering_sink",
    "iara": {
-    "s": 78.68,
-    "mb": 7067
+    "s": 50.58,
+    "mb": 6645
    },
    "polars": {
-    "s": 55.03,
-    "mb": 2707
+    "s": 54.01,
+    "mb": 2698
    }
   },
   {
    "name": "full_sort_sink",
    "iara": {
-    "s": 28.22,
-    "mb": 36836
+    "s": 17.21,
+    "mb": 40246
    },
    "polars": {
-    "s": 24.67,
-    "mb": 40037
+    "s": 25.85,
+    "mb": 39865
    }
   },
   {
    "name": "to_pandas",
-   "iara": null,
+   "iara": {
+    "s": 18.52,
+    "mb": 53261
+   },
    "polars": {
-    "s": 45.7,
-    "mb": 60162
+    "s": 45.91,
+    "mb": 60113
    }
   },
   {
    "name": "top3_per_customer",
    "iara": {
-    "s": 9.07,
-    "mb": 40401
+    "s": 4.45,
+    "mb": 41985
    },
    "polars": {
-    "s": 5.03,
-    "mb": 28463
+    "s": 4.96,
+    "mb": 28661
    }
   },
   {
    "name": "sessionize",
    "iara": {
-    "s": 6.17,
-    "mb": 7493
+    "s": 3.98,
+    "mb": 11994
    },
    "polars": {
-    "s": 7.92,
-    "mb": 10133
+    "s": 7.66,
+    "mb": 10209
    }
   },
   {
    "name": "rolling_daily",
    "iara": {
-    "s": 0.17,
-    "mb": 143
+    "s": 0.14,
+    "mb": 135
    },
    "polars": {
     "s": 0.11,
-    "mb": 371
+    "mb": 360
    }
   },
   {
    "name": "url_domains",
    "iara": {
-    "s": 3.87,
-    "mb": 3232
+    "s": 3.19,
+    "mb": 3734
    },
    "polars": {
-    "s": 4.78,
-    "mb": 9625
+    "s": 4.69,
+    "mb": 9732
    }
   },
   {
    "name": "word_count",
    "iara": {
-    "s": 12.06,
-    "mb": 485
+    "s": 10.5,
+    "mb": 512
    },
    "polars": {
-    "s": 13.7,
-    "mb": 1306
+    "s": 13.39,
+    "mb": 1287
    }
   },
   {
    "name": "search_phrase_contains",
    "iara": {
-    "s": 0.74,
+    "s": 0.68,
     "mb": 359
    },
    "polars": {
-    "s": 0.73,
-    "mb": 862
+    "s": 0.72,
+    "mb": 812
    }
   },
   {
    "name": "string_key_join",
    "iara": {
-    "s": 4.08,
-    "mb": 10051
+    "s": 3.27,
+    "mb": 9270
    },
    "polars": {
-    "s": 4.99,
-    "mb": 2924
+    "s": 4.93,
+    "mb": 2908
    }
   },
   {
    "name": "dedupe_pairs",
    "iara": {
-    "s": 3.34,
-    "mb": 20214
+    "s": 2.37,
+    "mb": 19752
    },
    "polars": {
-    "s": 3.12,
-    "mb": 20881
+    "s": 3.11,
+    "mb": 20919
    }
   },
   {
    "name": "wide_filter",
    "iara": {
-    "s": 0.18,
-    "mb": 1589
+    "s": 0.16,
+    "mb": 1617
    },
    "polars": {
-    "s": 0.14,
-    "mb": 775
+    "s": 0.15,
+    "mb": 890
    }
   },
   {
    "name": "conditional_aggs",
    "iara": {
-    "s": 0.48,
-    "mb": 171
+    "s": 0.43,
+    "mb": 175
    },
    "polars": {
-    "s": 0.3,
+    "s": 0.29,
     "mb": 416
    }
   },
   {
    "name": "eager_session",
    "iara": {
-    "s": 4.87,
-    "mb": 38640
+    "s": 4.45,
+    "mb": 38713
    },
    "polars": {
-    "s": 11.56,
-    "mb": 54713
+    "s": 12.26,
+    "mb": 54780
    }
   }
  ]

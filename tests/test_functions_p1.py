@@ -222,3 +222,13 @@ def test_expr_strings(table):
     both(table, lambda: w("s").str.pad_end(6, "*").alias("r"), lambda: p("s").str.pad_end(6, "*").alias("r"))
     nums = pa.table({"s": ["42", "-42", "+7", None, "123456", ""]})
     both(nums, lambda: w("s").str.zfill(5).alias("r"), lambda: p("s").str.zfill(5).alias("r"))
+
+
+def test_length_counts_characters_of_view_strings() -> None:
+    # inline (up to 12 bytes) and buffered strings, ASCII and not, NULL
+    vals = ["", "abc", "twelve bytes", "thirteen bytes", "héllo wörld", "ação longa demais para caber", None]
+    for typ in (pa.string_view(), pa.string()):
+        t = pa.table({"s": pa.array(vals, typ)})
+        got = ia.sql("select length(s) as n, strlen(s) as m from t", t=t).collect().to_arrow().to_pylist()
+        want = [None if v is None else len(v) for v in vals]
+        assert [r["n"] for r in got] == want and [r["m"] for r in got] == want, typ

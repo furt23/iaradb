@@ -45,9 +45,7 @@ export function KernelsTab({ kernels, now, onChanged }: { kernels: ClusterKernel
 
   if (!kernels.length) {
     return (
-      <Typography sx={{ color: "text.secondary" }}>
-        No kernel runs on this cluster now. A notebook starts one when it runs; the SQL editor and the catalog share the workspace kernel.
-      </Typography>
+      <Typography sx={{ color: "text.secondary" }}>No kernel is running on this cluster.</Typography>
     );
   }
   return (
@@ -81,7 +79,7 @@ export function KernelsTab({ kernels, now, onChanged }: { kernels: ClusterKernel
                   {formatRelative(k.lastUsed, now)}
                 </TableCell>
                 <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
-                  <Tooltip title={what.kind === "job" ? "A job run's kernel is not restarted: cancel the run instead" : ""}>
+                  <Tooltip title={what.kind === "job" ? "Cancel the run instead" : ""}>
                     <span>
                       <Button
                         size="small"

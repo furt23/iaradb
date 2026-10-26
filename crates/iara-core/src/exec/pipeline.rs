@@ -35,6 +35,10 @@ pub trait Source: Send + Sync {
     fn resident(&self) -> bool {
         false
     }
+    /// The plan node it belongs to, in a measured run.
+    fn node(&self) -> Option<usize> {
+        None
+    }
 }
 
 pub trait Operator: Send + Sync {
@@ -45,6 +49,10 @@ pub trait Operator: Send + Sync {
         Ok(vec![])
     }
     fn describe(&self) -> String;
+    /// The plan node it belongs to, in a measured run.
+    fn node(&self) -> Option<usize> {
+        None
+    }
 }
 
 pub struct Pipeline {
@@ -112,9 +120,14 @@ pub trait Sink: Sync {
         false
     }
     fn finalize(&self, locals: Vec<Self::Local>) -> Result<Self::Output>;
+    /// The plan node it belongs to, in a measured run.
+    fn node(&self) -> Option<usize> {
+        None
+    }
     /// The sink's name in a query's profile.
     fn name(&self) -> String {
-        std::any::type_name::<Self>().rsplit("::").next().unwrap_or("").to_string()
+        let path = std::any::type_name::<Self>().split('<').next().unwrap_or("");
+        path.rsplit("::").next().unwrap_or("").to_string()
     }
 }
 
@@ -133,11 +146,14 @@ pub fn run_pipeline<S: Sink>(pipeline: &Pipeline, sink: &S) -> Result<S::Output>
     }
     let sink_name = sink.name();
     let progress = query.as_ref().map(|q| {
+        let mut nodes: Vec<usize> = pipeline.source.node().into_iter().chain(pipeline.ops.iter().filter_map(|o| o.node())).chain(sink.node()).collect();
+        nodes.dedup();
         q.track(PipelineProgress::new(
             pipeline.source.describe(),
             pipeline.ops.iter().map(|o| o.describe()).collect(),
             sink_name.clone(),
             pipeline.num_morsels(),
+            nodes,
         ))
     });
     let t0 = std::time::Instant::now();
@@ -367,6 +383,39 @@ impl Sink for NullSink {
 // ---------------------------------------------------------------------------
 
 /// Split batches into morsel-sized slices (zero copy).
+/// Join runs of consecutive batches smaller than `target` rows into
+/// batches of about `target` rows, in order (a selective join upstream
+/// leaves thousands of tiny batches, each a morsel and a task downstream).
+pub fn coalesce_small(schema: &SchemaRef, batches: Vec<RecordBatch>, target: usize) -> Result<Vec<RecordBatch>> {
+    let mut out = Vec::with_capacity(batches.len());
+    let mut run: Vec<RecordBatch> = vec![];
+    let mut rows = 0;
+    let flush = |run: &mut Vec<RecordBatch>, out: &mut Vec<RecordBatch>| -> Result<()> {
+        match run.len() {
+            0 => {}
+            1 => out.append(run),
+            _ => out.push(arrow::compute::concat_batches(schema, &std::mem::take(run))?),
+        }
+        Ok(())
+    };
+    for b in batches {
+        if b.num_rows() >= target {
+            flush(&mut run, &mut out)?;
+            rows = 0;
+            out.push(b);
+            continue;
+        }
+        rows += b.num_rows();
+        run.push(b);
+        if rows >= target {
+            flush(&mut run, &mut out)?;
+            rows = 0;
+        }
+    }
+    flush(&mut run, &mut out)?;
+    Ok(out)
+}
+
 pub fn rechunk(batches: Vec<RecordBatch>, target: usize) -> Vec<RecordBatch> {
     let mut out = Vec::with_capacity(batches.len());
     for b in batches {
@@ -394,21 +443,31 @@ pub struct MemorySource {
     once: bool,
     schema: SchemaRef,
     label: String,
+    node: Option<usize>,
 }
 
 impl MemorySource {
     pub fn new(batches: Vec<RecordBatch>, schema: SchemaRef, label: impl Into<String>) -> Self {
         let batches = rechunk(batches, MORSEL_ROWS).into_iter().map(|b| parking_lot::Mutex::new(Some(b))).collect();
-        Self { batches, once: false, schema, label: label.into() }
+        Self { batches, once: false, schema, label: label.into(), node: None }
     }
 
     /// A source of batches that nothing else reads: they are freed as the pipeline goes.
     pub fn once(batches: Vec<RecordBatch>, schema: SchemaRef, label: impl Into<String>) -> Self {
         Self { once: true, ..Self::new(batches, schema, label) }
     }
+
+    /// The batches are the output of plan node `node` (already counted there).
+    pub fn of_node(mut self, node: Option<usize>) -> Self {
+        self.node = node;
+        self
+    }
 }
 
 impl Source for MemorySource {
+    fn node(&self) -> Option<usize> {
+        self.node
+    }
     fn num_morsels(&self) -> usize {
         self.batches.len()
     }
@@ -471,6 +530,9 @@ impl UnionSource {
 }
 
 impl Source for UnionSource {
+    fn node(&self) -> Option<usize> {
+        self.node.as_ref().map(NodeRef::id)
+    }
     fn num_morsels(&self) -> usize {
         *self.offsets.last().unwrap()
     }

@@ -48,7 +48,6 @@ export function NewNotebookDialog({ open, onClose, folder = "notebooks" }: { ope
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && create()}
-          helperText={t("A marimo notebook (.py): runnable as a script, readable in Git diffs")}
           sx={{ mt: 1 }}
         />
       </DialogContent>

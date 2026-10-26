@@ -33,7 +33,6 @@ export function SqlWorkbench({ initialQuery, schema }: { initialQuery: string; s
     <Box sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       <PageHeader
         title={t("SQL editor")}
-        subtitle={t("Scratch queries over the workspace catalog, on the default cluster")}
         actions={
           <>
             <Button startIcon={<SaveOutlined />} onClick={() => setSaving(true)} sx={{ color: "text.secondary" }}>

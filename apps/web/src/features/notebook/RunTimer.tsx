@@ -11,7 +11,7 @@ import { formatDuration } from "@/lib/format";
 import type { RunProgress, RunSummary } from "./notebookState";
 
 /** Current time, ticking while `active`. */
-function useNow(active: boolean, every = 100): number {
+export function useNow(active: boolean, every = 100): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!active) return;
@@ -55,7 +55,7 @@ export function RunTimer({ current, lastRun, total, cells }: RunTimerProps) {
     <Box sx={{ display: "flex", flexDirection: "column", gap: 0.25, minWidth: 220 }}>
       {current && <Line label="Running for" value={formatDuration(now - current.startedAt)} />}
       {current && <Line label="Cells done" value={`${done} of ${current.queued.length}`} />}
-      <Line label="All cells (sum of last runs)" value={formatDuration(total) || "–"} />
+      <Line label="All cells" value={formatDuration(total) || "–"} />
       {lastRun && (
         <>
           <Line label="Last run: cells" value={`${lastRun.cells}${lastRun.failed ? ` (${lastRun.failed} failed)` : ""}`} />

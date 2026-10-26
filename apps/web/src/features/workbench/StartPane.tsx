@@ -19,7 +19,7 @@ import { baseName, parentOf } from "@/lib/paths";
 import { useTranslation } from "@/i18n";
 import { useWorkbench } from "./WorkbenchProvider";
 
-function Action({ icon, title, hint, onClick, href }: { icon: ReactNode; title: string; hint: string; onClick?(): void; href?: string }) {
+function Action({ icon, title, hint, onClick, href }: { icon: ReactNode; title: string; hint?: string; onClick?(): void; href?: string }) {
   const link = href ? { component: Link, href } : {};
   return (
     <ButtonBase
@@ -40,9 +40,11 @@ function Action({ icon, title, hint, onClick, href }: { icon: ReactNode; title: 
       <Box sx={{ color: "secondary.main", display: "flex", mt: 0.25 }}>{icon}</Box>
       <Box>
         <Typography sx={{ fontWeight: 650, fontSize: 14 }}>{title}</Typography>
-        <Typography variant="body2" sx={{ color: "text.secondary", fontSize: 12 }}>
-          {hint}
-        </Typography>
+        {hint && (
+          <Typography variant="body2" sx={{ color: "text.secondary", fontSize: 12 }}>
+            {hint}
+          </Typography>
+        )}
       </Box>
     </ButtonBase>
   );
@@ -81,10 +83,10 @@ export function StartPane({ name, notebooks }: { name: string; notebooks: string
           <Typography variant="h2">{name}</Typography>
         </Box>
         <Box sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 1.5 }}>
-          <Action icon={<Add />} title={t("New notebook")} hint={t("Python and SQL cells, reactive")} onClick={() => setCreating("notebook")} />
-          <Action icon={<PostAddOutlined />} title={t("New SQL query")} hint={t("A .sql file, saved as you type")} onClick={() => setCreating("query")} />
-          <Action icon={<TerminalOutlined />} title={t("SQL editor")} hint={t("Scratch queries on the default cluster")} href="/sql" />
-          <Action icon={<StorageOutlined />} title={t("Browse data")} hint={t("Tables, columns and samples")} href="/data" />
+          <Action icon={<Add />} title={t("New notebook")} hint={t("Python and SQL cells")} onClick={() => setCreating("notebook")} />
+          <Action icon={<PostAddOutlined />} title={t("New SQL query")} onClick={() => setCreating("query")} />
+          <Action icon={<TerminalOutlined />} title={t("SQL editor")} href="/sql" />
+          <Action icon={<StorageOutlined />} title={t("Browse data")} href="/data" />
         </Box>
         <Box>
           <Typography variant="overline" sx={{ color: "text.disabled" }}>

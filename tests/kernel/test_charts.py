@@ -30,6 +30,11 @@ def test_bars_aggregate_by_category_largest_first(sales: pa.Table) -> None:
     assert not out["truncated"]
 
 
+def test_pies_aggregate_like_bars(sales: pa.Table) -> None:
+    bar = chart_data(sales, {"kind": "bar", "x": "region", "y": ["amount"], "agg": "sum"})
+    assert chart_data(sales, {"kind": "pie", "x": "region", "y": ["amount"], "agg": "sum"}) == bar
+
+
 def test_counts_and_series_split_by_a_group(sales: pa.Table) -> None:
     out = chart_data(sales, {"kind": "line", "x": "year", "y": [], "agg": "count", "group": "region"})
     assert out["columns"] == ["year", "region", "count"]
@@ -58,6 +63,30 @@ def test_histogram_bins_cover_the_range(sales: pa.Table) -> None:
     assert [r[0] for r in out["rows"]] == [0.0, 1.8, 3.6, 5.4, 7.2]
     assert sum(r[2] for r in out["rows"]) == 1000
     assert out["rows"][-1][1] == pytest.approx(9.0)
+
+
+def test_counter_is_one_number_over_the_whole_result(sales: pa.Table) -> None:
+    spec = {"kind": "counter", "x": "", "y": ["amount"]}
+    assert chart_data(sales, {**spec, "agg": "sum"}) == {"columns": ["value"], "rows": [[4500.0]], "truncated": False}
+    assert chart_data(sales, {**spec, "agg": "avg"})["rows"] == [[4.5]]
+    assert chart_data(sales, {**spec, "agg": "min"})["rows"] == [[0.0]]
+    assert chart_data(sales, {**spec, "agg": "max"})["rows"] == [[9.0]]
+    assert chart_data(sales, {"kind": "counter", "x": "", "y": [], "agg": "count"})["rows"] == [[1000]]
+
+
+def test_counter_of_no_rows_is_null(sales: pa.Table) -> None:
+    empty = sales.slice(0, 0)
+    assert chart_data(empty, {"kind": "counter", "x": "", "y": ["amount"], "agg": "sum"})["rows"] == [[None]]
+    assert chart_data(empty, {"kind": "counter", "x": "", "y": [], "agg": "count"})["rows"] == [[0]]
+
+
+def test_counter_needs_an_aggregation_and_a_number(sales: pa.Table) -> None:
+    with pytest.raises(ValueError, match="needs an aggregation"):
+        chart_data(sales, {"kind": "counter", "x": "", "y": ["amount"], "agg": "none"})
+    with pytest.raises(ValueError, match="numeric"):
+        chart_data(sales, {"kind": "counter", "x": "", "y": ["region"], "agg": "sum"})
+    with pytest.raises(ValueError, match="value column"):
+        chart_data(sales, {"kind": "counter", "x": "", "y": [], "agg": "sum"})
 
 
 def test_bad_specs_explain_themselves(sales: pa.Table) -> None:

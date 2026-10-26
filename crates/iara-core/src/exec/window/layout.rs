@@ -5,6 +5,7 @@ use std::ops::Range;
 use std::sync::OnceLock;
 
 use arrow::array::{Array, ArrayRef, UInt32Array};
+use arrow::buffer::ScalarBuffer;
 use arrow::compute::{SortOptions, take};
 use arrow::row::{RowConverter, SortField};
 use rayon::prelude::*;
@@ -20,8 +21,9 @@ pub const NO_ROW: u32 = u32::MAX;
 pub struct Layout {
     pub n: usize,
     /// sorted position -> input row (`None`: the input order is kept)
-    perm: Option<Vec<u32>>,
-    inverse: OnceLock<Vec<u32>>,
+    perm: Option<ScalarBuffer<u32>>,
+    /// input row -> sorted position
+    inverse: OnceLock<ScalarBuffer<u32>>,
     /// partition ranges over sorted positions, covering `0..n` in order
     pub partitions: Vec<Range<usize>>,
     /// positions where the (partition, order) keys change
@@ -80,20 +82,19 @@ impl Layout {
         let oopts: Vec<SortOptions> =
             order_by.iter().map(|k| SortOptions { descending: k.descending, nulls_first: k.nulls_first }).collect();
         let (perm, part_breaks, peer_breaks) = sort_rows(n, &pkeys, &okeys, &oopts)?;
-        let mut partitions = vec![];
+        let starts: Vec<usize> = part_breaks.par_iter().enumerate().with_min_len(1 << 16).filter(|&(i, &b)| b && i > 0).map(|(i, _)| i).collect();
+        let mut partitions = Vec::with_capacity(starts.len() + 1);
         let mut start = 0;
-        for i in 1..n {
-            if part_breaks[i] {
-                partitions.push(start..i);
-                start = i;
-            }
+        for i in starts {
+            partitions.push(start..i);
+            start = i;
         }
         if n > 0 {
             partitions.push(start..n);
         }
         Ok(Self {
             n,
-            perm,
+            perm: perm.map(ScalarBuffer::from),
             inverse: OnceLock::new(),
             partitions,
             peer_breaks,
@@ -116,23 +117,43 @@ impl Layout {
 
     fn peers(&self) -> &(Vec<u32>, Vec<u32>) {
         self.peers.get_or_init(|| {
+            // in parallel chunks: each chunk's first group starts where the
+            // last break before the chunk is (and its last ends at the first after)
+            const CHUNK: usize = 1 << 16;
             let n = self.n;
+            let breaks = &self.peer_breaks;
+            let firsts: Vec<Option<usize>> = breaks.par_chunks(CHUNK).enumerate().map(|(c, b)| b.iter().position(|&x| x).map(|i| c * CHUNK + i)).collect();
+            let lasts: Vec<Option<usize>> = breaks.par_chunks(CHUNK).enumerate().map(|(c, b)| b.iter().rposition(|&x| x).map(|i| c * CHUNK + i)).collect();
+            let mut carry_in = vec![0usize; firsts.len()];
+            for c in 1..firsts.len() {
+                carry_in[c] = lasts[c - 1].unwrap_or(carry_in[c - 1]);
+            }
+            let mut carry_out = vec![n; firsts.len()];
+            for c in (0..firsts.len().saturating_sub(1)).rev() {
+                carry_out[c] = firsts[c + 1].unwrap_or(carry_out[c + 1]);
+            }
             let mut peer_start = vec![0u32; n];
-            let mut s = 0;
-            for i in 0..n {
-                if self.peer_breaks[i] {
-                    s = i;
+            peer_start.par_chunks_mut(CHUNK).enumerate().for_each(|(c, out)| {
+                let mut s = carry_in[c];
+                for (k, o) in out.iter_mut().enumerate() {
+                    let i = c * CHUNK + k;
+                    if breaks[i] {
+                        s = i;
+                    }
+                    *o = s as u32;
                 }
-                peer_start[i] = s as u32;
-            }
+            });
             let mut peer_end = vec![0u32; n];
-            let mut e = n;
-            for i in (0..n).rev() {
-                peer_end[i] = e as u32;
-                if peer_start[i] as usize == i {
-                    e = i;
+            peer_end.par_chunks_mut(CHUNK).enumerate().for_each(|(c, out)| {
+                let mut e = carry_out[c];
+                for k in (0..out.len()).rev() {
+                    out[k] = e as u32;
+                    let i = c * CHUNK + k;
+                    if peer_start[i] as usize == i {
+                        e = i;
+                    }
                 }
-            }
+            });
             (peer_start, peer_end)
         })
     }
@@ -143,7 +164,7 @@ impl Layout {
             return Ok(k.as_ref());
         }
         let k = match (self.okeys.len(), &self.perm) {
-            (1, Some(p)) => Some((take(&self.okeys[0], &UInt32Array::from(p.clone()), None)?, self.oopts[0])),
+            (1, Some(p)) => Some((par_take(&self.okeys[0], p)?, self.oopts[0])),
             (1, None) => Some((self.okeys[0].clone(), self.oopts[0])),
             _ => None,
         };
@@ -159,21 +180,26 @@ impl Layout {
         }
     }
 
-    fn inverse(&self) -> Option<&Vec<u32>> {
+    fn inverse(&self) -> Option<&ScalarBuffer<u32>> {
         let p = self.perm.as_ref()?;
         Some(self.inverse.get_or_init(|| {
             let mut inv = vec![0u32; p.len()];
-            for (i, &r) in p.iter().enumerate() {
-                inv[r as usize] = i as u32;
-            }
-            inv
+            let out = Out(inv.as_mut_ptr());
+            p.par_chunks(1 << 16).enumerate().for_each(|(c, rows)| {
+                let out = out;
+                for (k, &r) in rows.iter().enumerate() {
+                    // SAFETY: `p` is a permutation of 0..n: every row is written once
+                    unsafe { out.0.add(r as usize).write((c * (1 << 16) + k) as u32) };
+                }
+            });
+            ScalarBuffer::from(inv)
         }))
     }
 
     /// An input-order array in sorted order.
     pub fn sorted(&self, a: &ArrayRef) -> Result<ArrayRef> {
         Ok(match &self.perm {
-            Some(p) => take(a, &UInt32Array::from(p.clone()), None)?,
+            Some(p) => par_take(a, p)?,
             None => a.clone(),
         })
     }
@@ -181,7 +207,7 @@ impl Layout {
     /// A sorted-order array back in input order.
     pub fn unsort(&self, a: ArrayRef) -> Result<ArrayRef> {
         Ok(match self.inverse() {
-            Some(inv) => take(&a, &UInt32Array::from(inv.clone()), None)?,
+            Some(inv) => par_take(&a, inv)?,
             None => a,
         })
     }
@@ -264,3 +290,28 @@ impl Layout {
 
 /// A partition and the rows of it that one call fills.
 type Unit = (Range<usize>, Range<usize>);
+
+/// A pointer written from several threads at disjoint positions.
+#[derive(Clone, Copy)]
+struct Out(*mut u32);
+// SAFETY: every thread writes positions no other thread writes
+unsafe impl Send for Out {}
+unsafe impl Sync for Out {}
+
+/// `take(a, idx)` in parallel chunks (the indices are shared, not copied).
+fn par_take(a: &ArrayRef, idx: &ScalarBuffer<u32>) -> Result<ArrayRef> {
+    const CHUNK: usize = 1 << 18;
+    if idx.len() <= CHUNK {
+        return Ok(take(a, &UInt32Array::new(idx.clone(), None), None)?);
+    }
+    let parts = (0..idx.len().div_ceil(CHUNK))
+        .into_par_iter()
+        .map(|c| {
+            let s = c * CHUNK;
+            let part = UInt32Array::new(idx.slice(s, CHUNK.min(idx.len() - s)), None);
+            take(a, &part, None)
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let refs: Vec<&dyn Array> = parts.iter().map(|p| p.as_ref()).collect();
+    Ok(arrow::compute::concat(&refs)?)
+}
