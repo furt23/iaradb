@@ -6,9 +6,13 @@
 //! (dates, timestamps) are kept as i64, strings of at most 12 bytes as their
 //! 16-byte view, longer strings - and other types, in row format - as bytes
 //! in an arena of the partition: no allocation per row.
+//!
+//! A merge of some of the groups (one partition of a partitioned finalize)
+//! reads only their pairs, through an index of the pairs by group built on
+//! the first such merge.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::*;
 use arrow::compute::cast;
@@ -25,6 +29,9 @@ const PART_BITS: u32 = 6;
 const PARTS: usize = 1 << PART_BITS;
 /// Merges of fewer pairs than this run on the calling thread.
 const PARALLEL_MERGE: usize = 1 << 15;
+/// Merges of at most this share of a state's groups (1 / n) read the pairs
+/// of those groups only, through the [`ByGroup`] index.
+const PARTIAL_MERGE: usize = 4;
 
 #[derive(Default)]
 struct Part {
@@ -129,6 +136,61 @@ enum Kind {
 pub struct CountDistinctAcc {
     parts: Vec<Part>,
     kind: Kind,
+    /// groups of the table the state belongs to
+    groups: usize,
+    by_group: OnceLock<ByGroup>,
+}
+
+/// The pairs of each group: `(part, kind, entry)` from `starts[g]` to
+/// `starts[g + 1]`, kind 0 = int, 1 = short, 2 = long.
+struct ByGroup {
+    starts: Vec<u32>,
+    entries: Vec<(u16, u8, u128)>,
+}
+
+impl ByGroup {
+    fn new(parts: &[Part]) -> Self {
+        let groups = parts
+            .iter()
+            .flat_map(|p| {
+                let ints = p.ints.iter().map(|e| e.0);
+                let shorts = p.shorts.iter().map(|e| e.0);
+                ints.chain(shorts).chain(p.longs.iter().map(|e| e.1))
+            })
+            .max()
+            .map_or(0, |g| g as usize + 1);
+        let mut starts = vec![0u32; groups + 1];
+        let mut count = |g: u32| starts[g as usize + 1] += 1;
+        for p in parts {
+            p.ints.iter().for_each(|e| count(e.0));
+            p.shorts.iter().for_each(|e| count(e.0));
+            p.longs.iter().for_each(|e| count(e.1));
+        }
+        for g in 0..groups {
+            starts[g + 1] += starts[g];
+        }
+        let mut at = starts.clone();
+        let mut entries = vec![(0u16, 0u8, 0u128); starts[groups] as usize];
+        let mut put = |g: u32, e: (u16, u8, u128)| {
+            entries[at[g as usize] as usize] = e;
+            at[g as usize] += 1;
+        };
+        for (pi, p) in parts.iter().enumerate() {
+            let pi = pi as u16;
+            p.ints.iter().for_each(|&(g, v)| put(g, (pi, 0, v as u64 as u128)));
+            p.shorts.iter().for_each(|&(g, v)| put(g, (pi, 1, v)));
+            p.longs.iter().for_each(|&(h, g, i)| put(g, (pi, 2, (h as u128) << 32 | i as u128)));
+        }
+        Self { starts, entries }
+    }
+
+    fn of(&self, g: u32) -> &[(u16, u8, u128)] {
+        let g = g as usize;
+        if g + 1 >= self.starts.len() {
+            return &[];
+        }
+        &self.entries[self.starts[g] as usize..self.starts[g + 1] as usize]
+    }
 }
 
 impl CountDistinctAcc {
@@ -141,12 +203,37 @@ impl CountDistinctAcc {
         } else {
             Kind::Rows(RowConverter::new(vec![SortField::new(dt.clone())])?)
         };
-        Ok(Self { parts: (0..PARTS).map(|_| Part::default()).collect(), kind })
+        Ok(Self { parts: (0..PARTS).map(|_| Part::default()).collect(), kind, groups: 0, by_group: OnceLock::new() })
+    }
+
+    /// Add the pairs of `other`'s groups `src[i]` as groups `dst[i]`.
+    fn merge_groups(&mut self, other: &CountDistinctAcc, src: &[u32], dst: &[u32]) {
+        let index = other.by_group.get_or_init(|| ByGroup::new(&other.parts));
+        for (&s, &d) in src.iter().zip(dst) {
+            for &(p, kind, e) in index.of(s) {
+                match kind {
+                    0 => {
+                        let v = e as u64 as i64;
+                        let h = hash_u64(v as u64);
+                        self.parts[part_of(h)].insert_int(d, v, h);
+                    }
+                    1 => {
+                        let h = hash_u128(e);
+                        self.parts[part_of(h)].insert_short(d, e, h);
+                    }
+                    _ => {
+                        let (h, i) = ((e >> 32) as u64, e as u32);
+                        self.parts[part_of(h)].insert_long(d, other.parts[p as usize].bytes(i), h);
+                    }
+                }
+            }
+        }
     }
 }
 
 impl Accumulator for CountDistinctAcc {
-    fn update(&mut self, values: &[ArrayRef], gids: &[u32], _num_groups: usize) -> Result<()> {
+    fn update(&mut self, values: &[ArrayRef], gids: &[u32], num_groups: usize) -> Result<()> {
+        self.groups = self.groups.max(num_groups);
         let a = &values[0];
         let nulls = a.logical_nulls().filter(|n| n.null_count() > 0);
         let valid = |i: usize| nulls.as_ref().is_none_or(|n| n.is_valid(i));
@@ -195,8 +282,13 @@ impl Accumulator for CountDistinctAcc {
         Ok(())
     }
 
-    fn merge(&mut self, other: &dyn Accumulator, src: &[u32], dst: &[u32], _num_groups: usize) -> Result<()> {
+    fn merge(&mut self, other: &dyn Accumulator, src: &[u32], dst: &[u32], num_groups: usize) -> Result<()> {
         let o = downcast::<CountDistinctAcc>(other)?;
+        self.groups = self.groups.max(num_groups);
+        if src.len().saturating_mul(PARTIAL_MERGE) < o.groups {
+            self.merge_groups(o, src, dst);
+            return Ok(());
+        }
         let mut remap = vec![u32::MAX; src.iter().map(|&s| s as usize + 1).max().unwrap_or(0)];
         for (&s, &d) in src.iter().zip(dst) {
             remap[s as usize] = d;
@@ -258,6 +350,37 @@ mod tests {
         let y: ArrayRef = Arc::new(Float64Array::from(vec![0.0, -0.0, 1.5, 1.5]));
         f.update(&[y], &[0, 0, 0, 0], 1).unwrap();
         assert_eq!(counts(&mut f, 1)[0], 3, "row format keeps -0.0 apart like the previous version");
+    }
+
+    #[test]
+    fn partial_merges_read_their_groups() {
+        // 100 groups of ints, shorts and longs; merged a few groups at a time
+        let mut a = CountDistinctAcc::try_new(&DataType::Utf8View).unwrap();
+        let vals: Vec<String> = (0..3000).map(|i| if i % 2 == 0 { format!("{}", i % 700) } else { format!("a longer string number {}", i % 900) }).collect();
+        let gids: Vec<u32> = (0..3000).map(|i| (i % 100) as u32).collect();
+        let x: ArrayRef = Arc::new(StringViewArray::from_iter_values(vals.iter()));
+        a.update(&[x], &gids, 100).unwrap();
+        let mut whole = CountDistinctAcc::try_new(&DataType::Utf8View).unwrap();
+        let all: Vec<u32> = (0..100).collect();
+        whole.merge(&a, &all, &all, 100).unwrap();
+        let mut parts = CountDistinctAcc::try_new(&DataType::Utf8View).unwrap();
+        for chunk in all.chunks(7) {
+            parts.merge(&a, chunk, chunk, 100).unwrap();
+        }
+        assert!(a.by_group.get().is_some(), "partial merges use the index");
+        assert_eq!(counts(&mut parts, 100), counts(&mut whole, 100));
+
+        let mut b = CountDistinctAcc::try_new(&DataType::Int64).unwrap();
+        let y: ArrayRef = Arc::new(Int64Array::from_iter_values((0..5000).map(|i| i % 1234)));
+        let g: Vec<u32> = (0..5000).map(|i| (i % 50) as u32).collect();
+        b.update(&[y], &g, 50).unwrap();
+        let mut c = CountDistinctAcc::try_new(&DataType::Int64).unwrap();
+        // groups 3 and 9 into 0 and 1
+        c.merge(&b, &[3, 9], &[0, 1], 2).unwrap();
+        let mut d = CountDistinctAcc::try_new(&DataType::Int64).unwrap();
+        d.merge(&b, &(0..50).collect::<Vec<_>>(), &(0..50).collect::<Vec<_>>(), 50).unwrap();
+        let full = counts(&mut d, 50);
+        assert_eq!(counts(&mut c, 2), vec![full[3], full[9]]);
     }
 
     #[test]

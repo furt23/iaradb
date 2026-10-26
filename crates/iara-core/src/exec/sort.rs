@@ -419,6 +419,16 @@ impl RunMerge {
 }
 
 impl Sorted {
+    /// Rows and batches the result is read as (None: a merge of runs, whose
+    /// rows are only known once merged).
+    pub fn output(&self) -> Option<(u64, u64)> {
+        match self {
+            Sorted::Batches(b) => Some((crate::exec::metrics::rows_of(b), b.len() as u64)),
+            Sorted::Gather(g) => Some((g.idx.len() as u64, g.idx.len().div_ceil(MORSEL_ROWS) as u64)),
+            Sorted::Runs(_) => None,
+        }
+    }
+
     pub fn into_batches(self) -> Result<Vec<RecordBatch>> {
         match self {
             Sorted::Batches(b) => Ok(b),

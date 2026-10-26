@@ -44,27 +44,42 @@ struct Field {
     /// view arrays: the data buffers that `SOURCE`-tagged slots point into
     source: Option<Arc<[Buffer]>>,
     /// `source` positions by buffer address
-    index: HashMap<(usize, usize), u32>,
+    index: HashMap<(usize, usize), u32, foldhash::fast::FixedState>,
     /// the last buffer list seen and where each of its buffers is in `source`
     last: Option<(Arc<[Buffer]>, Vec<u32>)>,
 }
 
+/// The same buffers in the same order (`take` and `slice` of a view array
+/// share its buffers under a new list).
+fn same_buffers(a: &Arc<[Buffer]>, b: &Arc<[Buffer]>) -> bool {
+    Arc::ptr_eq(a, b) || (a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x.as_ptr() == y.as_ptr() && x.len() == y.len()))
+}
+
+/// A buffer of the last list not looked up in the source yet.
+const UNKNOWN: u32 = u32::MAX - 1;
+
 impl Field {
-    /// Where each of `bufs` is in the pinned source (`u32::MAX`: not there);
-    /// the first buffers seen become the source. The source stays alive, so
-    /// a buffer at the same address holds the same bytes.
-    fn source_map(&mut self, bufs: &Arc<[Buffer]>) -> &[u32] {
+    /// For the rows of an array with data buffers `bufs`: where each buffer
+    /// is in the pinned source, looked up on first use ([`UNKNOWN`] until
+    /// then, `u32::MAX`: not there; a chunk of rows points into few of many
+    /// buffers). The first buffers seen become the source; it stays alive,
+    /// so a buffer at the same address holds the same bytes.
+    fn source_map(&mut self, bufs: &Arc<[Buffer]>) -> Vec<u32> {
         if self.source.is_none() && !bufs.is_empty() {
             self.source = Some(bufs.clone());
             for (j, b) in bufs.iter().enumerate() {
                 self.index.entry((b.as_ptr() as usize, b.len())).or_insert(j as u32);
             }
         }
-        if !self.last.as_ref().is_some_and(|(l, _)| Arc::ptr_eq(l, bufs)) {
-            let map = bufs.iter().map(|b| self.index.get(&(b.as_ptr() as usize, b.len())).copied().unwrap_or(u32::MAX)).collect();
-            self.last = Some((bufs.clone(), map));
+        match self.last.take() {
+            Some((l, m)) if same_buffers(&l, bufs) => m,
+            _ => vec![UNKNOWN; bufs.len()],
         }
-        &self.last.as_ref().expect("map").1
+    }
+
+    /// Where buffer `b` is in the source.
+    fn locate(&self, b: &Buffer) -> u32 {
+        self.index.get(&(b.as_ptr() as usize, b.len())).copied().unwrap_or(u32::MAX)
     }
 }
 
@@ -146,7 +161,7 @@ impl DepRecords {
                     _ => 2,
                 };
                 at += words;
-                Field { dt: dt.clone(), kind, at: at - words, words, nulls: None, source: None, index: HashMap::new(), last: None }
+                Field { dt: dt.clone(), kind, at: at - words, words, nulls: None, source: None, index: HashMap::default(), last: None }
             })
             .collect();
         let width = if at <= 8 { at.max(1).next_power_of_two() } else { at.div_ceil(8) * 8 };
@@ -306,14 +321,8 @@ impl DepRecords {
                     ($a:expr) => {{
                         let a = $a;
                         let views = a.views();
-                        let map = std::mem::take(&mut self.fields[f].last);
-                        let map = match map {
-                            Some(m) if Arc::ptr_eq(&m.0, a.data_buffers()) => {
-                                self.fields[f].last = Some(m);
-                                self.fields[f].last.as_ref().expect("map").1.clone()
-                            }
-                            _ => self.fields[f].source_map(a.data_buffers()).to_vec(),
-                        };
+                        let bufs = a.data_buffers();
+                        let mut map = self.fields[f].source_map(bufs);
                         for (i, &g) in gids.iter().enumerate() {
                             if let Some(&a) = gids.get(i + far) {
                                 self.prefetch_slot(a, f);
@@ -326,7 +335,15 @@ impl DepRecords {
                                 continue;
                             }
                             // the view into the source, when its buffer is there
-                            let j = map.get((view >> 64) as u32 as usize).copied().unwrap_or(u32::MAX);
+                            let bi = (view >> 64) as u32 as usize;
+                            let j = match map.get(bi).copied() {
+                                Some(UNKNOWN) => {
+                                    let j = self.fields[f].locate(&bufs[bi]);
+                                    map[bi] = j;
+                                    j
+                                }
+                                j => j.unwrap_or(u32::MAX),
+                            };
                             let canon = (j != u32::MAX).then(|| (view & !(BUF << 64)) | ((j as u128) << 64) | SOURCE);
                             if g == next {
                                 let slot = match canon {
@@ -359,6 +376,7 @@ impl DepRecords {
                                 return false;
                             }
                         }
+                        self.fields[f].last = Some((bufs.clone(), map));
                         true
                     }};
                 }

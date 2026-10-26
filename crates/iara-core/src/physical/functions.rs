@@ -157,6 +157,29 @@ fn date_trunc_ts(dt: NaiveDateTime, unit: &str) -> Result<NaiveDateTime> {
     })
 }
 
+/// Characters of each string of a view array: the view's length when the
+/// bytes it may point into are ASCII, else counted (NULL rows get 0 under
+/// their NULL).
+fn view_char_lengths(v: &StringViewArray) -> Int64Array {
+    let ascii = v.data_buffers().iter().all(|b| b.as_slice().is_ascii());
+    let vals: Vec<i64> = v
+        .views()
+        .iter()
+        .enumerate()
+        .map(|(i, &view)| {
+            let len = view as u32 as usize;
+            // inline strings of up to 12 bytes sit in the view after the length
+            let inline = len <= 12;
+            if inline && (view >> 32).to_le_bytes()[..len].is_ascii() || !inline && ascii {
+                len as i64
+            } else {
+                v.value(i).chars().count() as i64
+            }
+        })
+        .collect();
+    Int64Array::new(vals.into(), v.nulls().cloned())
+}
+
 fn eval_arrays(func: ScalarFunc, args: &[ColumnarValue], m: usize, dt: &DataType) -> Result<ArrayRef> {
     use ScalarFunc::*;
     let arr = |i: usize| args[i].clone().into_array(m);
@@ -222,6 +245,9 @@ fn eval_arrays(func: ScalarFunc, args: &[ColumnarValue], m: usize, dt: &DataType
         Upper | Lower => case_map(arr(0)?.as_string::<i32>(), func == Upper),
         Length => {
             let a = arr(0)?;
+            if let Some(v) = a.as_string_view_opt() {
+                return Ok(Arc::new(view_char_lengths(v)));
+            }
             let s = a.as_string::<i32>();
             let out: Int64Array = if s.value_data().is_ascii() {
                 let offs = s.value_offsets();

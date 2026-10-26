@@ -24,27 +24,51 @@ use crate::exec::measured::{MeasuredOp, MeasuredSource, run_measured};
 use crate::exec::metrics::{NodeRef, PlanMetrics, rows_of};
 use crate::exec::ops::{FilterOp, ProjectOp};
 use crate::exec::pipeline::{CollectSink, MemorySource, NullSink, Operator, Pipeline, Sink, Source, UnionSource, run_pipeline};
-use crate::exec::sort::SortSink;
+use crate::exec::query::PlannedPipeline;
+use crate::exec::sort::{SortSink, Sorted};
 use crate::exec::unnest::UnnestOp;
 use crate::exec::stream::{Emitter, StreamSink};
 use crate::exec::window::{WindowSink, WindowSpec, Windowed};
 use crate::logical::JoinType;
+use crate::physical::analyze::{self, Analysis, analyzed_plan};
 use crate::physical::planner::PhysicalPlan;
 
 pub fn execute(plan: &PhysicalPlan) -> Result<Vec<RecordBatch>> {
-    Exec { metrics: None }.execute(plan, 0)
+    announce(|| planned_pipelines(plan, false));
+    recorded(plan, None, |metrics| Exec { metrics }.execute(plan, 0))
 }
 
-pub fn execute_sorted(plan: &PhysicalPlan) -> Result<crate::exec::sort::Sorted> {
-    let exec = Exec { metrics: None };
-    match plan {
-        PhysicalPlan::Sort { input, keys, fetch, schema, bound } => {
-            let pipe = exec.pipeline(input, 0)?;
-            let resident = pipe.resident();
-            exec.run(0, &pipe, &SortSink { keys: keys.clone(), fetch: *fetch, schema: schema.clone(), bound: bound.clone(), resident })
+pub fn execute_sorted(plan: &PhysicalPlan) -> Result<Sorted> {
+    recorded(plan, None, |metrics| {
+        let exec = Exec { metrics };
+        match plan {
+            PhysicalPlan::Sort { input, keys, fetch, schema, bound } => {
+                announce(|| {
+                    let mut planned = Planned(vec![]);
+                    planned.run(input, "SortSink");
+                    planned.0
+                });
+                let pipe = exec.pipeline(input, exec.ids(plan, 0)[0])?;
+                let resident = pipe.resident();
+                let mut sorted =
+                    exec.run(0, &pipe, &SortSink { keys: keys.clone(), fetch: *fetch, schema: schema.clone(), bound: bound.clone(), resident })?;
+                if let Some(node) = exec.node(0) {
+                    // the caller merges runs into batches right away; here the node can count them
+                    if matches!(sorted, Sorted::Runs(_)) {
+                        sorted = Sorted::Batches(exec.timed(0, || sorted.into_batches())?);
+                    }
+                    if let Some((rows, batches)) = sorted.output() {
+                        node.add_output(rows, batches);
+                    }
+                }
+                Ok(sorted)
+            }
+            _ => {
+                announce(|| planned_pipelines(plan, false));
+                Ok(Sorted::Batches(exec.execute(plan, 0)?))
+            }
         }
-        _ => Ok(crate::exec::sort::Sorted::Batches(exec.execute(plan, 0)?)),
-    }
+    })
 }
 
 /// Run a plan, handing its batches to `emit` in order as they are produced:
@@ -52,13 +76,132 @@ pub fn execute_sorted(plan: &PhysicalPlan) -> Result<crate::exec::sort::Sorted> 
 /// merged straight into `emit`. Only aggregations and window results are
 /// produced whole before being handed out.
 pub fn execute_stream(plan: &PhysicalPlan, emit: Emitter<'_>) -> Result<()> {
-    Exec { metrics: None }.stream(plan, 0, emit)
+    announce(|| planned_pipelines(plan, true));
+    recorded(plan, None, |metrics| Exec { metrics }.stream(plan, 0, emit))
 }
 
 /// [`execute_stream`], measuring every operator into `metrics` (one set of
 /// counters per node of `plan`).
 pub fn execute_analyzed(plan: &PhysicalPlan, metrics: &Arc<PlanMetrics>, emit: Emitter<'_>) -> Result<()> {
-    Exec { metrics: Some(metrics.clone()) }.stream(plan, 0, emit)
+    announce(|| planned_pipelines(plan, true));
+    recorded(plan, Some(metrics.clone()), |metrics| Exec { metrics }.stream(plan, 0, emit))
+}
+
+/// Tell the running query, if any, which pipelines it is about to start.
+fn announce(planned: impl FnOnce() -> Vec<PlannedPipeline>) {
+    if let Some(q) = crate::exec::query::current() {
+        q.plan(planned());
+    }
+}
+
+/// Run `run` with the metrics to measure with (`given`, or none). While plans
+/// are recorded, the query's outermost execution is measured and its plan
+/// kept, also when it fails or is cancelled; executions nested in another
+/// (subplans, late materialization) have node ids of their own and are not.
+fn recorded<T>(plan: &PhysicalPlan, given: Option<Arc<PlanMetrics>>, run: impl FnOnce(Option<Arc<PlanMetrics>>) -> Result<T>) -> Result<T> {
+    let Some(q) = crate::exec::query::current() else { return run(given) };
+    // counted even when not recording: recording can start while a query runs
+    let execution = q.enter_execution();
+    if !analyze::recording() || !execution.outer {
+        return run(given);
+    }
+    let metrics = given.unwrap_or_else(|| Arc::new(PlanMetrics::new(plan.node_count())));
+    let out = run(Some(metrics.clone()));
+    analyze::record(Analysis {
+        rows: metrics.snapshot(0).map_or(0, |m| m.rows_out),
+        plan: analyzed_plan(&plan.tree(), &metrics),
+        stats: q.stats(),
+    });
+    out
+}
+
+/// The pipelines a run of `plan` starts, in run order, assuming nothing
+/// spills: [`execute_stream`]'s with `stream`, [`execute`]'s without.
+pub fn planned_pipelines(plan: &PhysicalPlan, stream: bool) -> Vec<PlannedPipeline> {
+    let mut planned = Planned(vec![]);
+    if stream { planned.stream(plan) } else { planned.execute(plan) }
+    planned.0
+}
+
+/// A walk of a plan that lists its pipelines without building any. It mirrors
+/// [`Exec`] arm by arm, in the same order: a change to one is a change to both.
+struct Planned(Vec<PlannedPipeline>);
+
+impl Planned {
+    fn push(&mut self, (source, morsels): (String, Option<usize>), sink: &str) {
+        self.0.push(PlannedPipeline { source, sink: sink.into(), morsels });
+    }
+
+    /// A pipeline over `input` that ends in `sink`, after the ones it needs.
+    fn run(&mut self, input: &PhysicalPlan, sink: &str) {
+        let open = self.pipeline(input);
+        self.push(open, sink);
+    }
+
+    fn execute(&mut self, plan: &PhysicalPlan) {
+        match plan {
+            PhysicalPlan::Aggregate { input, .. } => self.run(input, "AggregateSink"),
+            PhysicalPlan::Sort { input, .. } => self.run(input, "SortSink"),
+            PhysicalPlan::Limit { input, .. } => self.run(input, "CollectSink"),
+            PhysicalPlan::Values { .. } => {}
+            PhysicalPlan::Window { input, .. } => self.run(input, "WindowSink"),
+            PhysicalPlan::RecursiveQuery { static_term, recursive_term, .. } => {
+                self.execute(static_term);
+                self.execute(recursive_term);
+            }
+            _ => self.run(plan, "CollectSink"),
+        }
+    }
+
+    fn stream(&mut self, plan: &PhysicalPlan) {
+        match plan {
+            PhysicalPlan::Sort { input, .. } => self.run(input, "SortSink"),
+            PhysicalPlan::Limit { input, .. } => self.run(input, "StreamSink"),
+            // the pipeline that streams spilled partitions is not listed
+            PhysicalPlan::Window { input, .. } => self.run(input, "WindowSink"),
+            PhysicalPlan::Aggregate { .. } | PhysicalPlan::Values { .. } | PhysicalPlan::RecursiveQuery { .. } => self.execute(plan),
+            _ => self.run(plan, "StreamSink"),
+        }
+    }
+
+    /// The pipelines `plan` needs first are listed; the source and morsels
+    /// of the one left open are returned.
+    fn pipeline(&mut self, plan: &PhysicalPlan) -> (String, Option<usize>) {
+        match plan {
+            PhysicalPlan::Source { source, .. } => (source.describe(), Some(source.num_morsels())),
+            PhysicalPlan::Filter { input, .. } | PhysicalPlan::Project { input, .. } | PhysicalPlan::Unnest { input, .. } => self.pipeline(input),
+            PhysicalPlan::HashJoin { probe, build, mark_build, .. } => {
+                self.run(build, "JoinBuildSink");
+                let open = self.pipeline(probe);
+                if !*mark_build {
+                    return open;
+                }
+                self.push(open, "NullSink");
+                ("SemiJoinMarked".into(), None)
+            }
+            PhysicalPlan::NestedLoopJoin { probe, build, .. } => {
+                self.execute(build);
+                self.pipeline(probe)
+            }
+            PhysicalPlan::Union { inputs, .. } => {
+                let open: Vec<_> = inputs.iter().map(|p| self.pipeline(p)).collect();
+                let sources: Vec<_> = open.iter().map(|(s, _)| s.as_str()).collect();
+                (format!("Union({})", sources.join(" | ")), open.iter().map(|(_, m)| *m).sum())
+            }
+            PhysicalPlan::Window { input, .. } => {
+                self.run(input, "WindowSink");
+                ("Materialized".into(), None)
+            }
+            PhysicalPlan::Aggregate { .. }
+            | PhysicalPlan::Sort { .. }
+            | PhysicalPlan::Limit { .. }
+            | PhysicalPlan::Values { .. }
+            | PhysicalPlan::RecursiveQuery { .. } => {
+                self.execute(plan);
+                ("Materialized".into(), None)
+            }
+        }
+    }
 }
 
 struct Exec {
@@ -68,6 +211,11 @@ struct Exec {
 impl Exec {
     fn node(&self, id: usize) -> Option<NodeRef> {
         self.metrics.as_ref().map(|m| NodeRef::new(m.clone(), id))
+    }
+
+    /// Node `id`, when nodes are numbered (a measured run).
+    fn node_id(&self, id: usize) -> Option<usize> {
+        self.metrics.is_some().then_some(id)
     }
 
     /// The ids of a node's children (not worked out when nothing is measured).
@@ -118,8 +266,9 @@ impl Exec {
     fn execute(&self, plan: &PhysicalPlan, id: usize) -> Result<Vec<RecordBatch>> {
         let ids = self.ids(plan, id);
         match plan {
-            PhysicalPlan::Aggregate { input, group_exprs, aggs, schema } => {
-                let sink = AggregateSink::new(group_exprs.clone(), aggs.clone(), schema.clone());
+            PhysicalPlan::Aggregate { input, group_exprs, aggs, schema, est_rows, fetch } => {
+                let mut sink = AggregateSink::new(group_exprs.clone(), aggs.clone(), schema.clone(), *est_rows);
+                sink.fetch = *fetch;
                 let pipe = match input.as_ref() {
                     PhysicalPlan::Filter { input: fin, predicate, projection, .. } if sink.can_defer_filter() => {
                         let f_ids = self.ids(input, ids[0]);
@@ -134,6 +283,7 @@ impl Exec {
                     }
                     _ => self.pipeline(input, ids[0])?,
                 };
+                sink.morsels = Some(pipe.source.num_morsels());
                 Ok(self.output(id, self.run(id, &pipe, &sink)?))
             }
             PhysicalPlan::Sort { input, keys, fetch, schema, bound } => {
@@ -277,7 +427,7 @@ impl Exec {
             }
             // spilled window partitions are evaluated one per morsel, in the next pipeline
             PhysicalPlan::Window { input, specs, schema } => match self.window(input, ids[0], id, specs, schema)? {
-                Windowed::Batches(b) => Pipeline::new(Arc::new(MemorySource::once(self.output(id, b), schema.clone(), "Materialized"))),
+                Windowed::Batches(b) => Pipeline::new(Arc::new(MemorySource::once(self.output(id, b), schema.clone(), "Materialized").of_node(self.node_id(id)))),
                 Windowed::Partitions(p) => Pipeline::new(self.source(id, Arc::new(p))),
             },
             PhysicalPlan::Aggregate { .. }
@@ -286,22 +436,32 @@ impl Exec {
             | PhysicalPlan::Values { .. }
             | PhysicalPlan::RecursiveQuery { .. } => {
                 let batches = self.execute(plan, id)?;
-                Pipeline::new(Arc::new(MemorySource::once(batches, plan.schema(), "Materialized")))
+                Pipeline::new(Arc::new(MemorySource::once(batches, plan.schema(), "Materialized").of_node(self.node_id(id))))
             }
         })
     }
 
     /// The probe side of a hash join, ready to run once its build side was.
     fn hash_join(&self, plan: &PhysicalPlan, id: usize, ids: &[usize]) -> Result<Pipeline> {
-        let PhysicalPlan::HashJoin { probe, build, probe_keys, build_keys, join_type, filter, joined_schema, schema, order, mark_build } = plan else {
+        let PhysicalPlan::HashJoin { probe, build, probe_keys, build_keys, join_type, filter, joined_schema, schema, order, mark_build, join_filter } = plan else {
             unreachable!("hash_join runs on hash joins")
         };
         let build_pipe = self.pipeline(build, ids[1])?;
         let track_matches = matches!(join_type, JoinType::Full | JoinType::Right) || *mark_build;
         let sink = JoinBuildSink::new(build_keys.clone(), build.schema(), track_matches);
         let table = match self.run(id, &build_pipe, &sink)? {
-            BuildSide::Table(t) => Arc::new(t),
+            BuildSide::Table(t) => {
+                let t = Arc::new(t);
+                // before the probe side runs: its scan tests the keys while decoding
+                if let Some(f) = join_filter {
+                    f.set(&t);
+                }
+                t
+            }
             BuildSide::Spilled(build_parts) => {
+                if let Some(f) = join_filter {
+                    f.clear();
+                }
                 // grace hash join: the probe side is partitioned like the build side
                 let probe_sink = PartitionSink::new(probe_keys.clone(), probe.schema(), build_parts.len());
                 let probe_parts = self.run(id, &self.pipeline(probe, ids[0])?, &probe_sink)?;

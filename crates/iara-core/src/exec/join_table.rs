@@ -8,7 +8,9 @@
 //! not in the table stop there; the others scan their bucket's few
 //! contiguous entries (rows with equal keys share a bucket). Probes run a
 //! batch at a time, prefetching the directory words and entries of the rows
-//! a few positions ahead so the cache misses overlap.
+//! a few positions ahead so the cache misses overlap. A scan of the probe
+//! table asks the same table which keys it holds ([`IntTable::contains`]),
+//! to drop the other rows before decoding their columns.
 //!
 //! Build: rows are radix-partitioned by the high bits of their hash (the
 //! bucket's high bits) and every partition - a contiguous range of buckets
@@ -17,7 +19,7 @@
 
 use rayon::prelude::*;
 
-use arrow::buffer::NullBuffer;
+use arrow::buffer::{BooleanBuffer, NullBuffer};
 
 use crate::hash::hash_u64;
 
@@ -27,6 +29,8 @@ const MAX_PARTITION_BITS: u32 = 11;
 /// Rows ahead of the probed one whose directory word is prefetched (their
 /// entries are prefetched at half this distance).
 const PREFETCH_AHEAD: usize = 16;
+/// Directories smaller than this (bytes) stay in the cache: no prefetching.
+const PREFETCH_MIN_BYTES: usize = 1 << 18;
 /// Build rows per histogram/scatter task.
 const CHUNK_ROWS: usize = 1 << 16;
 
@@ -178,6 +182,51 @@ impl IntTable {
         (start as usize, (d >> 16) as usize)
     }
 
+    /// Whether each of `keys` is in the table; null keys (`valid` false) are
+    /// not. A key whose bucket's bloom filter lacks its bit (nearly all keys
+    /// of a selective join) costs one directory word, the others read their
+    /// bucket's entries: the answer is exact, so a scan that drops the rows
+    /// answered false leaves few enough rows to skip the rest of their
+    /// columns (a bloom filter's false positives, scattered, would not).
+    pub fn contains(&self, keys: &[i64], valid: Option<&NullBuffer>) -> BooleanBuffer {
+        let n = keys.len();
+        let dir = self.dir.as_ptr();
+        let entries = self.entries.as_ptr();
+        // a table in cache needs no prefetching
+        let far = self.bytes() > PREFETCH_MIN_BYTES;
+        let half = PREFETCH_AHEAD / 2;
+        BooleanBuffer::collect_bool(n, |i| {
+            if far {
+                if i + PREFETCH_AHEAD < n {
+                    // SAFETY: buckets are < dir.len()
+                    prefetch(unsafe { dir.add((hash_u64(keys[i + PREFETCH_AHEAD] as u64) >> self.shift) as usize) });
+                }
+                if i + half < n {
+                    let h = hash_u64(keys[i + half] as u64);
+                    let b = (h >> self.shift) as usize;
+                    // SAFETY: as above; the entry range is in bounds
+                    let d = unsafe { *dir.add(b) };
+                    if d & tag(h) != 0 {
+                        prefetch(unsafe { entries.add(self.range(b, d).0) });
+                    }
+                }
+            }
+            if valid.is_some_and(|v| v.is_null(i)) {
+                return false;
+            }
+            let h = hash_u64(keys[i] as u64);
+            let b = (h >> self.shift) as usize;
+            // SAFETY: as above
+            let d = unsafe { *dir.add(b) };
+            if d & tag(h) == 0 {
+                return false;
+            }
+            let (start, end) = self.range(b, d);
+            let k = keys[i] as u64;
+            self.entries[start..end].iter().any(|e| e[0] == k)
+        })
+    }
+
     /// Call `on_match(probe_row, build_row)` for every build row whose key
     /// equals a valid probe key; returning false skips that probe row's
     /// remaining matches.
@@ -261,6 +310,26 @@ mod tests {
             false
         });
         assert_eq!(seen, vec![(1, 0)], "first build row first");
+    }
+
+    #[test]
+    fn contains_is_exact() {
+        // 100k keys: the table is big enough to be prefetched; duplicates among them
+        for n in [0usize, 7, 100_000] {
+            let build: Vec<i64> = (0..n as i64).map(|i| (i % 90_000) * 3 - 1000).collect();
+            let valid = NullBuffer::from((0..n).map(|i| i % 11 != 0).collect::<Vec<_>>());
+            let t = IntTable::build(&build, Some(&valid));
+            let probe: Vec<i64> = (-2000..320_000).collect();
+            let probe_valid = NullBuffer::from((0..probe.len()).map(|i| i % 13 != 0).collect::<Vec<_>>());
+            let got = t.contains(&probe, Some(&probe_valid));
+            assert_eq!(got.len(), probe.len());
+            let present: std::collections::HashSet<i64> = build.iter().enumerate().filter(|(i, _)| i % 11 != 0).map(|(_, &k)| k).collect();
+            for (i, k) in probe.iter().enumerate() {
+                assert_eq!(got.value(i), i % 13 != 0 && present.contains(k), "key {k} (n={n})");
+            }
+            let all = t.contains(&probe, None);
+            assert!(probe.iter().enumerate().all(|(i, k)| all.value(i) == present.contains(k)));
+        }
     }
 
     #[test]

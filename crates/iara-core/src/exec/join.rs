@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use arrow::array::*;
-use arrow::buffer::{NullBuffer, ScalarBuffer};
+use arrow::buffer::{BooleanBuffer, NullBuffer, ScalarBuffer};
 use arrow::compute::{cast, concat_batches, filter_record_batch, take};
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
@@ -38,7 +38,8 @@ const TABLE_ROW_BYTES: usize = 40;
 /// Buffers a view column of a build table may reference without compaction.
 const MAX_TABLE_BUFFERS: usize = 32;
 
-fn int_like(dt: &DataType) -> bool {
+/// Key types joined as one integer column.
+pub fn int_like(dt: &DataType) -> bool {
     matches!(
         dt,
         DataType::Int8
@@ -165,6 +166,19 @@ impl JoinHashTable {
             out.push(crate::exec::sort::take_batch(&self.batch, chunk)?);
         }
         Ok(out)
+    }
+
+    /// Whether each of `keys`, the probe column of a join on this one column,
+    /// is among the build keys. None when the table is not on a single
+    /// integer column, or `keys` is not one.
+    pub fn contains(&self, keys: &ArrayRef) -> Option<BooleanBuffer> {
+        let BuildKeys::Int { table, packing: None } = &self.keys else { return None };
+        if !int_like(keys.data_type()) {
+            return None;
+        }
+        let ints = to_i64(keys).ok()?;
+        let values = ints.as_primitive::<arrow::datatypes::Int64Type>().values();
+        Some(table.contains(values, combined_nulls(std::slice::from_ref(keys)).as_ref()))
     }
 
     fn normalize_probe(&self, cols: &[ArrayRef]) -> Result<KeyBatch> {

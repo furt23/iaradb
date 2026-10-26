@@ -6,7 +6,8 @@
 //!    pruning hints into scans)
 //! 3. limit pushdown (Sort + Limit => TopK, limits into scans)
 //! 4. projection pushdown (column pruning down to the file readers)
-//! 5. aggregate rewrites (`SUM(x + c)` as `SUM(x) + c * COUNT(x)`)
+//! 5. aggregate rewrites (`SUM(x + c)` as `SUM(x) + c * COUNT(x)`, `DISTINCT`
+//!    aggregates as a second grouping)
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -46,6 +47,7 @@ pub fn estimate_after_pushdown(plan: &LogicalPlan) -> f64 {
 }
 
 mod agg_pushdown;
+mod distinct_agg;
 mod sum_shift;
 
 fn rewrite_aggregates(plan: &LogicalPlan) -> Result<LogicalPlan> {
@@ -56,6 +58,9 @@ fn rewrite_aggregates(plan: &LogicalPlan) -> Result<LogicalPlan> {
 /// Rewrite an aggregation node (any other plan stays as it is).
 fn rewrite_aggregate(plan: &LogicalPlan) -> Result<LogicalPlan> {
     if let LogicalPlan::Aggregate(a) = plan {
+        if let Some(p) = distinct_agg::rewrite(a)? {
+            return Ok(p);
+        }
         if let Some(p) = agg_pushdown::rewrite(a)? {
             return Ok(p);
         }

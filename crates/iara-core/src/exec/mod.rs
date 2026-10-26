@@ -12,6 +12,7 @@ pub mod batch_mem;
 pub mod aggregate;
 pub mod groupby;
 pub mod join;
+pub mod join_filter;
 pub mod join_spill;
 pub mod join_table;
 pub mod measured;

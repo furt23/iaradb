@@ -12,6 +12,7 @@ use crate::session::{LazyFrame, SessionContext};
 
 /// Scan JSON files (a path, folder, glob or URL).
 pub fn read_json(ctx: &SessionContext, path: &str, options: JsonOptions, storage: &StorageOptions) -> Result<LazyFrame> {
+    ctx.check_files()?;
     ctx.scan_provider(path, Arc::new(JsonTable::try_new_with(path, options, storage)?))
 }
 

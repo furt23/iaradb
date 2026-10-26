@@ -4,10 +4,13 @@
 //! The measuring itself is in [`crate::exec::metrics`]; here a run is
 //! started, and the numbers are laid over the plan's nodes.
 
+use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use arrow::record_batch::RecordBatch;
+use parking_lot::Mutex;
 
 use crate::error::Result;
 use crate::exec::metrics::{OperatorMetrics, PlanMetrics};
@@ -50,6 +53,36 @@ pub struct Analysis {
     pub rows: u64,
     pub plan: AnalyzedNode,
     pub stats: QueryStats,
+}
+
+static RECORDING: AtomicBool = AtomicBool::new(false);
+
+/// How many recorded runs are kept; the oldest go first.
+const RECORDED_MAX: usize = 32;
+
+static RECORDED: Mutex<VecDeque<Analysis>> = Mutex::new(VecDeque::new());
+
+/// Keep (or stop keeping) the plan and metrics of every query that runs, for
+/// [`take_recorded`]. Off by default: a run is only measured while recording.
+pub fn record_plans(on: bool) {
+    RECORDING.store(on, Ordering::Relaxed);
+}
+
+pub(crate) fn recording() -> bool {
+    RECORDING.load(Ordering::Relaxed)
+}
+
+pub(crate) fn record(run: Analysis) {
+    let mut kept = RECORDED.lock();
+    if kept.len() == RECORDED_MAX {
+        kept.pop_front();
+    }
+    kept.push_back(run);
+}
+
+/// The runs recorded since the last call, oldest first.
+pub fn take_recorded() -> Vec<Analysis> {
+    RECORDED.lock().drain(..).collect()
 }
 
 /// Run a query as an observable, cancellable one with every operator

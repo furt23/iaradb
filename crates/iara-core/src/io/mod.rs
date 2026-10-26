@@ -100,9 +100,16 @@ pub trait TableProvider: Send + Sync + Debug {
     fn late_rows(&self) -> Option<Arc<dyn LateRows>> {
         None
     }
-    /// A source like [`Self::create_source`] that drops rows past a top k's
-    /// running bound while it reads (None: this kind of table cannot).
-    fn create_bounded_source(&self, _projection: Option<&[usize]>, _filters: &[Expr], _bound: &ScanBound) -> Option<Result<Arc<dyn Source>>> {
+    /// A source like [`Self::create_source`] that drops rows while it reads:
+    /// rows past a top k's running bound, and rows whose key is not among a
+    /// hash join's build keys (None: this kind of table cannot).
+    fn create_gated_source(
+        &self,
+        _projection: Option<&[usize]>,
+        _filters: &[Expr],
+        _bound: Option<&ScanBound>,
+        _joins: &[ScanJoinKeys],
+    ) -> Option<Result<Arc<dyn Source>>> {
         None
     }
 }
@@ -113,6 +120,14 @@ pub trait TableProvider: Send + Sync + Debug {
 pub struct ScanBound {
     pub column: usize,
     pub bound: Arc<crate::exec::topk_bound::TopKBound>,
+}
+
+/// The build keys of a hash join on a column of the scanned table (see
+/// [`crate::exec::join_filter`]).
+#[derive(Debug, Clone)]
+pub struct ScanJoinKeys {
+    pub column: usize,
+    pub keys: Arc<crate::exec::join_filter::JoinKeyFilter>,
 }
 
 /// A table whose rows can be read by position: a scan emitting each row's

@@ -58,6 +58,9 @@ const QUERIES: &[&str] = &[
     "select count(*) as n from t a where a.id in (select k from t)",
     "select count(*) as n from t a where not exists (select 1 from t b where b.k = a.id)",
     "select count(*) as n from t a join t b on a.id = b.id and a.x < b.few",
+    // the same joins with a Parquet probe side, which tests the build keys while it decodes (not once the build spilled)
+    "select count(*) as n, sum(a.x + b.x) as s from tp a join t b on a.id = b.id",
+    "select count(*) as n, sum(b.x) as s from tp a join t b on a.k = b.id where a.few < 40000",
 ];
 
 /// Full sorts (ties included: rows with equal keys keep their input order).
@@ -93,11 +96,18 @@ fn run(ctx: &SessionContext, q: &str) -> String {
 fn aggregations_joins_sorts_and_windows_spill_under_a_small_limit_and_match() {
     let (schema, batches) = facts(1_200_000);
     let ctx = SessionContext::new();
+    let dir = crate::support::dir::TempDir::new("spill-probe");
+    let path = dir.join("tp.parquet");
+    iara_core::io::parquet::write_parquet(&path, schema.clone(), &batches, "zstd", Some(200_000)).unwrap();
+    ctx.register_parquet("tp", &path).unwrap();
     ctx.register_batches("t", schema, batches).unwrap();
     let pool = memory::pool();
 
     pool.set_limit(usize::MAX);
     let expected: Vec<String> = QUERIES.iter().map(|q| run(&ctx, q)).collect();
+    // the Parquet probe side joins like the table in memory
+    assert_eq!(expected[expected.len() - 2], expected[4]);
+    assert_eq!(expected[expected.len() - 1], expected[5]);
     let sorted: Vec<RecordBatch> = SORTS.iter().map(|q| collect(&ctx, q)).collect();
     let windowed: Vec<RecordBatch> = WINDOWS.iter().map(|q| collect(&ctx, q)).collect();
 

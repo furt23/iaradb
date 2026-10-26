@@ -4,7 +4,9 @@
 //! then decodes a fraction of the data. A top k's running bound
 //! ([`TopKBound`]) is one more such filter, tested first: once it is tight,
 //! a `WHERE URL LIKE '%google%' ORDER BY EventTime LIMIT 10` decodes `URL`
-//! for the few rows early enough to make the top k.
+//! for the few rows early enough to make the top k. The same goes for a hash
+//! join's build keys ([`JoinKeyFilter`]): the scan of the probe table drops
+//! the rows whose key is not in the build table before decoding the rest.
 //!
 //! The filter above the scan still runs (this only drops rows early).
 //! Whether it pays depends on more than the share of rows kept: the filter
@@ -28,9 +30,10 @@ use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::{ArrowPredicate, ArrowPredicateFn, RowFilter};
 use parquet::schema::types::SchemaDescriptor;
 
+use crate::exec::join_filter::JoinKeyFilter;
 use crate::exec::topk_bound::TopKBound;
-use crate::expr::{Expr, conjunction};
-use crate::io::ScanBound;
+use crate::expr::{Expr, conjunction, split_conjunction};
+use crate::io::{ScanBound, ScanJoinKeys};
 use crate::physical::expr::{PhysExpr, create_physical_expr, null_as_false};
 use crate::schema::{Column, PlanSchema};
 
@@ -47,11 +50,16 @@ const RECENT: f64 = 0.2;
 const MARGIN: f64 = 0.85;
 
 pub struct LateFilter {
-    /// the scan's filters: the columns (of the table, = of the files) they
-    /// read, ascending, and the predicate over those columns
-    filters: Option<(Vec<usize>, Arc<PhysExpr>)>,
+    /// the scan's filters, one per conjunct, cheap ones first: the columns
+    /// (of the table, = of the files) each reads, ascending, and its
+    /// predicate over those columns. A row's later columns are decoded only
+    /// if it passed the earlier conjuncts (`p_size = 15 AND p_type LIKE
+    /// '%BRASS'` decodes `p_type` for the rows of size 15).
+    filters: Vec<(Vec<usize>, Arc<PhysExpr>)>,
     /// a top k's bound on a column of the table
     bound: Option<(usize, Arc<TopKBound>)>,
+    /// hash joins' build keys, on columns of the table
+    joins: Vec<(usize, Arc<JoinKeyFilter>)>,
     timing: Timing,
 }
 
@@ -130,31 +138,73 @@ fn table_columns(table_schema: &SchemaRef, e: &Expr) -> Option<Vec<usize>> {
 }
 
 impl LateFilter {
-    /// For a scan of `projection` with `filters` and a top k's `bound`: None
-    /// when they read every projected column (nothing to skip) or the
-    /// filters cannot be compiled.
-    pub fn new(table_schema: &SchemaRef, projection: &[usize], filters: &[Expr], bound: Option<&ScanBound>) -> Option<Self> {
-        let filters = match conjunction(filters.iter().cloned()) {
-            None => None,
-            Some(predicate) => {
-                // scan filters name the table's columns; drop their qualifiers
-                let predicate = predicate
-                    .transform_up(&mut |e| match e {
-                        Expr::Column(c) => Ok(Expr::Column(Column::from_name(c.name))),
-                        other => Ok(other),
-                    })
-                    .ok()?;
-                let columns = table_columns(table_schema, &predicate)?;
-                let schema = PlanSchema::from_arrow(None, &table_schema.project(&columns).ok()?);
-                Some((columns, Arc::new(create_physical_expr(&predicate, &schema).ok()?)))
-            }
+    /// For a scan of `projection` with `filters`, a top k's `bound` and hash
+    /// joins' `joins` keys: None when they read every projected column
+    /// (nothing to skip) or the filters cannot be compiled. The join keys it
+    /// uses are marked as attached.
+    pub fn new(
+        table_schema: &SchemaRef,
+        projection: &[usize],
+        filters: &[Expr],
+        bound: Option<&ScanBound>,
+        joins: &[ScanJoinKeys],
+    ) -> Option<Self> {
+        let compile = |predicate: Expr| -> Option<(Vec<usize>, Arc<PhysExpr>)> {
+            // scan filters name the table's columns; drop their qualifiers
+            let predicate = predicate
+                .transform_up(&mut |e| match e {
+                    Expr::Column(c) => Ok(Expr::Column(Column::from_name(c.name))),
+                    other => Ok(other),
+                })
+                .ok()?;
+            let columns = table_columns(table_schema, &predicate)?;
+            let schema = PlanSchema::from_arrow(None, &table_schema.project(&columns).ok()?);
+            Some((columns, Arc::new(create_physical_expr(&predicate, &schema).ok()?)))
         };
+        // the conjuncts on fixed-width columns together, first (a column is
+        // decoded once per stage), then those on other columns by column set;
+        // one that does not compile is left to the filter above the scan
+        let conjuncts = conjunction(filters.iter().cloned()).map(|p| split_conjunction(&p)).unwrap_or_default();
+        let fixed = |e: &Expr| {
+            table_columns(table_schema, e).is_some_and(|cols| cols.iter().all(|&c| table_schema.field(c).data_type().primitive_width().is_some()))
+        };
+        let mut stages: Vec<(Option<Vec<usize>>, Vec<Expr>)> = vec![(None, vec![])];
+        for c in conjuncts {
+            if fixed(&c) {
+                stages[0].1.push(c);
+                continue;
+            }
+            let cols = table_columns(table_schema, &c);
+            match stages.iter_mut().skip(1).find(|(k, _)| *k == cols) {
+                Some((_, es)) => es.push(c),
+                None => stages.push((cols, vec![c])),
+            }
+        }
+        let filters: Vec<(Vec<usize>, Arc<PhysExpr>)> =
+            stages.into_iter().filter_map(|(_, es)| conjunction(es.into_iter())).filter_map(|p| compile(p)).collect();
         let bound = bound.map(|b| (b.column, b.bound.clone()));
-        let read = |p: &usize| filters.as_ref().is_some_and(|(c, _)| c.contains(p)) || bound.as_ref().is_some_and(|(c, _)| c == p);
-        if filters.is_none() && bound.is_none() || projection.iter().all(read) {
+        let joins: Vec<_> = joins.iter().map(|j| (j.column, j.keys.clone())).collect();
+        let read = |p: &usize| {
+            filters.iter().any(|(c, _)| c.contains(p))
+                || bound.as_ref().is_some_and(|(c, _)| c == p)
+                || joins.iter().any(|(c, _)| c == p)
+        };
+        if filters.is_empty() && bound.is_none() && joins.is_empty() || projection.iter().all(read) {
             return None;
         }
-        Some(Self { filters, bound, timing: Timing::default() })
+        joins.iter().for_each(|(_, keys)| keys.attach());
+        Some(Self { filters, bound, joins, timing: Timing::default() })
+    }
+
+    /// The columns hash joins' keys are tested on.
+    pub fn join_columns(&self) -> Vec<&str> {
+        self.joins.iter().map(|(_, keys)| keys.column()).collect()
+    }
+
+    /// Whether there is nothing to test yet: no filters and no bound, and the
+    /// build side of each join is not done (its keys are tested once it is).
+    pub fn idle(&self) -> bool {
+        self.filters.is_empty() && self.bound.is_none() && !self.joins.iter().any(|(_, keys)| keys.is_set())
     }
 
     /// Whether to filter while decoding the next row group: a [`Mode`] to
@@ -176,22 +226,34 @@ impl LateFilter {
             let bound = bound.clone();
             let mask = ProjectionMask::roots(schema, [*column]);
             predicates.push(Box::new(ArrowPredicateFn::new(mask, move |batch: RecordBatch| -> Result<BooleanArray, ArrowError> {
-                Ok(bound.mask(batch.column(0)).unwrap_or_else(|| BooleanArray::from(vec![true; batch.num_rows()])))
+                Ok(bound.mask(batch.column(0)).unwrap_or_else(|| keep_all(&batch)))
             })));
         }
-        if let Some((columns, predicate)) = &self.filters {
+        // then the joins' keys: a hash probe per row, and most rows go
+        for (column, keys) in &self.joins {
+            let keys = keys.clone();
+            let mask = ProjectionMask::roots(schema, [*column]);
+            predicates.push(Box::new(ArrowPredicateFn::new(mask, move |batch: RecordBatch| -> Result<BooleanArray, ArrowError> {
+                Ok(keys.mask(batch.column(0)).unwrap_or_else(|| keep_all(&batch)))
+            })));
+        }
+        for (columns, predicate) in &self.filters {
             let mask = ProjectionMask::roots(schema, columns.iter().copied());
             let predicate = predicate.clone();
             predicates.push(Box::new(ArrowPredicateFn::new(mask, move |batch: RecordBatch| -> Result<BooleanArray, ArrowError> {
                 // an error here is left to the filter above the scan
                 Ok(match predicate.evaluate_array(&batch) {
                     Ok(a) if a.data_type() == &arrow::datatypes::DataType::Boolean => null_as_false(a.as_boolean()),
-                    _ => BooleanArray::from(vec![true; batch.num_rows()]),
+                    _ => keep_all(&batch),
                 })
             })));
         }
         RowFilter::new(predicates)
     }
+}
+
+fn keep_all(batch: &RecordBatch) -> BooleanArray {
+    BooleanArray::from(vec![true; batch.num_rows()])
 }
 
 /// How a row group is decoded: filtering early or not.

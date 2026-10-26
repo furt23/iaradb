@@ -90,6 +90,11 @@ impl NodeRef {
         node
     }
 
+    /// The node's number in the plan (pre-order).
+    pub fn id(&self) -> usize {
+        self.id
+    }
+
     fn counters(&self) -> &NodeCounters {
         &self.metrics.nodes[self.id]
     }

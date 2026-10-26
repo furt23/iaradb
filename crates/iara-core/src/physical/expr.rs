@@ -699,9 +699,16 @@ fn compile_function(func: ScalarFunc, args: &[Expr], schema: &PlanSchema) -> Res
             a[0] = cast_expr(a[0].clone(), &DataType::Float64)?;
             a[1] = cast_expr(a[1].clone(), &DataType::Float64)?;
         }
-        Upper | Lower | Length | Trim | LTrim | RTrim | Reverse => {
+        Upper | Lower | Trim | LTrim | RTrim | Reverse => {
             nargs(1, 1)?;
             a[0] = to_utf8(a[0].clone())?;
+        }
+        // read as it is: a view array's strings are not copied to be counted
+        Length => {
+            nargs(1, 1)?;
+            if a[0].data_type() != DataType::Utf8View {
+                a[0] = to_utf8(a[0].clone())?;
+            }
         }
         Substring => {
             nargs(2, 3)?;

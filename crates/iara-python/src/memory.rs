@@ -40,7 +40,11 @@ fn memory_usage(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
 unsafe extern "C" {
     /// mimalloc (the global allocator): give memory this thread freed back to the system
     fn mi_collect(force: bool);
+    fn mi_option_set(option: std::ffi::c_int, value: std::ffi::c_long);
 }
+
+/// `mi_option_purge_delay` (mimalloc 2 and 3)
+const MI_OPTION_PURGE_DELAY: std::ffi::c_int = 15;
 
 fn release_freed() {
     // SAFETY: mimalloc is linked in as the global allocator
@@ -48,6 +52,14 @@ fn release_freed() {
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // freed memory goes back five seconds after it is freed (or when the
+    // engine releases it after a query, see `memory::release_later`), not
+    // one second after: a query of a few seconds reuses its pages instead of
+    // faulting them in zeroed again
+    if std::env::var_os("MIMALLOC_PURGE_DELAY").is_none() {
+        // SAFETY: mimalloc is the global allocator; options may change at run time
+        unsafe { mi_option_set(MI_OPTION_PURGE_DELAY, 5_000) }
+    }
     memory::set_release(release_freed);
     m.add_function(wrap_pyfunction!(set_memory_limit, m)?)?;
     m.add_function(wrap_pyfunction!(memory_usage, m)?)?;

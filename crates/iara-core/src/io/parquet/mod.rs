@@ -295,14 +295,20 @@ impl TableProvider for ParquetTable {
         stats::aggregates(&self.files.all().ok()?, &self.file_schema, aggs)
     }
 
-    fn create_bounded_source(&self, projection: Option<&[usize]>, filters: &[Expr], bound: &crate::io::ScanBound) -> Option<Result<Arc<dyn Source>>> {
+    fn create_gated_source(
+        &self,
+        projection: Option<&[usize]>,
+        filters: &[Expr],
+        bound: Option<&crate::io::ScanBound>,
+        joins: &[crate::io::ScanJoinKeys],
+    ) -> Option<Result<Arc<dyn Source>>> {
         if self.partitions.is_some() || self.conform || !self.file_stats.is_empty() {
             return None;
         }
         let projection = projection.map_or_else(|| (0..self.schema.fields().len()).collect(), |p| p.to_vec());
         let source = || -> Result<Arc<dyn Source>> {
             let files = self.files.all()?;
-            let req = source::ScanRequest { files: &files, table_schema: &self.schema, projection, filters, fetch: None, conform: false, row_numbers: false, bound: Some(bound) };
+            let req = source::ScanRequest { files: &files, table_schema: &self.schema, projection, filters, fetch: None, conform: false, row_numbers: false, bound, joins };
             Ok(Arc::new(ParquetSource::try_new(req)?))
         };
         Some(source())
@@ -324,7 +330,7 @@ impl TableProvider for ParquetTable {
         let conform = self.conform;
         let Some(parts) = &self.partitions else {
             let files = if self.file_stats.is_empty() { self.files.all()? } else { self.files.select(&self.keep_by_stats(filters, None))? };
-            let req = source::ScanRequest { files: &files, table_schema: &self.schema, projection, filters, fetch, conform, row_numbers: false, bound: None };
+            let req = source::ScanRequest { files: &files, table_schema: &self.schema, projection, filters, fetch, conform, row_numbers: false, bound: None, joins: &[] };
             return Ok(Arc::new(ParquetSource::try_new(req)?));
         };
         // whole files are skipped by filters on partition columns (their footers are not even read)
@@ -334,7 +340,7 @@ impl TableProvider for ParquetTable {
         }
         let files = self.files.select(&keep)?;
         let (file_projection, layout) = split_projection(&projection, self.file_schema.fields().len());
-        let req = source::ScanRequest { files: &files, table_schema: &self.file_schema, projection: file_projection, filters, fetch, conform, row_numbers: false, bound: None };
+        let req = source::ScanRequest { files: &files, table_schema: &self.file_schema, projection: file_projection, filters, fetch, conform, row_numbers: false, bound: None, joins: &[] };
         Ok(Arc::new(PartitionedSource {
             inner: ParquetSource::try_new(req)?,
             partitions: parts.select(&keep)?,

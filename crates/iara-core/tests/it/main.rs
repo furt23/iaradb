@@ -4,6 +4,7 @@
 
 mod support;
 
+mod agg_limit;
 mod agg_pushdown;
 mod aggregates_p1;
 mod analyze;
@@ -13,12 +14,15 @@ mod delta_dml;
 mod delta_write;
 mod datasets;
 mod delta_read;
+mod distinct_agg;
 mod functions_p1;
+mod join_filter;
 mod join_residual;
 mod json_io;
 mod json_nested;
 mod lists;
 mod object_io;
+mod read_policy;
 mod remote_requests;
 mod safe_writes;
 mod schemas;

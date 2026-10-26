@@ -556,6 +556,7 @@ impl<'a> SqlPlanner<'a> {
             Some(TableEntry::Table(t)) => LogicalPlan::scan(&tname, Some(q), t, None, vec![], None),
             Some(TableEntry::View(p)) => Ok(LogicalPlan::subquery_alias(p, &q)),
             None if [".parquet", ".csv", "*", "/", "\\"].iter().any(|s| full.contains(s)) => {
+                self.ctx.check_files()?;
                 let provider = files::path_provider(&full)?;
                 let q = alias_name.unwrap_or_else(|| crate::io::location::stem(&full));
                 LogicalPlan::scan(&full, Some(q), provider, None, vec![], None)
@@ -582,6 +583,7 @@ impl<'a> SqlPlanner<'a> {
                 let alias_name = alias.as_ref().map(|a| ident(&a.name));
                 let mut plan = if let Some(args) = args {
                     let fname = parts.last().cloned().unwrap_or_default().to_ascii_lowercase();
+                    self.ctx.check_files()?;
                     let provider = files::table_function(&fname, &args.args)?;
                     let q = alias_name.clone().unwrap_or(fname);
                     LogicalPlan::scan(&q, Some(q.clone()), provider, None, vec![], None)?

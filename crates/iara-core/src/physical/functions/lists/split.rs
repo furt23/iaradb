@@ -74,7 +74,7 @@ pub fn regexp_split(s: &ArrayRef, args: &[ColumnarValue]) -> Result<ArrayRef> {
     let Some(pat) = const_str(args, 1)? else {
         return list_from_parts(Arc::new(StringArray::new_null(0)), vec![0; s.len() + 1], vec![false; s.len()]);
     };
-    let re = pattern::compile(&pat, &flags)?;
+    let re = pattern::compile_local(&pat, &flags)?;
     let s = s.as_string::<i32>();
     split_rows(s, s.len(), s.value_data().len(), |_, text, out| re.split(text).for_each(out))
 }

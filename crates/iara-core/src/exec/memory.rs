@@ -61,6 +61,17 @@ impl MemoryPool {
         self.limit.store(limit, Ordering::Relaxed);
     }
 
+    /// Whether the memory free now leaves the default limit whole (always,
+    /// under an explicit limit): then what the allocator keeps from earlier
+    /// queries need not go back to the system first.
+    pub fn fits_free_memory(&self) -> bool {
+        if !self.fitted.load(Ordering::Relaxed) {
+            return true;
+        }
+        let default = self.default_limit.load(Ordering::Relaxed);
+        available_memory().is_none_or(|free| self.used().saturating_add(free / 10 * 9) >= default)
+    }
+
     /// Forget the peak (for a new measurement).
     pub fn reset_peak(&self) {
         self.peak.store(self.used(), Ordering::Relaxed);
@@ -307,6 +318,35 @@ pub fn release_freed() {
         rayon::broadcast(|_| f());
         f();
     }
+}
+
+/// How long freed memory stays with the allocator after a query (see [`release_later`]).
+const RELEASE_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Bumped as queries start and end: a delayed release that sees it changed
+/// does nothing.
+static EPOCH: AtomicUsize = AtomicUsize::new(0);
+
+/// Give freed memory back once no query has run for [`RELEASE_DELAY`] and
+/// `idle` still holds. A query that follows sooner reuses the memory: pages
+/// given back and touched again are zeroed by the system on every fault,
+/// which cost repeated scans and aggregations 10-15%.
+pub fn release_later(idle: fn() -> bool) {
+    if RELEASE.get().is_none() {
+        return;
+    }
+    let epoch = EPOCH.fetch_add(1, Ordering::SeqCst) + 1;
+    std::thread::spawn(move || {
+        std::thread::sleep(RELEASE_DELAY);
+        if EPOCH.load(Ordering::SeqCst) == epoch && idle() {
+            release_freed();
+        }
+    });
+}
+
+/// A query starts: a pending delayed release is called off.
+pub fn cancel_release() {
+    EPOCH.fetch_add(1, Ordering::SeqCst);
 }
 
 /// The process-wide pool.
