@@ -197,6 +197,18 @@ They do not apply yet to notebooks, the SQL editor or the Data panel's previews:
 
 Ask needs `OPENAI_API_KEY` in Studio's environment; kernels never receive it. Table names and columns of the chosen tables are sent to OpenAI (requests are sent with `store: false`); the rows are not. A question waiting for your decision is kept in memory for 30 minutes and is lost if Studio restarts.
 
+## Iara (chat agent)
+
+Iara is a chat panel in notebooks and in the SQL editor. It answers questions about your data and writes or fixes cells and queries. It is not available in dashboards.
+
+- **Reading:** Iara reads on its own, with your grants. It uses the same tools as the [MCP server](#mcp-server) (`list_tables`, `describe_table`, `explain_sql`, `run_sql`, `list_files`, `read_file`), called in-process. It is not exposed through MCP.
+- **Changing:** every new or edited cell, every SQL edit and every run needs your approval. A proposal appears in the file as an inline diff with Keep and run, Keep and Reject. Nothing is written or saved until you keep it, and Undo after keeping reverts it. If the code changed since Iara read it, the proposal is refused; reject it and ask again.
+- **Steps:** an analyst reads the data, an author writes the change, a reviewer checks it before you see it, and an observer reports what happened after you decide (rejected, applied, ran with an error). A run that failed goes back to the author for a fix, a limited number of times. The Steps list under each answer shows what was done.
+- **Memories:** Iara saves things you tell it to remember. They are kept per user, listed under Memories in the panel menu, and can be added or deleted there.
+- **Conversations:** earlier conversations are kept and listed in the panel. The panel shows how many tokens the conversation has used.
+
+Iara needs `OPENAI_API_KEY` (model `gpt-6-luna`; requests use `store: false`). Your questions, the code it reads, table names and columns, and the rows of the queries it runs (at most 500) are sent to OpenAI. Kernels never receive the key. Conversations and memories are kept in Studio's data folder, per user.
+
 ## MCP server
 
 Studio serves the Model Context Protocol at `/api/mcp` (Streamable HTTP, JSON responses), so Claude Code, Cursor or another MCP client can read the catalog and query it. The tools only read:

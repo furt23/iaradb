@@ -1,17 +1,19 @@
 ---
 import Base from '../layouts/Base.astro';
 import Studio from '../components/Studio.astro';
+import Assistant from '../components/Assistant.astro';
 import LogoMark from '../components/LogoMark.astro';
 import { DOCS_URL, GITHUB_URL } from '../config';
 ---
 
 <Base
   title="Studio · Iara"
-  description="Iara Studio is a browser-based analytics workspace over local files and S3 buckets. Reactive marimo notebooks, visual Data Wrangler, catalog inspector, live profiles, and compute clusters."
+  description="Iara Studio is a browser-based analytics workspace over local files and S3 buckets. Reactive marimo notebooks, visual Data Wrangler, catalog inspector, live profiles, compute clusters, and Iara, an assistant that answers questions about your data."
 >
   <Studio />
+  <Assistant />
 
-  <section class="section section--alt closing">
+  <section class="section closing">
     <div class="container closing__inner" data-reveal>
       <LogoMark size={56} />
       <h2>Start your workspace in seconds.</h2>

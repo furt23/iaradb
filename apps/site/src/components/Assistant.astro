@@ -1,0 +1,144 @@
+---
+const points = [
+  {
+    title: 'Ask in your own words',
+    text: 'Type a question about your data, like “Which customers spent the most last month?”. Iara looks at your tables, finds the answer and explains what she found.',
+  },
+  {
+    title: 'You decide what changes',
+    text: 'When Iara wants to add a chart or fix a query, she shows the change first. Nothing is saved or run until you press Keep. You can reject it or undo it afterward.',
+  },
+  {
+    title: 'She remembers what you tell her',
+    text: 'Tell Iara how you like things done and she will remember next time. Her memories are only yours, and you can read or delete them at any time.',
+  },
+];
+---
+
+<section class="section section--alt" id="assistant">
+  <div class="container">
+    <header class="section-head" data-reveal>
+      <span class="eyebrow">Meet Iara</span>
+      <h2>An assistant that works with your data.</h2>
+      <p class="lede">
+        Open Iara next to a notebook or a query. Ask a question, or ask her to write the work for you. She can only
+        read what you are allowed to read.
+      </p>
+    </header>
+
+    <div class="assistant" data-reveal="scale">
+      <div class="chat" aria-label="Example conversation with Iara">
+        <p class="chat__you">Add a chart of sales by month.</p>
+        <p class="chat__iara">I added it below. The chart uses the orders table and groups the sales by month.</p>
+        <div class="proposal">
+          <span class="proposal__tag">Iara suggests a change</span>
+          <strong>New chart cell</strong>
+          <span class="muted small">Sales by month, from the orders table</span>
+          <div class="proposal__actions" aria-hidden="true">
+            <span class="proposal__btn proposal__btn--main">Keep and run</span>
+            <span class="proposal__btn">Keep</span>
+            <span class="proposal__btn">Reject</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid grid--3" data-reveal-stagger>
+        {points.map((p) => (
+          <article class="card">
+            <h3>{p.title}</h3>
+            <p class="muted small">{p.text}</p>
+          </article>
+        ))}
+      </div>
+    </div>
+
+    <p class="small muted note" data-reveal>
+      Iara runs on an AI service that whoever sets up Studio connects. To answer, her questions, the names of your
+      tables and columns, and the results she reads are sent to that service.
+    </p>
+  </div>
+</section>
+
+<style>
+  .assistant {
+    display: grid;
+    gap: 32px;
+  }
+
+  .chat {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    max-width: 560px;
+    padding: 24px;
+    background: var(--vellum);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow);
+  }
+
+  .chat p {
+    margin: 0;
+    padding: 10px 14px;
+    border-radius: var(--radius);
+    max-width: 90%;
+  }
+
+  .chat__you {
+    align-self: flex-end;
+    background: var(--cobalt);
+    color: var(--vellum);
+  }
+
+  .chat__iara {
+    align-self: flex-start;
+    background: var(--parchment-2);
+    border: 1px solid var(--rule);
+  }
+
+  .proposal {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 14px 16px;
+    border: 1px solid var(--rule-strong);
+    border-radius: var(--radius);
+  }
+
+  .proposal__tag {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--ink-2);
+  }
+
+  .proposal__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .proposal__btn {
+    padding: 4px 12px;
+    font-size: 0.82rem;
+    border: 1px solid var(--rule-strong);
+    border-radius: 999px;
+    color: var(--ink-2);
+  }
+
+  .proposal__btn--main {
+    background: var(--cobalt);
+    border-color: var(--cobalt);
+    color: var(--vellum);
+  }
+
+  .card h3 {
+    margin: 0 0 8px;
+  }
+
+  .note {
+    margin-top: 28px;
+    margin-bottom: 0;
+    max-width: 720px;
+  }
+</style>
