@@ -17,6 +17,8 @@ from iara.kernel.analyze import analyze_query
 from iara.kernel.assist.service import AssistService
 from iara.kernel.cell_runner import CellRunner, Emit
 from iara.kernel.history import History
+from iara.kernel.notebook import marimo_io
+from iara.kernel.notebook.model import Cell
 from iara.kernel.notebook_service import NotebookService, resolve_in
 from iara.kernel.params import bind_params
 from iara.kernel.runtime.interrupt import Interruptor
@@ -43,6 +45,13 @@ BACKGROUND = frozenset({"result.chart", "wrangle.profile"})
 MAX_READ = 4 << 20
 
 
+def render_cells(source: str, path: Path, cells: list[dict[str, Any]]) -> str:
+    """``source`` with its cells replaced by ``cells``, the rest (app options, header) kept; nothing runs."""
+    nb = marimo_io.parse(source, path)
+    nb.cells = [Cell.from_view(v) for v in cells]
+    return marimo_io.serialize(nb)
+
+
 class KernelSession:
     def __init__(self, root: str | Path | None = None) -> None:
         self.ws: Workspace = load(root)
@@ -57,6 +66,11 @@ class KernelSession:
         #: catalog changes made by statements, sent to the Studio after each run
         self.catalog_changes: list[dict[str, Any]] = []
         self.ws.on_catalog_change = self.catalog_changes.append
+        # the plans of the queries cells run, for the Studio (see ``cell_runner.queries_of``)
+        import iara as ia
+
+        if hasattr(ia, "record_plans"):
+            ia.record_plans(True)
 
     # -- workspace -----------------------------------------------------------
     def info(self) -> dict[str, Any]:
@@ -143,19 +157,23 @@ class KernelSession:
         from iara.kernel.runtime.progress import watch
 
         query = p["query"]
+        allow = p["allow"] if "allow" in p else None  # [] grants nothing, so test the key, not truthiness
         self.ws.refresh()
         try:
             with watch(lambda q: emit("progress", {"queries": q})), self.interruptor.interruptible():
-                output, _ = self.runner.query(self.ws, query, {}, "query", p.get("source", "sql editor"), bind_params(p))
+                output, _ = self.runner.query(
+                    self.ws, query, {}, "query", p.get("source", "sql editor"), bind_params(p), allow=allow
+                )
         finally:
             self.report_catalog(emit)
         return output
 
     def sql_explain(self, p: dict[str, Any] | str) -> dict[str, Any]:
-        """The plan of a query: a request (with ``params``) or the query text."""
+        """The plan of a query: a request (with ``params`` and ``allow``) or the query text."""
         req = {"query": p} if isinstance(p, str) else p
         params = bind_params(req)
-        lf = self.ws.sql(req["query"], params=params) if params else self.ws.sql(req["query"])
+        bound = {"allow": req["allow"]} if "allow" in req else {}  # [] grants nothing: test the key
+        lf = self.ws.sql(req["query"], params=params, **bound) if params else self.ws.sql(req["query"], **bound)
         return {"plan": lf.explain_tree(), "text": lf.explain()}
 
     def preview(self, name: str, limit: int) -> dict[str, Any]:
@@ -169,6 +187,8 @@ class KernelSession:
         with self.interruptor.interruptible():
             if what == "preview":
                 return wrangle.preview(self.ws, self.results, p["source"], p.get("steps", []))
+            if what == "sql":
+                return wrangle.sql(self.ws, self.results, p["source"], p.get("steps", []))
             return wrangle.profile(self.ws, self.results, p["source"], p.get("steps", []), p["column"])
 
     def handlers(self) -> dict[str, Handler]:
@@ -181,6 +201,10 @@ class KernelSession:
             "notebook.open": lambda p, e: nb.open(p["path"], p.get("source"), p.get("widgets")),
             "notebook.create": lambda p, e: nb.create(p["path"], bool(p.get("persist", True))),
             "notebook.view": lambda p, e: nb.view(),
+            # the cells of a source, parsed and never run (the Studio shows a notebook whose cluster is stopped)
+            "notebook.parse": lambda p, e: {"cells": [c.to_view() for c in marimo_io.parse(p["source"], resolve_in(self.ws.root, p["path"])).cells]},
+            "notebook.render": lambda p, e: {"source": render_cells(p["source"], resolve_in(self.ws.root, p["path"]), p["cells"])},
+            "notebook.template": lambda p, e: {"source": marimo_io.serialize(marimo_io.new_notebook(resolve_in(self.ws.root, p["path"])))},
             "notebook.rename": lambda p, e: nb.rename(p["path"]),
             "notebook.save": lambda p, e: nb.save(p.get("cells"), bool(p.get("persist", True))),
             "notebook.run": self.run_notebook,
@@ -207,4 +231,5 @@ class KernelSession:
             "history.list": lambda p, e: self.history.recent(int(p.get("limit", 200))),
             "wrangle.preview": lambda p, e: self.wrangle("preview", p),
             "wrangle.profile": lambda p, e: self.wrangle("profile", p),
+            "wrangle.sql": lambda p, e: self.wrangle("sql", p),
         }

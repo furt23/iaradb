@@ -2,6 +2,9 @@
 
 Tests wide tables (105 columns), high-cardinality group-bys, distinct counts,
 string operations (LIKE, regex), and multi-column aggregations.
+
+Q6, Q28 and Q29 name their aggregates: Daft names an unaliased aggregate after its
+input column, so two aggregates over the same column collide.
 """
 
 QUERIES: dict[int, str] = {
@@ -11,7 +14,7 @@ QUERIES: dict[int, str] = {
     3: "SELECT AVG(UserID) FROM hits",
     4: "SELECT COUNT(DISTINCT UserID) FROM hits",
     5: "SELECT COUNT(DISTINCT SearchPhrase) FROM hits",
-    6: "SELECT MIN(EventDate), MAX(EventDate) FROM hits",
+    6: "SELECT MIN(EventDate) AS min_date, MAX(EventDate) AS max_date FROM hits",
     7: "SELECT AdvEngineID, COUNT(*) FROM hits WHERE AdvEngineID <> 0 GROUP BY AdvEngineID ORDER BY COUNT(*) DESC",
     8: "SELECT RegionID, COUNT(DISTINCT UserID) AS u FROM hits GROUP BY RegionID ORDER BY u DESC LIMIT 10",
     9: "SELECT RegionID, SUM(AdvEngineID), COUNT(*) AS c, AVG(ResolutionWidth), COUNT(DISTINCT UserID) FROM hits GROUP BY RegionID ORDER BY c DESC LIMIT 10",
@@ -33,8 +36,8 @@ QUERIES: dict[int, str] = {
     25: "SELECT SearchPhrase FROM hits WHERE SearchPhrase <> '' ORDER BY SearchPhrase LIMIT 10",
     26: "SELECT SearchPhrase FROM hits WHERE SearchPhrase <> '' ORDER BY EventTime, SearchPhrase LIMIT 10",
     27: "SELECT CounterID, AVG(STRLEN(URL)) AS l, COUNT(*) AS c FROM hits WHERE URL <> '' GROUP BY CounterID HAVING COUNT(*) > 100000 ORDER BY l DESC LIMIT 25",
-    28: "SELECT REGEXP_REPLACE(Referer, '^https?://(?:www\\.)?([^/]+)/.*$', '\\1') AS k, AVG(STRLEN(Referer)) AS l, COUNT(*) AS c, MIN(Referer) FROM hits WHERE Referer <> '' GROUP BY k HAVING COUNT(*) > 100000 ORDER BY l DESC LIMIT 25",
-    29: "SELECT " + ", ".join(f"SUM(ResolutionWidth + {i})" for i in range(90)) + " FROM hits",
+    28: "SELECT REGEXP_REPLACE(Referer, '^https?://(?:www\\.)?([^/]+)/.*$', '\\1') AS k, AVG(STRLEN(Referer)) AS l, COUNT(*) AS c, MIN(Referer) AS r FROM hits WHERE Referer <> '' GROUP BY k HAVING COUNT(*) > 100000 ORDER BY l DESC LIMIT 25",
+    29: "SELECT " + ", ".join(f"SUM(ResolutionWidth + {i}) AS s{i}" for i in range(90)) + " FROM hits",
     30: "SELECT SearchEngineID, ClientIP, COUNT(*) AS c, SUM(IsRefresh), AVG(ResolutionWidth) FROM hits WHERE SearchPhrase <> '' GROUP BY SearchEngineID, ClientIP ORDER BY c DESC LIMIT 10",
     31: "SELECT WatchID, ClientIP, COUNT(*) AS c, SUM(IsRefresh), AVG(ResolutionWidth) FROM hits WHERE SearchPhrase <> '' GROUP BY WatchID, ClientIP ORDER BY c DESC LIMIT 10",
     32: "SELECT WatchID, ClientIP, COUNT(*) AS c, SUM(IsRefresh), AVG(ResolutionWidth) FROM hits GROUP BY WatchID, ClientIP ORDER BY c DESC LIMIT 10",

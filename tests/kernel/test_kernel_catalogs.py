@@ -63,7 +63,7 @@ def test_catalog_list_names_the_catalog_of_tables_outside_the_default_one(sessio
     tables = {t["name"]: t for t in call(session, "catalog.list")}
     assert list(tables) == ["sales", "archive.main.old", "archive.raw.events"]
     assert "catalog" not in tables["sales"]
-    assert tables["archive.main.old"] == {"name": "archive.main.old", "path": "data/sales.parquet", "format": "parquet", "catalog": "archive"}
+    assert tables["archive.main.old"] == {"name": "archive.main.old", "path": "data/sales.parquet", "format": "parquet", "catalog": "archive", "full": "archive.main.old"}
     assert tables["archive.raw.events"]["format"] == "csv" and tables["archive.raw.events"]["catalog"] == "archive"
 
 
@@ -72,7 +72,7 @@ def test_the_browser_takes_the_names_the_catalog_lists(session: KernelSession):
     assert info["name"] == "archive.main.old" and info["catalog"] == "archive" and info["num_rows"] == 1000 and info["files"] == 1
     assert {s["column"]: s["max"] for s in info["stats"]}["id"] == 999
     events = call(session, "catalog.table", {"name": "archive.raw.events"})
-    assert events["num_rows"] == 4 and [c["name"] for c in events["columns"]] == ["grp", "region"]
+    assert events["num_rows"] is None and [c["name"] for c in events["columns"]] == ["grp", "region"]  # a CSV is not counted
     assert "catalog" not in call(session, "catalog.table", {"name": "sales"})
 
     preview = call(session, "catalog.preview", {"name": "archive.raw.events", "limit": 2})

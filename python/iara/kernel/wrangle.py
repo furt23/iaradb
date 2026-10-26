@@ -7,6 +7,10 @@ produces the preview, the column quality bars and the column profiles, and
 it is also the exported code, so what the Studio shows is what the code
 does. Profiles and counts run over the whole result, not a sample.
 
+Steps that change the rows' shape (group by, join, pivot, unpivot) each
+start a new SELECT over the previous ones; a calculated column is a SQL
+expression, checked by a small scanner before it is used.
+
 The source is a catalog table (``{"table": name}``) or a stored result
 (``{"result_id": id}``, registered as ``source`` for the query).
 """
@@ -22,8 +26,10 @@ from iara.kernel.runtime.results import json_value
 PREVIEW_ROWS = 500
 #: most frequent values in a column profile
 TOP_VALUES = 10
-#: most values a one-hot encoding turns into columns
-MAX_ONE_HOT = 50
+#: most values a one-hot encoding or a pivot turns into columns
+MAX_VALUE_COLUMNS = 50
+#: longest expression of a calculated column
+MAX_EXPRESSION = 2000
 #: deepest a column's expression nests before a new stage starts (the SQL parser has a recursion limit)
 MAX_NESTING = 12
 #: most predicates in a stage's WHERE before a new stage starts
@@ -32,6 +38,11 @@ MAX_PREDICATES = 32
 _NUMERIC = re.compile(r"^(U?Int\d+|Float\d+|Decimal\d*\(.*\))$")
 _CASTS = {"int64": "BIGINT", "float64": "DOUBLE", "utf8": "VARCHAR", "bool": "BOOLEAN", "date": "DATE", "timestamp": "TIMESTAMP"}
 _COMPARE = {"equals": "=", "not_equals": "<>", "greater_than": ">", "greater_equal": ">=", "less_than": "<", "less_equal": "<="}
+_AGGS = ("count", "count_distinct", "sum", "avg", "min", "max", "median")
+_PIVOT_AGGS = ("sum", "count", "avg", "min", "max")
+#: the engine's function per date part (``dayofweek``: 0 = Sunday; ``week``: ISO)
+_DATE_PARTS = {"year": "year", "quarter": "quarter", "month": "month", "week": "week", "day": "day", "weekday": "dayofweek"}
+_DATE_UNITS = ("year", "quarter", "month", "week", "day")
 
 
 def ident(name: str) -> str:
@@ -50,10 +61,16 @@ def is_text(type_name: str) -> bool:
     return type_name in ("Utf8", "LargeUtf8", "Utf8View")
 
 
+def is_date(type_name: str) -> bool:
+    return type_name.startswith(("Date", "Timestamp"))
+
+
 def literal(value: Any, type_name: str) -> str:
     """A literal for a value compared with a column of ``type_name``."""
     if value is None:
         return "NULL"
+    if isinstance(value, bool):  # a flag found in the data (a one-hot or pivot value)
+        return "TRUE" if value else "FALSE"
     if is_numeric(type_name):
         try:
             float(value)
@@ -101,6 +118,13 @@ class Stage:
     def add(self, name: str, expr: str) -> None:
         self.cols = [e for e in self.cols if e[0] != name] + [[name, expr, None]]
 
+    def put(self, name: str, expr: str) -> None:
+        """A column with this expression: in place of the one of that name (as ``with_columns``), else last."""
+        if any(e[0] == name for e in self.cols):
+            self.set(name, expr)
+        else:
+            self.add(name, expr)
+
     def changed(self) -> bool:
         same = [(e[0], e[1]) for e in self.cols] == [(c, ident(c)) for c in self.inputs]
         return bool(self.where or self.distinct or self.qualify) or not same
@@ -131,7 +155,7 @@ class Stage:
 
 
 #: steps that change columns row by row (they fold into a stage after its filters)
-_ROWWISE = {"rename_column", "cast", "text_case", "text_trim", "text_replace", "split_column", "math_round", "drop_columns", "one_hot_encode"}
+_ROWWISE = {"rename_column", "cast", "text_case", "text_trim", "text_replace", "split_column", "math_round", "drop_columns", "one_hot_encode", "date_part", "date_trunc"}
 
 
 class Compiler:
@@ -182,6 +206,17 @@ class Compiler:
             self.stage = Stage(name, columns)
         return self.stage
 
+    def _cte(self, select: str) -> None:
+        """Start a stage over ``select`` (written over the flushed stage's relation), a new CTE.
+
+        The sort stays only if its column is still there."""
+        name = f"stage_{len(self.ctes) + 1}"
+        self.ctes.append((name, select))
+        columns = list(dict(self.ws.sql(self._with([]) + f"SELECT * FROM {name}", **self.tables).schema))
+        self.stage = Stage(name, columns)
+        if self.order and self.order[0] not in columns:
+            self.order = None
+
     def column(self, schema: dict[str, str], name: str) -> str:
         if name not in schema:
             raise ValueError(f"unknown column {name!r}")
@@ -194,7 +229,7 @@ class Compiler:
             self.applied.append(({**op, "values": values} if values is not None else op, schema))
 
     def _step(self, op: dict[str, Any], schema: dict[str, str]) -> list[Any] | None:
-        """Fold one step into the stage; a one-hot step returns the values it found."""
+        """Fold one step into the stage; one-hot and pivot steps return the values they found, a join its new columns' names."""
         kind = op["kind"]
         st = self.stage
         rowwise = kind in _ROWWISE or (kind == "fill_null" and op.get("strategy") == "constant")
@@ -290,9 +325,120 @@ class Compiler:
             if not is_numeric(t):
                 raise ValueError(f"round needs a numeric column; {op['column']} is {t}")
             st.set(op["column"], f"round({st.expr(op['column'])}, {int(op['decimals'])})")
+        elif kind == "date_part":
+            if op["part"] not in _DATE_PARTS:
+                raise ValueError(f"unknown date part {op['part']!r}")
+            fn = _DATE_PARTS[op["part"]]
+            self._date(schema, op, lambda c: f"{fn}({c})")
+        elif kind == "date_trunc":
+            if op["unit"] not in _DATE_UNITS:
+                raise ValueError(f"unknown date unit {op['unit']!r}")
+            self._date(schema, op, lambda c: f"date_trunc({text(op['unit'])}, {c})")
+        elif kind == "calculated":
+            _check_expression(op["expression"])
+            if not op["name"].strip():
+                raise ValueError("a calculated column needs a name")
+            # the expression names the current columns: it must read a relation that has them
+            self.flush().put(op["name"], f"({op['expression']})")
+            self.schema()  # the engine checks the rest here, so the error names this step
+        elif kind == "group_by":
+            self._group_by(schema, op)
+        elif kind == "join":
+            return self._join(schema, op)
+        elif kind == "pivot":
+            return self._pivot(schema, op)
+        elif kind == "unpivot":
+            self._unpivot(schema, op)
         else:
             raise ValueError(f"unknown step {kind!r}")
         return None
+
+    def _group_by(self, schema: dict[str, str], op: dict[str, Any]) -> None:
+        keys, aggs = op["keys"], op["aggs"]
+        if not keys and not aggs:
+            raise ValueError("group by needs a key or an aggregation")
+        for k in keys:
+            self.column(schema, k)
+        names = [*keys, *(a["as"] for a in aggs)]
+        if len(set(names)) < len(names) or not all(names):
+            raise ValueError("the result's column names must be different and not empty")
+        items = [ident(k) for k in keys]
+        for a in aggs:
+            fn, c = a["fn"], a.get("column")
+            if fn not in _AGGS:
+                raise ValueError(f"unknown aggregation {fn!r}")
+            if c is None:
+                if fn != "count":
+                    raise ValueError(f"{fn} needs a column")
+                call = "count(*)"
+            else:
+                t = self.column(schema, c)
+                if fn in ("sum", "avg", "median") and not is_numeric(t):
+                    raise ValueError(f"{fn} needs a numeric column; {c} is {t}")
+                call = f"count(DISTINCT {ident(c)})" if fn == "count_distinct" else f"{fn}({ident(c)})"
+            items.append(f"{call} AS {ident(a['as'])}")
+        rel = self.flush().relation
+        group = f"\nGROUP BY {', '.join(ident(k) for k in keys)}" if keys else ""
+        self._cte(_select(items, rel) + group)
+
+    def _join(self, schema: dict[str, str], op: dict[str, Any]) -> list[str]:
+        table, on = op["table"], op["on"]
+        if op["how"] not in ("inner", "left"):
+            raise ValueError(f"unknown join {op['how']!r}")
+        if not on:
+            raise ValueError("a join needs at least one pair of columns")
+        right = dict(self.ws.sql(f"SELECT * FROM {ident(table)}", **self.tables).schema)
+        for c in [p["right"] for p in on] + op["columns"]:
+            if c not in right:
+                raise ValueError(f"{table} has no column {c!r}")
+        lefts = [p["left"] for p in on]
+        for c in lefts:
+            self.column(schema, c)
+        if len(set(lefts)) < len(lefts):
+            raise ValueError("a column can be matched only once")
+        # a name the result already has takes the table's name as prefix
+        taken, outs = set(schema), []
+        for c in op["columns"]:
+            out = c if c not in taken else f"{table.split('.')[-1]}_{c}"
+            if out in taken:
+                raise ValueError(f"{out!r} is already a column")
+            taken.add(out)
+            outs.append(out)
+        rel = self.flush().relation
+        items = ["l.*", *(f"r.{ident(c)} AS {ident(o)}" for c, o in zip(op["columns"], outs))]
+        match = "\n  AND ".join(f"l.{ident(p['left'])} = r.{ident(p['right'])}" for p in on)
+        self._cte(_select(items, f"{rel} AS l\n{op['how'].upper()} JOIN {ident(table)} AS r\n  ON {match}"))
+        return outs
+
+    def _pivot(self, schema: dict[str, str], op: dict[str, Any]) -> list[Any]:
+        for c in [*op["index"], op["column"], op["value"]]:
+            self.column(schema, c)
+        agg = op["agg"]
+        if agg not in _PIVOT_AGGS:
+            raise ValueError(f"unknown aggregation {agg!r}")
+        if agg in ("sum", "avg") and not is_numeric(schema[op["value"]]):
+            raise ValueError(f"{agg} needs a numeric column; {op['value']} is {schema[op['value']]}")
+        values = self._values(op["column"], "pivot columns")
+        for v in values:
+            if str(v) in op["index"]:
+                raise ValueError(f"the value {str(v)!r} of {op['column']} is also an index column")
+        if not (op["index"] or values):
+            raise ValueError(f"{op['column']} has no values to pivot")
+        self._cte(pivot_sql(self.flush().relation, {**op, "values": values}, schema))
+        return values
+
+    def _unpivot(self, schema: dict[str, str], op: dict[str, Any]) -> None:
+        cols = op["columns"]
+        if not cols:
+            raise ValueError("unpivot needs at least one column")
+        if len(set(cols)) < len(cols):
+            raise ValueError("the columns to unpivot must be different")
+        for c in cols:
+            self.column(schema, c)
+        rest = [c for c in schema if c not in cols]
+        if op["name"] == op["value"] or op["name"] in rest or op["value"] in rest:
+            raise ValueError(f"{op['name']!r} and {op['value']!r} must differ from each other and from the other columns")
+        self._cte(unpivot_sql(self.flush().relation, op, schema))
 
     def _fill(self, schema: dict[str, str], op: dict[str, Any]) -> None:
         col, t = op["column"], self.column(schema, op["column"])
@@ -314,15 +460,20 @@ class Compiler:
             value = f"(SELECT {'avg' if s == 'mean' else 'median'}({c}) FROM {rel})"
         st.set(col, f"CAST(coalesce({c}, {value}) AS {_sql_type(t)})")
 
-    def _one_hot(self, schema: dict[str, str], col: str) -> list[Any]:
-        self.column(schema, col)
+    def _values(self, col: str, what: str) -> list[Any]:
+        """The distinct values of a column (not null, ordered) that become ``what`` columns."""
         got = self.ws.sql(
-            self.query(f"SELECT DISTINCT {ident(col)} AS v FROM {self.prev} WHERE {ident(col)} IS NOT NULL ORDER BY 1 LIMIT {MAX_ONE_HOT + 1}"),
+            self.query(f"SELECT DISTINCT {ident(col)} AS v FROM {self.prev} WHERE {ident(col)} IS NOT NULL ORDER BY 1 LIMIT {MAX_VALUE_COLUMNS + 1}"),
             **self.tables,
         ).collect().to_arrow()
         values = got.column("v").to_pylist()
-        if len(values) > MAX_ONE_HOT:
-            raise ValueError(f"{col} has more than {MAX_ONE_HOT} distinct values: too many for one-hot columns")
+        if len(values) > MAX_VALUE_COLUMNS:
+            raise ValueError(f"{col} has more than {MAX_VALUE_COLUMNS} distinct values: too many for {what}")
+        return values
+
+    def _one_hot(self, schema: dict[str, str], col: str) -> list[Any]:
+        self.column(schema, col)
+        values = self._values(col, "one-hot columns")
         # each flag repeats the column's expression: keep it a plain column
         st = self.stage if self.stage.plain(col) else self.flush()
         c = st.expr(col)
@@ -334,6 +485,12 @@ class Compiler:
         if not is_text(self.column(schema, col)):
             raise ValueError(f"{col} is not a text column")
         self.stage.set(col, wrap(self.stage.expr(col)))
+
+    def _date(self, schema: dict[str, str], op: dict[str, Any], wrap: Any) -> None:
+        col = op["column"]
+        if not is_date(self.column(schema, col)):
+            raise ValueError(f"{col} is not a date or timestamp column")
+        self.stage.put(op["as"], wrap(self.stage.expr(col)))
 
 
 def _depth(expr: str) -> int:
@@ -349,6 +506,67 @@ def _depth(expr: str) -> int:
         elif not quoted and ch == ")":
             depth -= 1
     return deepest
+
+
+def _check_expression(expr: str) -> None:
+    """A calculated column's expression: one value, with nothing that could end
+    it or reach other data (``;``, comments, subqueries). The text in quotes is data."""
+    if not expr.strip():
+        raise ValueError("the expression is empty")
+    if len(expr) > MAX_EXPRESSION:
+        raise ValueError(f"the expression is longer than {MAX_EXPRESSION} characters")
+    outside: list[str] = []
+    quote = ""
+    for ch in expr:
+        if quote:
+            quote = "" if ch == quote else quote  # a doubled quote closes and reopens
+        elif ch in "'\"":
+            quote = ch
+            outside.append(" ")
+        else:
+            outside.append(ch)
+    if quote:
+        raise ValueError("a quote is not closed")
+    code = "".join(outside)
+    if ";" in code:
+        raise ValueError("the expression cannot have ';'")
+    if "--" in code or "/*" in code:
+        raise ValueError("the expression cannot have comments")
+    if re.search(r"\bselect\b", code, re.IGNORECASE):
+        raise ValueError("the expression cannot have a subquery")
+    depth = 0
+    for ch in code:
+        depth += (ch == "(") - (ch == ")")
+        if depth < 0:
+            break
+    if depth:
+        raise ValueError("the parentheses do not match")
+
+
+def _select(items: list[str], source: str) -> str:
+    return "SELECT " + ",\n  ".join(items) + f"\nFROM {source}"
+
+
+def pivot_sql(rel: str, op: dict[str, Any], schema: dict[str, str]) -> str:
+    """The pivot of ``rel``: a column per value in ``op["values"]``, holding the aggregate of its rows."""
+    col, t, value = ident(op["column"]), schema[op["column"]], ident(op["value"])
+    index = [ident(c) for c in op["index"]]
+    cells = [f"{op['agg']}(CASE WHEN {col} = {literal(v, t)} THEN {value} END) AS {ident(str(v))}" for v in op["values"]]
+    return _select(index + cells, rel) + (f"\nGROUP BY {', '.join(index)}" if index else "")
+
+
+def unpivot_sql(rel: str, op: dict[str, Any], schema: dict[str, str]) -> str:
+    """The columns of ``op["columns"]`` as rows. Their values keep the type
+    they share, else become DOUBLE if all are numbers, else text."""
+    types = {schema[c] for c in op["columns"]}
+    cast = None if len(types) == 1 else "DOUBLE" if all(map(is_numeric, types)) else "VARCHAR"
+    rest = [ident(c) for c in schema if c not in op["columns"]]
+
+    def rows(c: str) -> str:
+        value = ident(c) if cast is None else f"CAST({ident(c)} AS {cast})"
+        return _select([*rest, f"{text(c)} AS {ident(op['name'])}", f"{value} AS {ident(op['value'])}"], rel)
+
+    return "\nUNION ALL\n".join(rows(c) for c in op["columns"])
 
 
 def _as_text(expr: str, type_name: str) -> str:
@@ -392,6 +610,12 @@ def compile_recipe(ws: Any, results: Any, source: dict[str, Any], steps: list[di
             except Exception as e:  # noqa: BLE001
                 raise ValueError(f"step '{s.get('label') or s['op'].get('kind')}': {e}") from e
     return comp, name
+
+
+def sql(ws: Any, results: Any, source: dict[str, Any], steps: list[dict[str, Any]]) -> dict[str, str]:
+    """Only the recipe's SQL (what ``preview`` returns as ``sql``), without running it."""
+    comp, _ = compile_recipe(ws, results, source, steps)
+    return {"sql": comp.final()}
 
 
 def code(comp: Compiler, name: str, from_result: bool) -> dict[str, str]:

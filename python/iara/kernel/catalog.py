@@ -25,7 +25,8 @@ def _relative(ws: Workspace, spec: TableSpec) -> str:
 
 def spec_view(ws: Workspace, spec: TableSpec) -> dict[str, Any]:
     """A table as the Studio lists it: ``catalog`` is left out for the default catalog."""
-    view = {"name": spec.name, "path": _relative(ws, spec), "format": spec.format}
+    full = ".".join(split_name(spec.name, ws.default_catalog)).lower()  # what a read grant names
+    view = {"name": spec.name, "path": _relative(ws, spec), "format": spec.format, "full": full}
     if spec.catalog is not None:
         view["catalog"] = spec.catalog
     return view
@@ -98,7 +99,8 @@ def table_info(ws: Workspace, name: str) -> dict[str, Any]:
     info["columns"] = [{"name": n, "type": t} for n, t in types.items()]
     # the full name reaches the table whatever catalog and schema the session is in
     full = ".".join(split_name(spec.name, ws.default_catalog))
-    info["num_rows"] = ws.sql(f"select count(*) from {full}").collect().item()
+    # parquet footers and the Delta log hold the count; another format would be read whole (the Studio answers this without a cluster)
+    info["num_rows"] = ws.sql(f"select count(*) from {full}").collect().item() if spec.format in ("parquet", "delta") else None
     info["files"] = len(listed)
     info["bytes"] = sum(size for _, size in listed)
     if spec.format == "delta":

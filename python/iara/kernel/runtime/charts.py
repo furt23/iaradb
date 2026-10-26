@@ -3,9 +3,10 @@ the browser only receives the points it draws.
 
 A spec is ``{kind, x, y, agg, group, bins}``:
 
-- ``kind``: ``bar`` | ``line`` | ``area`` | ``scatter`` | ``histogram``;
-- ``x``: the category / axis column (the measured column of a histogram);
-- ``y``: the value columns (none for ``agg = "count"`` and histograms);
+- ``kind``: ``bar`` | ``line`` | ``area`` | ``scatter`` | ``histogram`` | ``pie`` | ``counter``
+  (a pie aggregates like a bar; a counter is one number over the whole result);
+- ``x``: the category / axis column (the measured column of a histogram; none for a counter);
+- ``y``: the value columns (none for ``agg = "count"`` and histograms; a counter uses the first);
 - ``agg``: ``sum`` | ``avg`` | ``count`` | ``min`` | ``max`` | ``none``;
 - ``group``: an optional column that splits the values into series;
 - ``bins``: histogram buckets.
@@ -101,8 +102,8 @@ def _aggregated(table: pa.Table, kind: str, x: str, ys: list[str], agg: str, gro
     t = pa.table({**{k: grouped[k] for k in keys}, **{n: grouped[_result_name(a)] for n, a in zip(names, aggs)}})
     t = t.filter(pc.is_valid(t[x]))
     xtype = t.schema.field(x).type
-    by_value = kind == "bar" and not (_numeric(xtype) or pa.types.is_temporal(xtype))
-    limit = MAX_BARS if kind == "bar" else MAX_LINE
+    by_value = kind in ("bar", "pie") and not (_numeric(xtype) or pa.types.is_temporal(xtype))
+    limit = MAX_BARS if kind in ("bar", "pie") else MAX_LINE
     if by_value:
         # largest categories first (their total across groups)
         totals = t.group_by([x]).aggregate([(names[0], "sum")]).sort_by([(f"{names[0]}_sum", "descending")])
@@ -135,8 +136,31 @@ def _plain(table: pa.Table, names: list[str]) -> pa.Table:
     return pa.table(cols)
 
 
+def _counter(table: pa.Table, spec: dict[str, Any]) -> dict[str, Any]:
+    """One number over the whole result: the aggregate of the first value column, or the row count."""
+    agg = spec.get("agg") or "sum"
+    if agg == "none":
+        raise ValueError("a counter needs an aggregation")
+    if agg not in _AGG:
+        raise ValueError(f"unknown aggregation {agg!r}")
+    if agg == "count":
+        value = table.num_rows
+    else:
+        ys = spec.get("y") or []
+        if not ys:
+            raise ValueError("a counter needs a value column")
+        y = _column(table, ys[0])
+        if not _numeric(table.schema.field(y).type):
+            raise ValueError(f"a counter needs a numeric column; {y} is {table.schema.field(y).type}")
+        # no keys: a scalar aggregate, null over an empty table
+        value = table.group_by([]).aggregate([(y, _AGG[agg])]).column(0)[0].as_py()
+    return {"columns": ["value"], "rows": [[json_value(value)]], "truncated": False}
+
+
 def chart_data(table: pa.Table, spec: dict[str, Any]) -> dict[str, Any]:
     kind = spec.get("kind", "bar")
+    if kind == "counter":
+        return _counter(table, spec)
     x = _column(table, spec.get("x"))
     ys = [_column(table, y) for y in spec.get("y") or []]
     group = _column(table, spec["group"]) if spec.get("group") else None
@@ -150,6 +174,6 @@ def chart_data(table: pa.Table, spec: dict[str, Any]) -> dict[str, Any]:
         if not ys:
             raise ValueError("pick a value column")
         return _points(table, x, ys, group, ordered=kind in ("line", "area"))
-    if kind not in ("bar", "line", "area"):
+    if kind not in ("bar", "pie", "line", "area"):
         raise ValueError(f"unknown chart kind {kind!r}")
     return _aggregated(table, kind, x, ys, agg, group)
