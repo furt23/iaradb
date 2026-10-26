@@ -5,11 +5,21 @@ export interface PipelineStats {
   operators: string[];
   sink: string;
   morsels_total: number;
+  /** the plan nodes it ran for (pre-order ids into the plan), source first: only measured runs have them */
+  nodes?: number[];
   morsels_done: number;
   rows_in: number;
   rows_out: number;
   elapsed_ms: number;
   finished: boolean;
+}
+
+/** A pipeline the query will run but has not started. */
+export interface PlannedPipeline {
+  source: string;
+  sink: string;
+  /** null when only the run knows it (the output of an earlier pipeline) */
+  morsels: number | null;
 }
 
 export interface QueryProfile {
@@ -24,6 +34,8 @@ export interface QueryProfile {
   requests?: StorageRequests;
   /** in execution order */
   pipelines: PipelineStats[];
+  /** pipelines not started yet, in the order they will run (absent from older kernels) */
+  pending?: PlannedPipeline[];
 }
 
 /** Object-store requests of a run, by kind. */

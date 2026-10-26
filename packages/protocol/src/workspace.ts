@@ -8,6 +8,8 @@ export interface TableRef {
   format: "parquet" | "delta" | "csv" | "json";
   /** the catalog's name (absent: the default catalog) */
   catalog?: string;
+  /** `catalog.schema.table`, lowercased: the name grants use */
+  full: string;
 }
 
 export interface ColumnStats {
@@ -22,7 +24,8 @@ export interface ColumnStats {
 export interface TableInfo extends TableRef {
   /** `nullable: false` is NOT NULL, when the table's schema says */
   columns: { name: string; type: string; nullable?: boolean }[];
-  num_rows: number;
+  /** null: not counted (only parquet and Delta tables keep a count without being read whole) */
+  num_rows: number | null;
   files: number;
   bytes: number;
   /** Delta tables: the version, partition columns and COMMENT of the log */

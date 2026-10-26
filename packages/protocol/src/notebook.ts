@@ -1,6 +1,6 @@
 /** Notebooks, cells and their outputs (see iara.kernel.notebook). */
 
-import type { PlanNode, QueryProfile } from "./query";
+import type { PlanNode, QueryAnalysis, QueryProfile } from "./query";
 import type { ColumnInfo, ResultMeta } from "./results";
 
 export type CellKind = "python" | "sql" | "markdown";
@@ -24,9 +24,17 @@ export type CellStatus = "idle" | "queued" | "running" | "done" | "error" | "can
 export interface TableOutput {
   type: "table";
   result: ResultMeta;
+  /** in a `tables` output: the variable of the frame shown, when it has one */
+  name?: string;
   /** present for SQL cells and lazy frames */
   profile?: QueryProfile;
   plan?: PlanNode;
+}
+
+/** A cell that previewed several frames: one table each, in the order of the calls. */
+export interface TablesOutput {
+  type: "tables";
+  tables: TableOutput[];
 }
 
 export interface TextOutput {
@@ -58,7 +66,7 @@ export interface ErrorOutput {
   traceback: string;
 }
 
-export type CellOutput = TableOutput | TextOutput | HtmlOutput | ImageOutput | MarkdownOutput | ErrorOutput;
+export type CellOutput = TableOutput | TablesOutput | TextOutput | HtmlOutput | ImageOutput | MarkdownOutput | ErrorOutput;
 
 export interface StreamChunk {
   stream: "stdout" | "stderr";
@@ -83,6 +91,8 @@ export interface CellState {
   elapsed_ms: number | null;
   /** the frames the last run made */
   frames?: FrameInfo[];
+  /** the engine queries of the last run, oldest first, with their plans and metrics (at most 10) */
+  queries?: QueryAnalysis[];
 }
 
 export type WidgetKind = "text" | "number" | "dropdown" | "multiselect" | "checkbox" | "date";

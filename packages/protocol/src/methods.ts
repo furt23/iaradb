@@ -32,6 +32,9 @@ export interface KernelMethods {
   /** `persist: false`: the kernel does not write the file, the Studio writes `source` */
   "notebook.create": [{ path: string; persist?: boolean }, NotebookView & { source: string }];
   "notebook.view": [Empty, NotebookView];
+  "notebook.parse": [{ path: string; source: string }, { cells: Cell[] }];
+  "notebook.render": [{ path: string; source: string; cells: Cell[] }, { source: string }];
+  "notebook.template": [{ path: string }, { source: string }];
   /** the open notebook's file moved: same state under the new path */
   "notebook.rename": [{ path: string }, NotebookView];
   "notebook.save": [{ cells: Cell[]; persist?: boolean }, NotebookSource];
@@ -64,14 +67,17 @@ export interface KernelMethods {
   "catalog.preview": [{ name: string; limit?: number }, CellOutput];
   /** `entry`: the table's catalog section (the Studio appends it when `persist: false`) */
   "catalog.add": [{ name: string; path: string; format?: "parquet" | "csv" | "json"; persist?: boolean }, TableRef & { entry: string }];
-  "sql.run": [{ query: string; source?: string } & QueryParams, CellOutput];
-  "sql.explain": [{ query: string } & QueryParams, ExplainResult];
+  /** `allow`: the tables the query may read (`*`, `c`, `c.s` or `c.s.t`); absent: unchecked. Under it, files and writes are refused. */
+  "sql.run": [{ query: string; source?: string; allow?: string[] } & QueryParams, CellOutput];
+  "sql.explain": [{ query: string; allow?: string[] } & QueryParams, ExplainResult];
   /** runs the query with profiling; the rows are counted, not returned */
   "sql.analyze": [{ query: string } & QueryParams, QueryAnalysis];
   "history.list": [{ limit?: number }, HistoryEntry[]];
   /** a Data Wrangler recipe over a table or result: first rows, counts over all rows, its code */
   "wrangle.preview": [{ source: WrangleSource; steps: WrangleStep[] }, WranglePreview];
   "wrangle.profile": [{ source: WrangleSource; steps: WrangleStep[]; column: string }, WrangleProfile];
+  /** only the SQL a recipe compiles to (nothing runs): what a dashboard's recipe dataset queries */
+  "wrangle.sql": [{ source: WrangleSource; steps: WrangleStep[] }, { sql: string }];
   shutdown: [Empty, { ok: boolean }];
 }
 

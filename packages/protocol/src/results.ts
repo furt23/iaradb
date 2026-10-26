@@ -32,13 +32,13 @@ export interface ResultMeta {
   page: ResultPage;
 }
 
-export type ChartKind = "bar" | "line" | "area" | "scatter" | "histogram";
+export type ChartKind = "bar" | "line" | "area" | "scatter" | "histogram" | "pie" | "counter";
 export type ChartAgg = "sum" | "avg" | "count" | "min" | "max" | "none";
 
 /** What to draw from a result (saved with the cell or query that made it). */
 export interface ChartSpec {
   kind: ChartKind;
-  /** the category / axis column (the measured column of a histogram) */
+  /** the category / axis column (the measured column of a histogram; empty for a counter) */
   x: string;
   /** value columns (none when counting rows) */
   y: string[];
