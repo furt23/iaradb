@@ -2,14 +2,28 @@
 
 import Box from "@mui/material/Box";
 import { DataGrid, type GridColDef, type GridPaginationModel, type GridSortModel } from "@mui/x-data-grid";
-import type { CellValue, ResultMeta, ResultPage } from "@iara/protocol";
+import type { CellValue, ResultMeta, ResultPage, SortKey } from "@iara/protocol";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useNotify } from "@/features/shell/notify";
 import { isNumericType, typeLabel } from "@/lib/format";
 import { fetchResultPage } from "@/server/actions/kernels";
+import type { ActionResult } from "@/server/result";
+
+import { fetchArrowPage } from "./arrowPage";
 
 type Row = { id: number } & Record<string, CellValue>;
+
+/** A page over Arrow, else (a kernel too old to make one) the JSON page. */
+async function loadPage(kernelKey: string, id: string, offset: number, limit: number, sort: SortKey[]): Promise<ActionResult<ResultPage>> {
+  try {
+    const page = await fetchArrowPage(kernelKey, id, offset, limit, sort);
+    if (page !== "unsupported") return { ok: true, data: page };
+  } catch (e) {
+    return { ok: false, error: { type: "Error", message: (e as Error).message } };
+  }
+  return fetchResultPage(kernelKey, id, offset, limit, sort);
+}
 
 function toRows(page: ResultPage): Row[] {
   return page.rows.map((r, i) => {
@@ -57,7 +71,7 @@ export function ResultTable({ kernelKey, meta, height = 360 }: { kernelKey: stri
     let live = true;
     setLoading(true);
     const keys = sort.map((s) => ({ column: meta.columns[Number(s.field.slice(1))].name, descending: s.sort === "desc" }));
-    fetchResultPage(kernelKey, meta.id, pagination.page * pagination.pageSize, pagination.pageSize, keys).then((r) => {
+    loadPage(kernelKey, meta.id, pagination.page * pagination.pageSize, pagination.pageSize, keys).then((r) => {
       if (!live) return;
       setLoading(false);
       if (r.ok) setPage(r.data);

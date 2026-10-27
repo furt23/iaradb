@@ -122,6 +122,13 @@ class KernelSession:
         self.results.export(p["result_id"], str(path), fmt)
         return {"path": path.relative_to(self.ws.root).as_posix()}
 
+    def result_arrow(self, p: dict[str, Any]) -> dict[str, Any]:
+        """A page as an Arrow IPC stream: ``offset`` and ``limit`` are whole numbers, never negative."""
+        offset, limit = int(p.get("offset", 0)), int(p.get("limit", 100))
+        if offset < 0 or limit < 0:
+            raise ValueError("offset and limit cannot be negative")
+        return self.results.arrow_page(p["result_id"], offset, limit, p.get("sort"))
+
     def read_file(self, p: dict[str, Any]) -> dict[str, Any]:
         """A chunk of an exported file, base64 (downloads from remote kernels)."""
         rel = str(p["path"]).replace(os.sep, "/")
@@ -216,6 +223,7 @@ class KernelSession:
             "assist.lint": lambda p, e: self.assist.lint(p),
             "interrupt": lambda p, e: {"interrupted": self.interruptor.interrupt()},
             "result.page": lambda p, e: self.results.page(p["result_id"], p.get("offset", 0), p.get("limit", 100), p.get("sort")),
+            "result.arrow": lambda p, e: self.result_arrow(p),
             "result.chart": lambda p, e: chart_data(self.results.full_table(p["result_id"]), p["spec"]),
             "result.export": lambda p, e: self.export(p),
             "file.read": lambda p, e: self.read_file(p),
