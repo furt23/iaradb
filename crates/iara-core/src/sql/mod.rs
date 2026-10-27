@@ -695,7 +695,8 @@ impl<'a> SqlPlanner<'a> {
         Ok(plan)
     }
 
-    /// Join ordering for comma-separated FROM items: Greedy Operator Ordering.
+    /// Join ordering for comma-separated FROM items: [`join_order`] when the
+    /// predicates connect them, else Greedy Operator Ordering.
     /// Starting from one node per relation (estimated with its local
     /// filters), repeatedly join the pair of nodes connected by an equi-join
     /// predicate with the smallest estimated result. This builds bushy trees
