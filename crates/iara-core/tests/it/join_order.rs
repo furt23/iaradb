@@ -123,6 +123,18 @@ fn inner_joins_around_an_outer_join() {
 }
 
 #[test]
+fn a_selective_in_subquery_reaches_its_table_through_a_reordered_nested_join() {
+    let ctx = tables(4);
+    let sql = "select count(*) from (t2 join t0 on true join t1 on b0 = a1 and b1 = a2), t3                where b2 = a3 and a0 in (select a0 from t0 where v0 = 1)";
+    let plan = ctx.sql(sql).unwrap().explain(true).unwrap();
+    let optimized = plan.split("== Physical plan ==").next().unwrap();
+    let at = |s: &str| optimized.find(s).unwrap_or_else(|| panic!("no {s} in
+{plan}"));
+    assert!(at("Semi Join") > at("Scan: t2"), "the semi join stays above the joins:
+{plan}");
+}
+
+#[test]
 fn select_star_lists_the_from_order() {
     let ctx = tables(3);
     let columns = |sql: &str| {

@@ -896,7 +896,6 @@ impl<'a> SqlPlanner<'a> {
         if let Some(f) = conjunction(plain) {
             plan = LogicalPlan::filter(Arc::new(plan), f)?;
         }
-        let mut plan = in_order(plan, &combined)?;
         let mut filters = vec![];
         for c in with_subquery {
             let c = match c {
@@ -923,6 +922,8 @@ impl<'a> SqlPlanner<'a> {
         if let Some(f) = conjunction(filters) {
             plan = LogicalPlan::filter(Arc::new(plan), f)?;
         }
+        // after the subqueries, which look for their keys' sources through the joins
+        plan = in_order(plan, &combined)?;
 
         // SELECT list
         let from_schema = plan.schema().clone();
@@ -1741,6 +1742,7 @@ fn key_sources(plan: &LogicalPlan, cols: &[Column], out: &mut Vec<LogicalPlan>) 
     out.push(plan.clone());
     match plan {
         LogicalPlan::Filter(f) => key_sources(&f.input, cols, out),
+        LogicalPlan::Projection(p) if p.exprs.iter().all(|e| matches!(e, Expr::Column(_))) => key_sources(&p.input, cols, out),
         LogicalPlan::Join(j) => {
             let sides: &[&Arc<LogicalPlan>] = match j.join_type {
                 JoinType::Semi | JoinType::Anti => &[&j.left],
