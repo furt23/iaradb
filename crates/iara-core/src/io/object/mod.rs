@@ -7,11 +7,13 @@
 //! store is wrapped to count them (`counting`) and to coalesce ranges into
 //! big reads (`coalesce`), listings are remembered for a while
 //! (`list_cache`), and consecutive row groups are fetched together
-//! (`prefetch`). `config` lists the environment variables that tune it.
+//! (`prefetch`), and, when asked for, the ranges read are kept on disk
+//! (`disk_cache`). `config` lists the environment variables that tune it.
 
 pub mod coalesce;
 pub mod config;
 pub mod counting;
+pub mod disk_cache;
 pub mod error;
 pub mod file;
 pub mod list;

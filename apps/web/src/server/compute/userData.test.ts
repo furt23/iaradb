@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { PROXY_ARCH, proxyUrlOf, READY_MARKER, SPILL_DIR, userData, VENV } from "./userData";
+import { DISK_CACHE_DIR, diskCacheEnv, PROXY_ARCH, proxyUrlOf, READY_MARKER, SPILL_DIR, userData, VENV } from "./userData";
 
 const wheelUrl = "s3://iara-artifacts-123456789012-us-east-1/engine/0.1.0/iara-0.1.0-cp310-abi3-manylinux_2_28_x86_64.whl";
 
@@ -41,12 +41,22 @@ describe("cluster boot script", () => {
     expect(script).toContain("useradd --create-home --shell /bin/bash iara\n");
     expect(script).toContain("chmod 700 /home/iara");
     expect(script).toContain("sudo -u iara -H mkdir -p /home/iara/workspace /home/iara/.iara/spill");
+    // the disk cache folder belongs to the kernel user and nobody else can open it
+    expect(script).toContain("sudo -u iara -H mkdir -p -m 700 /home/iara/.iara/cache");
     expect(script).toContain(`sudo -u iara -H bash -lc "/home/iara/.local/bin/uv venv -q --python 3.12 /home/iara/venv && /home/iara/.local/bin/uv pip install -q --python /home/iara/venv/bin/python /tmp/iara-0.1.0-cp310-abi3-manylinux_2_28_x86_64.whl pyarrow marimo jedi"`);
     expect(script).toContain(`sudo -u iara -H bash -lc 'curl -LsSf https://astral.sh/uv/install.sh | sh'`);
     // no sudo for the kernel user, and nothing of the engine under the SSH user
     expect(script).not.toMatch(/\bwheel\b|sudoers|usermod|--groups/);
     expect(script).not.toContain("/home/ec2-user/venv");
     expect(script).not.toContain("sudo -u ec2-user");
+  });
+
+  it("gives kernels a disk cache of a quarter of the volume", () => {
+    expect(DISK_CACHE_DIR).toBe("/home/iara/.iara/cache");
+    expect(diskCacheEnv(40)).toEqual({ IARA_DISK_CACHE_DIR: "/home/iara/.iara/cache", IARA_DISK_CACHE_MB: "10240" });
+    expect(diskCacheEnv(100).IARA_DISK_CACHE_MB).toBe("25600");
+    expect(diskCacheEnv(2000).IARA_DISK_CACHE_MB).toBe("512000");
+    expect(diskCacheEnv(21).IARA_DISK_CACHE_MB).toBe("5376");
   });
 
   it("keeps the kernel user and the proxy user away from the instance metadata service", () => {

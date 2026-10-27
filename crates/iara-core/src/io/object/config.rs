@@ -1,6 +1,7 @@
 //! Tuning knobs of remote reads, from environment variables (read where
 //! used, so they can change between queries).
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 fn env_u64(name: &str, default: u64) -> u64 {
@@ -41,4 +42,16 @@ pub fn metadata_cache_bytes() -> u64 {
 /// of an object store prefix is reused.
 pub fn list_cache_ttl() -> Duration {
     Duration::from_secs(env_u64("IARA_LIST_CACHE_SECS", 30))
+}
+
+/// `IARA_DISK_CACHE_DIR` (unset or empty: off): the folder where ranges
+/// read from object stores are kept for later queries and other processes.
+/// Read once per process, by [`disk_cache::global`](super::disk_cache::global).
+pub fn disk_cache_dir() -> Option<PathBuf> {
+    std::env::var_os("IARA_DISK_CACHE_DIR").filter(|v| !v.is_empty()).map(PathBuf::from)
+}
+
+/// `IARA_DISK_CACHE_MB` (default 10240): the most the disk cache keeps.
+pub fn disk_cache_bytes() -> u64 {
+    env_u64("IARA_DISK_CACHE_MB", 10240) << 20
 }
