@@ -3,7 +3,7 @@
 //! output chunk (8192 rows) and the pairs span several chunks, so the chunked
 //! paths run. The memory pool is process-wide: tests take a lock.
 
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, Int64Array};
 use arrow::datatypes::{DataType, Field, Int64Type, Schema, SchemaRef};
@@ -15,11 +15,7 @@ use iara_core::expr::Operator as Op;
 use iara_core::logical::JoinType;
 use iara_core::physical::expr::PhysExpr;
 
-static LOCK: Mutex<()> = Mutex::new(());
-
-fn lock() -> MutexGuard<'static, ()> {
-    LOCK.lock().unwrap_or_else(|e| e.into_inner())
-}
+use crate::support::memory_lock as lock;
 
 /// Columns: k (join key), v (filter value), id. Some k and v are NULL.
 fn side(prefix: &str, rows: usize, keys: i64, seed: u64) -> (SchemaRef, RecordBatch) {

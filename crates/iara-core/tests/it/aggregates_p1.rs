@@ -122,6 +122,7 @@ fn run(ctx: &SessionContext, q: &str) -> String {
 
 #[test]
 fn aggregates_match_under_a_small_memory_limit() {
+    let _memory = crate::support::memory_lock();
     let (schema, batches) = facts(1_000_000);
     let ctx = SessionContext::new();
     ctx.register_batches("t", schema, batches).unwrap();

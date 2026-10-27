@@ -27,7 +27,7 @@ use crate::exec::join::concat_parallel;
 use crate::exec::join_spill::{PartitionedSpill, grace_partitions};
 use crate::exec::memory::{self, Reservation};
 use crate::exec::pipeline::{MORSEL_ROWS, Sink, rechunk};
-use crate::expr::{AggFunc, WindowFrame, WindowFunc};
+use crate::expr::{AggFunc, FrameUnits, WindowFrame, WindowFunc};
 use crate::physical::expr::{PhysExpr, PhysSortExpr};
 use layout::Layout;
 pub use partitioned::{WindowPartitions, spilled_windows};
@@ -102,6 +102,10 @@ fn valid_rows(values: Option<&ArrayRef>, filter: Option<&ArrayRef>, layout: &Lay
 
 fn evaluate_function(f: &WindowFunctionExpr, batch: &RecordBatch, layout: &Layout) -> Result<ArrayRef> {
     use WindowFunc::*;
+    // the parallel tasks below read the peer groups: built once here, not by each of them
+    if matches!(f.func, Rank | DenseRank | PercentRank | CumeDist) || (f.frame.units != FrameUnits::Rows && !f.frame.is_whole()) {
+        layout.peer_start();
+    }
     match f.func {
         RowNumber | Rank | DenseRank | PercentRank | CumeDist | Ntile => ranking::evaluate(f, layout),
         Lag | Lead => value::offset(f, batch, layout),
