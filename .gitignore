@@ -28,3 +28,4 @@ docker/*.env
 docker/cloudflared/*
 !docker/cloudflared/config.yml.example
 .data
+.claude/worktrees/
