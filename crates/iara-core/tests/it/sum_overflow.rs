@@ -71,6 +71,7 @@ fn overflow_is_an_error_and_fitting_totals_are_exact() {
 
 #[test]
 fn spilled_sums() {
+    let _memory = crate::support::memory_lock();
     // 200k groups of 5 rows: group 0 overflows, group 1 stays close to the limit
     let value = |i: i64| match i % 200_000 {
         0 => i64::MAX / 2 + 1,

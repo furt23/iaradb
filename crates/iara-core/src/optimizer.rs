@@ -936,6 +936,14 @@ fn try_push_semi(j: &Join) -> Result<Option<LogicalPlan>> {
             }
             Ok(Some(LogicalPlan::filter(Arc::new(pushed), f.predicate.clone())?))
         }
+        // columns only (the FROM list's order over reordered joins): the semi join keeps them
+        LogicalPlan::Projection(p) if p.exprs.iter().all(|e| matches!(e, Expr::Column(_))) => {
+            let pushed = rebuild_semi(p.input.clone())?;
+            if matches!(&pushed, LogicalPlan::Join(pj) if Arc::ptr_eq(&pj.left, &p.input)) {
+                return Ok(None);
+            }
+            Ok(Some(LogicalPlan::project(Arc::new(pushed), p.exprs.clone())?))
+        }
         _ => Ok(None),
     }
 }

@@ -115,47 +115,58 @@ impl Layout {
         &self.peers().1
     }
 
+    /// The lazy values are built outside their cells: building runs rayon
+    /// tasks, and a thread waiting for those can run a sibling task that reads
+    /// the same cell, which would then wait for the build it is nested in. Two
+    /// threads may build the same value; window functions that read the peer
+    /// groups build them before their parallel tasks (see `evaluate_function`).
     fn peers(&self) -> &(Vec<u32>, Vec<u32>) {
-        self.peers.get_or_init(|| {
-            // in parallel chunks: each chunk's first group starts where the
-            // last break before the chunk is (and its last ends at the first after)
-            const CHUNK: usize = 1 << 16;
-            let n = self.n;
-            let breaks = &self.peer_breaks;
-            let firsts: Vec<Option<usize>> = breaks.par_chunks(CHUNK).enumerate().map(|(c, b)| b.iter().position(|&x| x).map(|i| c * CHUNK + i)).collect();
-            let lasts: Vec<Option<usize>> = breaks.par_chunks(CHUNK).enumerate().map(|(c, b)| b.iter().rposition(|&x| x).map(|i| c * CHUNK + i)).collect();
-            let mut carry_in = vec![0usize; firsts.len()];
-            for c in 1..firsts.len() {
-                carry_in[c] = lasts[c - 1].unwrap_or(carry_in[c - 1]);
-            }
-            let mut carry_out = vec![n; firsts.len()];
-            for c in (0..firsts.len().saturating_sub(1)).rev() {
-                carry_out[c] = firsts[c + 1].unwrap_or(carry_out[c + 1]);
-            }
-            let mut peer_start = vec![0u32; n];
-            peer_start.par_chunks_mut(CHUNK).enumerate().for_each(|(c, out)| {
-                let mut s = carry_in[c];
-                for (k, o) in out.iter_mut().enumerate() {
-                    let i = c * CHUNK + k;
-                    if breaks[i] {
-                        s = i;
-                    }
-                    *o = s as u32;
+        if let Some(p) = self.peers.get() {
+            return p;
+        }
+        let built = self.build_peers();
+        self.peers.get_or_init(|| built)
+    }
+
+    fn build_peers(&self) -> (Vec<u32>, Vec<u32>) {
+        // in parallel chunks: each chunk's first group starts where the
+        // last break before the chunk is (and its last ends at the first after)
+        const CHUNK: usize = 1 << 16;
+        let n = self.n;
+        let breaks = &self.peer_breaks;
+        let firsts: Vec<Option<usize>> = breaks.par_chunks(CHUNK).enumerate().map(|(c, b)| b.iter().position(|&x| x).map(|i| c * CHUNK + i)).collect();
+        let lasts: Vec<Option<usize>> = breaks.par_chunks(CHUNK).enumerate().map(|(c, b)| b.iter().rposition(|&x| x).map(|i| c * CHUNK + i)).collect();
+        let mut carry_in = vec![0usize; firsts.len()];
+        for c in 1..firsts.len() {
+            carry_in[c] = lasts[c - 1].unwrap_or(carry_in[c - 1]);
+        }
+        let mut carry_out = vec![n; firsts.len()];
+        for c in (0..firsts.len().saturating_sub(1)).rev() {
+            carry_out[c] = firsts[c + 1].unwrap_or(carry_out[c + 1]);
+        }
+        let mut peer_start = vec![0u32; n];
+        peer_start.par_chunks_mut(CHUNK).enumerate().for_each(|(c, out)| {
+            let mut s = carry_in[c];
+            for (k, o) in out.iter_mut().enumerate() {
+                let i = c * CHUNK + k;
+                if breaks[i] {
+                    s = i;
                 }
-            });
-            let mut peer_end = vec![0u32; n];
-            peer_end.par_chunks_mut(CHUNK).enumerate().for_each(|(c, out)| {
-                let mut e = carry_out[c];
-                for k in (0..out.len()).rev() {
-                    out[k] = e as u32;
-                    let i = c * CHUNK + k;
-                    if peer_start[i] as usize == i {
-                        e = i;
-                    }
+                *o = s as u32;
+            }
+        });
+        let mut peer_end = vec![0u32; n];
+        peer_end.par_chunks_mut(CHUNK).enumerate().for_each(|(c, out)| {
+            let mut e = carry_out[c];
+            for k in (0..out.len()).rev() {
+                out[k] = e as u32;
+                let i = c * CHUNK + k;
+                if peer_start[i] as usize == i {
+                    e = i;
                 }
-            });
-            (peer_start, peer_end)
-        })
+            }
+        });
+        (peer_start, peer_end)
     }
 
     /// The order key in sorted order when there is exactly one.
@@ -180,20 +191,22 @@ impl Layout {
         }
     }
 
+    /// Built outside its cell, as [`Layout::peers`].
     fn inverse(&self) -> Option<&ScalarBuffer<u32>> {
         let p = self.perm.as_ref()?;
-        Some(self.inverse.get_or_init(|| {
-            let mut inv = vec![0u32; p.len()];
-            let out = Out(inv.as_mut_ptr());
-            p.par_chunks(1 << 16).enumerate().for_each(|(c, rows)| {
-                let out = out;
-                for (k, &r) in rows.iter().enumerate() {
-                    // SAFETY: `p` is a permutation of 0..n: every row is written once
-                    unsafe { out.0.add(r as usize).write((c * (1 << 16) + k) as u32) };
-                }
-            });
-            ScalarBuffer::from(inv)
-        }))
+        if let Some(inv) = self.inverse.get() {
+            return Some(inv);
+        }
+        let mut inv = vec![0u32; p.len()];
+        let out = Out(inv.as_mut_ptr());
+        p.par_chunks(1 << 16).enumerate().for_each(|(c, rows)| {
+            let out = out;
+            for (k, &r) in rows.iter().enumerate() {
+                // SAFETY: `p` is a permutation of 0..n: every row is written once
+                unsafe { out.0.add(r as usize).write((c * (1 << 16) + k) as u32) };
+            }
+        });
+        Some(self.inverse.get_or_init(|| ScalarBuffer::from(inv)))
     }
 
     /// An input-order array in sorted order.
@@ -314,4 +327,50 @@ fn par_take(a: &ArrayRef, idx: &ScalarBuffer<u32>) -> Result<ArrayRef> {
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let refs: Vec<&dyn Array> = parts.iter().map(|p| p.as_ref()).collect();
     Ok(arrow::compute::concat(&refs)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    /// `n` rows in input order, a peer group every 3 rows.
+    fn layout(n: usize) -> Layout {
+        Layout {
+            n,
+            perm: Some(ScalarBuffer::from((0..n as u32).rev().collect::<Vec<_>>())),
+            inverse: OnceLock::new(),
+            partitions: vec![0..n],
+            peer_breaks: (0..n).map(|i| i % 3 == 0).collect(),
+            peers: OnceLock::new(),
+            okeys: vec![],
+            oopts: vec![],
+            order_key: OnceLock::new(),
+        }
+    }
+
+    /// A thread building a lazy value waits for its rayon tasks; while one of
+    /// them runs elsewhere it steals other work, here a reader of the same
+    /// value queued behind a slow task. That reader must not wait for the
+    /// build it is nested in.
+    #[test]
+    fn lazy_values_read_from_parallel_tasks_do_not_deadlock() {
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let pool = rayon::ThreadPoolBuilder::new().num_threads(3).build().unwrap();
+            let slow = || std::thread::sleep(Duration::from_millis(20));
+            pool.install(|| {
+                for _ in 0..50 {
+                    let l = layout(1 << 21);
+                    // one thread builds, another queues a reader behind `slow`, the third steals
+                    rayon::join(|| l.peer_start()[7], || rayon::join(slow, || l.peer_start()[7]));
+                    let l = layout(1 << 21);
+                    rayon::join(|| l.inverse().map(|i| i[0]), || rayon::join(slow, || l.inverse().map(|i| i[0])));
+                }
+            });
+            let _ = done.send(());
+        });
+        finished.recv_timeout(Duration::from_secs(120)).expect("reading the lazy values from parallel tasks deadlocked");
+    }
 }

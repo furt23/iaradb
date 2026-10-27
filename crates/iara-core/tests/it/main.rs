@@ -17,6 +17,7 @@ mod delta_read;
 mod distinct_agg;
 mod functions_p1;
 mod join_filter;
+mod join_order;
 mod join_residual;
 mod json_io;
 mod json_nested;

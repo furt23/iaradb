@@ -637,10 +637,34 @@ impl<'a> SqlPlanner<'a> {
     }
 
     fn plan_table_with_joins(&mut self, twj: &sql::TableWithJoins, outer: Option<&PlanSchema>) -> Result<LogicalPlan> {
-        let mut plan = self.plan_table_factor(&twj.relation, outer)?;
+        let (rels, conds) = self.plan_from_item(twj, outer)?;
+        self.join_all(rels, conds)
+    }
+
+    /// `rels` joined in the best order and filtered by `conds` (without
+    /// subqueries), with their columns in order.
+    fn join_all(&mut self, rels: Vec<LogicalPlan>, conds: Vec<Expr>) -> Result<LogicalPlan> {
+        let combined = rels.iter().fold(PlanSchema::empty(), |acc, r| PlanSchema::join(&acc, r.schema()));
+        let (plan, conds) = self.order_joins(rels, conds)?;
+        let plan = match conjunction(conds) {
+            Some(f) => LogicalPlan::filter(Arc::new(plan), f)?,
+            None => plan,
+        };
+        in_order(plan, &combined)
+    }
+
+    /// A FROM item as relations to join and the conditions of the inner
+    /// joins between them, so that the caller orders them with the rest of
+    /// the FROM list. An outer, semi or anti join, a join with USING,
+    /// NATURAL or a subquery in ON, and an unnest take everything before
+    /// them, joined, as their left side.
+    fn plan_from_item(&mut self, twj: &sql::TableWithJoins, outer: Option<&PlanSchema>) -> Result<(Vec<LogicalPlan>, Vec<Expr>)> {
+        let mut rels = vec![self.plan_table_factor(&twj.relation, outer)?];
+        let mut conds: Vec<Expr> = vec![];
         for j in &twj.joins {
             if let Some(call) = lists::unnest_call(&j.relation) {
-                plan = self.lateral_unnest(Some(plan), &call, outer)?;
+                let left = self.join_all(std::mem::take(&mut rels), std::mem::take(&mut conds))?;
+                rels.push(self.lateral_unnest(Some(left), &call, outer)?);
                 continue;
             }
             let right = self.plan_table_factor(&j.relation, outer)?;
@@ -655,11 +679,22 @@ impl<'a> SqlPlanner<'a> {
                 J::Anti(c) | J::LeftAnti(c) => (JoinType::Anti, Some(c)),
                 other => return Err(WhError::NotSupported(format!("join type {other:?}"))),
             };
-            let ls = plan.schema().clone();
+            let ls = rels.iter().fold(PlanSchema::empty(), |acc, r| PlanSchema::join(&acc, r.schema()));
             let rs = right.schema().clone();
             let joined = PlanSchema::join(&ls, &rs);
+            let on_expr = match constraint {
+                Some(sql::JoinConstraint::On(e)) => Some(self.sql_expr(e, Scope::new(&joined, outer))?),
+                _ => None,
+            };
+            let plain = !matches!(constraint, Some(sql::JoinConstraint::Using(_) | sql::JoinConstraint::Natural));
+            if jt == JoinType::Inner && plain && !on_expr.as_ref().is_some_and(|e| e.contains_subquery()) {
+                rels.push(right);
+                conds.extend(on_expr.iter().flat_map(split_conjunction));
+                continue;
+            }
+            let plan = self.join_all(std::mem::take(&mut rels), std::mem::take(&mut conds))?;
             let (on, filter, merged) = match constraint {
-                Some(sql::JoinConstraint::On(e)) => (vec![], Some(self.sql_expr(e, Scope::new(&joined, outer))?), vec![]),
+                Some(sql::JoinConstraint::On(_)) => (vec![], on_expr, vec![]),
                 Some(sql::JoinConstraint::Using(names)) => {
                     let mut on = vec![];
                     let mut merged = vec![];
@@ -687,15 +722,17 @@ impl<'a> SqlPlanner<'a> {
                 _ => (vec![], None, vec![]),
             };
             let using: Vec<(Expr, Expr)> = on.clone();
-            plan = LogicalPlan::join(Arc::new(plan), Arc::new(right), on, filter, jt)?;
+            let mut plan = LogicalPlan::join(Arc::new(plan), Arc::new(right), on, filter, jt)?;
             if !merged.is_empty() && !matches!(jt, JoinType::Semi | JoinType::Anti) {
                 plan = merge_using_columns(plan, &merged, &using, jt)?;
             }
+            rels.push(plan);
         }
-        Ok(plan)
+        Ok((rels, conds))
     }
 
-    /// Join ordering for comma-separated FROM items: Greedy Operator Ordering.
+    /// Join ordering for comma-separated FROM items: [`join_order`] when the
+    /// predicates connect them, else Greedy Operator Ordering.
     /// Starting from one node per relation (estimated with its local
     /// filters), repeatedly join the pair of nodes connected by an equi-join
     /// predicate with the smallest estimated result. This builds bushy trees
@@ -827,26 +864,31 @@ impl<'a> SqlPlanner<'a> {
     }
 
     fn plan_select_inner(&mut self, s: &sql::Select, order_by: &[sql::OrderByExpr], outer: Option<&PlanSchema>) -> Result<LogicalPlan> {
-        // FROM
-        let mut rels: Vec<LogicalPlan> = vec![];
+        // FROM: per item, relations and the conditions of inner joins between them
+        let mut items: Vec<(Vec<LogicalPlan>, Vec<Expr>)> = vec![];
         for t in &s.from {
             match lists::unnest_call(&t.relation) {
                 // `FROM t, unnest(t.l)`: reads the item before it
                 Some(call) if t.joins.is_empty() => {
-                    let prior = rels.pop();
-                    rels.push(self.lateral_unnest(prior, &call, outer)?);
+                    let prior = match items.pop() {
+                        Some((rels, conds)) => Some(self.join_all(rels, conds)?),
+                        None => None,
+                    };
+                    items.push((vec![self.lateral_unnest(prior, &call, outer)?], vec![]));
                 }
-                _ => rels.push(self.plan_table_with_joins(t, outer)?),
+                _ => items.push(self.plan_from_item(t, outer)?),
             }
         }
+        let (rels, conds): (Vec<_>, Vec<_>) = items.into_iter().unzip();
+        let rels: Vec<LogicalPlan> = rels.concat();
         let combined = rels
             .iter()
             .fold(PlanSchema::empty(), |acc, r| PlanSchema::join(&acc, r.schema()));
         // WHERE
-        let conjuncts = match &s.selection {
-            Some(w) => split_conjunction(&no_windows(self.sql_expr(w, Scope::new(&combined, outer))?, "WHERE")?),
-            None => vec![],
-        };
+        let mut conjuncts = conds.concat();
+        if let Some(w) = &s.selection {
+            conjuncts.extend(split_conjunction(&no_windows(self.sql_expr(w, Scope::new(&combined, outer))?, "WHERE")?));
+        }
         let (mut plan, conjuncts) = self.order_joins(rels, conjuncts)?;
         // plain predicates first: subquery decorrelation then sees (and can
         // exploit) the already filtered outer relation
@@ -880,6 +922,8 @@ impl<'a> SqlPlanner<'a> {
         if let Some(f) = conjunction(filters) {
             plan = LogicalPlan::filter(Arc::new(plan), f)?;
         }
+        // after the subqueries, which look for their keys' sources through the joins
+        plan = in_order(plan, &combined)?;
 
         // SELECT list
         let from_schema = plan.schema().clone();
@@ -1698,6 +1742,7 @@ fn key_sources(plan: &LogicalPlan, cols: &[Column], out: &mut Vec<LogicalPlan>) 
     out.push(plan.clone());
     match plan {
         LogicalPlan::Filter(f) => key_sources(&f.input, cols, out),
+        LogicalPlan::Projection(p) if p.exprs.iter().all(|e| matches!(e, Expr::Column(_))) => key_sources(&p.input, cols, out),
         LogicalPlan::Join(j) => {
             let sides: &[&Arc<LogicalPlan>] = match j.join_type {
                 JoinType::Semi | JoinType::Anti => &[&j.left],
@@ -1922,6 +1967,18 @@ fn try_window_decorrelate(
 /// `JOIN ... USING (k)` / `NATURAL JOIN`: the key appears once, unqualified
 /// and first (the left value, the right one for right joins, either for full
 /// joins), followed by the other columns of both sides.
+/// `plan` with its columns in the order of `schema`, the same columns: the
+/// order of the FROM list, whatever order its relations were joined in.
+fn in_order(plan: LogicalPlan, schema: &PlanSchema) -> Result<LogicalPlan> {
+    let columns = schema.columns();
+    // duplicate names stay as joined: a projection can't tell them apart
+    let unique = columns.iter().all(|c| matches!(plan.schema().maybe_index_of(c), Ok(Some(_))));
+    if plan.schema().columns() == columns || !unique {
+        return Ok(plan);
+    }
+    LogicalPlan::project(Arc::new(plan), columns.into_iter().map(Expr::Column).collect())
+}
+
 fn merge_using_columns(plan: LogicalPlan, names: &[String], keys: &[(Expr, Expr)], jt: JoinType) -> Result<LogicalPlan> {
     let mut exprs = vec![];
     let mut key_cols = vec![];

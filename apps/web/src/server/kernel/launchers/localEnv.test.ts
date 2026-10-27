@@ -38,6 +38,8 @@ describe("local kernel environment", () => {
       CLOUDFLARE_API_TOKEN: "t",
       IARA_BUCKET: "b",
       IARA_STUDIO_DATA: "/data",
+      IARA_DISK_CACHE_DIR: "/cache",
+      IARA_DISK_CACHE_MB: "1024",
       GITHUB_TOKEN: "g",
       NODE_ENV: "production",
       SSH_AUTH_SOCK: "/s",

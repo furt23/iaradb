@@ -55,6 +55,8 @@ export interface KernelMethods {
   "assist.lint": [{ code: string; kind: CellKind; cell_id: string }, Diagnostic[] | null];
   interrupt: [Empty, { interrupted: boolean }];
   "result.page": [{ result_id: string; offset: number; limit: number; sort?: SortKey[] }, ResultPage];
+  /** the same rows as a base64 Arrow IPC stream (`rows`: how many it holds, fewer than asked past 16 MiB) */
+  "result.arrow": [{ result_id: string; offset: number; limit: number; sort?: SortKey[] }, { offset: number; total: number; rows: number; data: string }];
   "result.chart": [{ result_id: string; spec: ChartSpec }, ChartData];
   "result.export": [{ result_id: string; format: "csv" | "parquet"; name?: string }, { path: string }];
   /** a chunk of an exported file (base64): downloads from remote kernels */

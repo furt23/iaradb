@@ -96,3 +96,10 @@ pub fn structs_table(ctx: &SessionContext, name: &str, data: &[StructRow]) {
     let (schema, batch) = structs_batch(data);
     ctx.register_batches(name, schema, vec![batch]).unwrap();
 }
+
+/// The memory pool is process-wide: tests that change its limit, or check
+/// what is reserved, hold this so that one does not reset the limit under another.
+pub fn memory_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}

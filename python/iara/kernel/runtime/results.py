@@ -1,9 +1,10 @@
 """Tabular results kept by the kernel and served to clients page by page.
 
 Results stay in the kernel as Arrow tables (large ones memory-mapped from
-the spool, see ``spool.py``); clients only ever receive pages of JSON-safe
-rows (64-bit integers beyond JavaScript's safe range, decimals, dates and
-binary values are sent as strings).
+the spool, see ``spool.py``); clients receive each page as JSON-safe rows
+(64-bit integers beyond JavaScript's safe range, decimals, dates and binary
+values are sent as strings) or as an Arrow IPC stream of the same values
+(see ``arrow_page.py``).
 
 A preview keeps its first rows as the table (what the grid pages and sorts)
 and the frame it came from as the source: downloads, charts and the
@@ -180,18 +181,29 @@ class ResultStore:
         spooled = self.spool.collect(lf.stream())
         return spooled.table, spooled.path
 
-    def page(self, rid: str, offset: int = 0, limit: int = DEFAULT_PAGE, sort: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    def _slice(self, rid: str, offset: int, limit: int, sort: list[dict[str, Any]] | None) -> tuple[pa.Table, int, int]:
+        """The rows of a page (sorted first when ``sort`` is given), the clamped offset and the number of rows in the result."""
         table = self.get(rid)
         if sort:
             table = self._sorted(rid, sort)
         offset = max(0, min(offset, table.num_rows))
-        rows = table.slice(offset, max(0, min(limit, 10_000))).to_pylist()
-        names = table.column_names
+        return table.slice(offset, max(0, min(limit, 10_000))), offset, table.num_rows
+
+    def page(self, rid: str, offset: int = 0, limit: int = DEFAULT_PAGE, sort: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        rows, offset, total = self._slice(rid, offset, limit, sort)
+        names = rows.column_names
         return {
             "offset": offset,
-            "total": table.num_rows,
-            "rows": [[json_value(r[n]) for n in names] for r in rows],
+            "total": total,
+            "rows": [[json_value(r[n]) for n in names] for r in rows.to_pylist()],
         }
+
+    def arrow_page(self, rid: str, offset: int = 0, limit: int = DEFAULT_PAGE, sort: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        """The rows ``page`` returns, as an Arrow IPC stream (see ``arrow_page.py``)."""
+        from iara.kernel.runtime.arrow_page import ipc_page  # a module-level import would be circular
+
+        rows, offset, total = self._slice(rid, offset, limit, sort)
+        return ipc_page(rows, offset, total)
 
     def export(self, rid: str, path: str, fmt: str) -> str:
         """Write all the rows (not only the previewed ones); a lazy source is

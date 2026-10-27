@@ -8,7 +8,7 @@ import type { Activity } from "../compute/clusters";
 import { instanceType, memoryLimitBytes } from "../compute/instanceTypes";
 import { cloudRegion, clusters } from "../compute/service";
 import { LOCAL_CLUSTER } from "../compute/types";
-import { KERNEL_HOME, KERNEL_USER, SPILL_DIR, VENV, WORKSPACE_DIR } from "../compute/userData";
+import { diskCacheEnv, KERNEL_HOME, KERNEL_USER, SPILL_DIR, VENV, WORKSPACE_DIR } from "../compute/userData";
 import { config, type StudioConfig } from "../config";
 import { bucketKeys, bucketProxy, proxyEnv, teamBucketOf } from "../storage/bucketProxy";
 import { catalogRegion } from "../workspace/catalogStore";
@@ -94,6 +94,7 @@ export class KernelManager {
       ...c?.env,
       AWS_REGION: cloudRegion() ?? "us-east-1",
       IARA_SPILL_DIR: SPILL_DIR,
+      ...(c && diskCacheEnv(c.volumeGb)),
       ...(team ? proxyEnv(team.region) : {}),
     };
     if (type) env.IARA_MEMORY_LIMIT = String(memoryLimitBytes(type));

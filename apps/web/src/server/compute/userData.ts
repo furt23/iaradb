@@ -22,6 +22,8 @@ export const UV = `${KERNEL_HOME}/.local/bin/uv`;
 export const WORKSPACE_DIR = `${KERNEL_HOME}/workspace`;
 /** spill files and large results: on the EBS volume (AL2023's /tmp is in RAM) */
 export const SPILL_DIR = `${KERNEL_HOME}/.iara/spill`;
+/** the engine's disk cache of remote object reads (also on the EBS volume) */
+export const DISK_CACHE_DIR = `${KERNEL_HOME}/.iara/cache`;
 /** the boot script writes why it failed here (the Studio reads it) */
 export const FAILED_MARKER = "/var/lib/iara/failed";
 export const INIT_LOG = "/var/log/iara-init.log";
@@ -37,6 +39,11 @@ export const PROXY_LISTEN = "127.0.0.1:9000";
 export const PROXY_KEYS_FILE = "/etc/iara/r2.json";
 /** machines are x86_64, as the engine wheel is (python/iara/cloud/publish.py builds both) */
 export const PROXY_ARCH = "x86_64";
+
+/** The kernels' disk cache settings on a cluster with a `volumeGb` GB volume: a quarter of it. */
+export function diskCacheEnv(volumeGb: number): Record<string, string> {
+  return { IARA_DISK_CACHE_DIR: DISK_CACHE_DIR, IARA_DISK_CACHE_MB: String(Math.floor((volumeGb * 1024) / 4)) };
+}
 
 /** Where the proxy binary is, from the engine wheel's URL: the same folder of the artifacts bucket. */
 export function proxyUrlOf(wheelUrl: string): string {
@@ -224,6 +231,7 @@ aws s3 cp --only-show-errors --region ${region} '${wheel}' '${wheelFile}'
 chmod 644 '${wheelFile}'
 ${proxy(input.proxy, region)}sudo -u ${KERNEL_USER} -H bash -lc 'curl -LsSf https://astral.sh/uv/install.sh | sh'
 sudo -u ${KERNEL_USER} -H mkdir -p ${WORKSPACE_DIR} ${SPILL_DIR}
+sudo -u ${KERNEL_USER} -H mkdir -p -m 700 ${DISK_CACHE_DIR}
 sudo -u ${KERNEL_USER} -H bash -lc "${UV} venv -q --python 3.12 ${VENV} && ${UV} pip install -q --python ${VENV}/bin/python ${[wheelFile, ...PACKAGES, ...libraries].join(" ")}"
 mkdir -p /etc/iara && echo '${b64(envFile(input.env))}' | base64 -d > ${ENV_FILE}
 ${initStep(input.initScript)}touch ${READY_MARKER}

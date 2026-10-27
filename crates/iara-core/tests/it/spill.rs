@@ -94,6 +94,7 @@ fn run(ctx: &SessionContext, q: &str) -> String {
 
 #[test]
 fn aggregations_joins_sorts_and_windows_spill_under_a_small_limit_and_match() {
+    let _memory = crate::support::memory_lock();
     let (schema, batches) = facts(1_200_000);
     let ctx = SessionContext::new();
     let dir = crate::support::dir::TempDir::new("spill-probe");
