@@ -24,6 +24,7 @@ mod json_io;
 mod json_nested;
 mod lists;
 mod object_io;
+mod parquet_split;
 mod read_policy;
 mod remote_requests;
 mod safe_writes;

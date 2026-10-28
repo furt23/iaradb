@@ -11,6 +11,8 @@ use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::{ProjectionMask, RowNumber};
+use parquet::column::page::PageReader;
+use parquet::file::serialized_reader::SerializedPageReader;
 use rayon::prelude::*;
 
 use super::batch_size;
@@ -92,7 +94,8 @@ impl ParquetSource {
         let remote = req.files.iter().any(|f| f.blob.object().is_some());
         // remote row groups are fetched whole: splitting them would fetch twice
         if !remote && req.fetch.is_none() && !req.projection.is_empty() {
-            morsels = split_for_parallelism(morsels);
+            let parts = if req.conform { usize::MAX } else { max_parts(req.files, morsels.first(), &req.projection) };
+            morsels = split_for_parallelism(morsels, parts);
         }
         // a LIMIT reads the first row groups that hold enough rows, not one per worker
         if let (true, Some(rows)) = (remote, req.fetch) {
@@ -259,17 +262,48 @@ fn enough_rows(mut morsels: Vec<Morsel>, rows: usize) -> Vec<Morsel> {
     morsels
 }
 
-/// Split row groups into row ranges if there is not enough parallelism.
-fn split_for_parallelism(morsels: Vec<Morsel>) -> Vec<Morsel> {
+/// Data pages per part a row group can be split into before the parts mostly
+/// decompress the same pages again.
+const PAGES_PER_PART: usize = 4;
+
+/// How many parts a row group can be split into, from the data pages of the
+/// biggest column chunk the scan reads in the first row group (counted from
+/// the page headers, nothing is decompressed). A page is decompressed whole
+/// by every part that reads a row of it: a writer that makes one page of a
+/// column chunk (DuckDB does) leaves two parts decompressing the whole row
+/// group each, which doubled the page memory of a wide scan and read nothing
+/// faster. No limit when the pages cannot be counted.
+fn max_parts(files: &[Arc<ParquetFile>], first: Option<&Morsel>, projection: &[usize]) -> usize {
+    let pages = || -> Option<usize> {
+        let m = first?;
+        let f = &files[m.file];
+        let crate::io::blob::Blob::Mapped(bytes) = &f.blob else { return None };
+        let mask = ProjectionMask::roots(f.meta.parquet_schema(), projection.iter().copied());
+        let rg = f.meta.metadata().row_group(m.row_group);
+        let biggest = (0..rg.num_columns()).filter(|&c| mask.leaf_included(c)).max_by_key(|&c| rg.column(c).uncompressed_size())?;
+        let mut reader = SerializedPageReader::new(Arc::new(bytes.clone()), rg.column(biggest), rg.num_rows() as usize, None).ok()?;
+        let mut data_pages = 0;
+        while let Some(page) = reader.peek_next_page().ok()? {
+            data_pages += usize::from(!page.is_dict);
+            reader.skip_next_page().ok()?;
+        }
+        Some(data_pages)
+    };
+    pages().map_or(usize::MAX, |p| 1 + p / PAGES_PER_PART)
+}
+
+/// Split row groups into row ranges (at most `max_parts` each) if there is
+/// not enough parallelism.
+fn split_for_parallelism(morsels: Vec<Morsel>, max_parts: usize) -> Vec<Morsel> {
     let target = rayon::current_num_threads() * 3;
-    if morsels.is_empty() || morsels.len() >= target {
+    if morsels.is_empty() || morsels.len() >= target || max_parts <= 1 {
         return morsels;
     }
     let total_rows: usize = morsels.iter().map(|m| m.rows).sum();
     let per = (total_rows / target).max(1 << 16);
     let mut split = vec![];
     for m in morsels {
-        let parts = m.rows.div_ceil(per).max(1);
+        let parts = m.rows.div_ceil(per).clamp(1, max_parts);
         if parts == 1 {
             split.push(m);
             continue;
