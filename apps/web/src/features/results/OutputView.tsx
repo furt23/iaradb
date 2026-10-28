@@ -5,7 +5,10 @@ import Typography from "@mui/material/Typography";
 import type { CellOutput, ErrorOutput, StreamChunk } from "@iara/protocol";
 import { type ComponentPropsWithoutRef, useMemo } from "react";
 import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
+import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import "katex/dist/katex.min.css";
 
 import { markdownHeadings } from "@/lib/outline";
 
@@ -59,7 +62,7 @@ export function Markdown({ text }: { text: string }) {
         "& td, & th": { border: 1, borderColor: "divider", px: 1, py: 0.25 },
       }}
     >
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={components}>
         {text}
       </ReactMarkdown>
     </Box>

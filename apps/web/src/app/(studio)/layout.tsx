@@ -17,18 +17,19 @@ import { Workbench } from "@/features/workbench/Workbench";
 import { WorkbenchProvider } from "@/features/workbench/WorkbenchProvider";
 import { authMode } from "@/server/auth/access";
 import { currentUser } from "@/server/auth/session";
+import { DASHBOARDS_DIR } from "@/server/dashboards/store";
 import { catalogList, catalogSchemas, catalogTables } from "@/server/workspace/catalog";
 import { listTree, type FileNode } from "@/server/workspace/files";
 import { workspaceName } from "@/server/workspace/sources";
 
 export const dynamic = "force-dynamic";
 
-/** The files the workbench opens: notebooks and SQL queries. */
+/** The files the workbench lists: notebooks and SQL queries, not the datasets of dashboards. */
 function workbenchFiles(nodes: FileNode[]): string[] {
   return nodes.flatMap((n) =>
     n.kind === "notebook" || n.kind === "sql"
       ? [n.path]
-      : n.children
+      : n.children && n.path !== DASHBOARDS_DIR
         ? workbenchFiles(n.children)
         : [],
   );

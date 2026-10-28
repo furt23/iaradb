@@ -83,14 +83,14 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-/** Running machines and the notebooks attached to clusters. */
+/** Running clusters (Local included) and the notebooks attached to them. */
 function Summary({ clusters }: { clusters: ClusterView[] }) {
   const { t } = useTranslation();
-  const machines = clusters.filter((c) => c.kind === "ec2" && c.state === "running");
+  const running = clusters.filter((c) => c.state === "running");
   const attached = clusters.reduce((n, c) => n + c.notebooks.length, 0);
   return (
     <Box sx={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 1.5 }}>
-      <Stat label={t("Running")} value={String(machines.length)} />
+      <Stat label={t("Running")} value={String(running.length)} />
       <Stat label={t("Notebooks attached")} value={String(attached)} />
     </Box>
   );

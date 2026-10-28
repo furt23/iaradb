@@ -117,7 +117,7 @@ A schema can have a `location` (`[schemas.<name>]`, an `s3://` URL or a workspac
 
 ## Jobs
 
-A job runs notebooks, SQL files or published dashboards on a cron schedule (UTC) or on demand, on an existing cluster or on a new one that is removed afterwards. Studio keeps run history, durations, statuses and logs. Each job is a file `jobs/<id>.toml` in the workspace.
+A job runs notebooks or SQL files on a cron schedule (UTC) or on demand, on an existing cluster or on a new one that is removed afterwards. Studio keeps run history, durations, statuses and logs. Each job is a file `jobs/<id>.toml` in the workspace.
 
 ```toml
 name = "Nightly sales"
@@ -148,7 +148,7 @@ webhook = "https://example.com/hooks/sales"
 ```
 
 - A job has either one `target` or one or more `[[task]]` tables. A file with only `target` is a single task keyed `main`.
-- A `target` is a notebook (`.py`), a query file (`.sql`) or a dashboard folder (`dashboards/<slug>`). A dashboard task renders the published dashboard's initial view (no filter values, no chart picks) on the job's cluster, once for each set of read grants among the people who can open it, and stores the renders in the Studio's data folder. A viewer who opens the dashboard with no filters and no chart picks gets the stored render at once, with the time it was made, even when the cluster is stopped; filtered views still run live. Republishing the dashboard or changing the grants ignores the stored renders until the next run. The task fails when the dashboard is not published or every widget failed, and keeps the previous renders. "Schedule refresh" in the dashboard editor opens the new-job dialog with the dashboard as target.
+- A `target` is a notebook (`.py`) or a query file (`.sql`). Dashboards are not job targets: a dashboard schedules its own refresh (see [Dashboards](#dashboards)).
 - `key` names the task: letters, digits, `_` and `-`. `depends_on` lists the tasks that run first. The graph of tasks must not have cycles.
 - `run_if` sets when a task runs, from how its upstream tasks ended: `all_success` (default), `all_done`, `at_least_one_success`, `none_failed` or `all_failed`.
 - `max_retries` (0 to 10) and `retry_backoff_seconds` (0 to 3600) retry a failed task. `timeout_minutes` (1 to 1440) limits one task. Without it, the job's timeout applies.
@@ -234,7 +234,7 @@ Tokens are kept as SHA-256 hashes in `tokens.json` in Studio's data folder, and 
 
 ## Dashboards
 
-A dashboard is a canvas of datasets (one SQL query each) and widgets (charts or tables). The editor runs its queries with the signed-in user's grants. Publishing makes it available to viewers; a viewer opens it at `/view`, on the `IARA_VIEW_HOST` host when that is set, and that host serves nothing else. Two viewers with different grants never share cached results. A job can refresh a published dashboard's initial view on a schedule (see [Jobs](#jobs)). Publishing is refused when a dataset reads a table its publisher has no grant on.
+A dashboard is a canvas of datasets (one SQL query each) and widgets (charts or tables). The editor runs its queries with the signed-in user's grants. Publishing makes it available to viewers; a viewer opens it at `/view`, on the `IARA_VIEW_HOST` host when that is set, and that host serves nothing else. Two viewers with different grants never share cached results. "Schedule refresh" in the editor sets a cron schedule (UTC), stored as `[schedule]` (`cron`, `enabled`) in the dashboard's `dashboard.toml`. Each run renders the published dashboard's initial view (no filter values, no chart picks) on the dashboard's cluster, once for each set of read grants among the people who can open it. A viewer who opens the dashboard with no filters and no chart picks gets the stored render at once, with the time it was made, even when the cluster is stopped; filtered views still run live. Republishing or changing the grants ignores the stored renders until the next run. A run fails when the dashboard is not published or every widget failed, and keeps the previous renders. Refresh runs are not listed in Jobs. Publishing is refused when a dataset reads a table its publisher has no grant on.
 
 ## Sign-in
 
