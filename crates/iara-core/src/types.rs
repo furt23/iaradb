@@ -2,10 +2,12 @@
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, AsArray, new_empty_array};
+use arrow::array::{Array, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, AsArray, BooleanArray, PrimitiveArray, new_empty_array};
 use arrow::compute::kernels::numeric;
 use arrow::compute::{CastOptions, cast_with_options};
-use arrow::datatypes::{DataType, Float64Type, TimeUnit};
+use arrow::datatypes::{
+    DataType, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, TimeUnit, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+};
 
 use crate::error::{Result, WhError};
 use crate::expr::Operator;
@@ -40,6 +42,11 @@ pub fn is_temporal(dt: &DataType) -> bool {
 /// floats round half to even, decimals round half away from zero.
 pub fn cast_array(a: &ArrayRef, to: &DataType, opts: &CastOptions) -> Result<ArrayRef> {
     let src = a.data_type();
+    if *src == DataType::Boolean {
+        if let Some(out) = bool_to_number(a.as_boolean(), to) {
+            return Ok(out);
+        }
+    }
     if !to.is_integer() || !(is_float(src) || is_decimal(src)) {
         return Ok(cast_with_options(a, to, opts)?);
     }
@@ -60,6 +67,37 @@ pub fn cast_array(a: &ArrayRef, to: &DataType, opts: &CastOptions) -> Result<Arr
         }
     };
     Ok(cast_with_options(&rounded, to, opts)?)
+}
+
+/// A boolean column as 1 and 0 of a number type (None: not a plain number
+/// type), 64 rows per word of bits: Arrow's cast goes row by row
+/// (`sum(CAST(x = 1 AS BIGINT))` spent half its time there).
+fn bool_to_number(b: &BooleanArray, to: &DataType) -> Option<ArrayRef> {
+    fn ones<T: ArrowPrimitiveType>(b: &BooleanArray) -> ArrayRef {
+        let bits = b.values();
+        let chunks = bits.inner().bit_chunks(bits.offset(), bits.len());
+        let one = |w: u64, j: u32| if (w >> j) & 1 == 1 { T::Native::ONE } else { T::Native::ZERO };
+        let mut out: Vec<T::Native> = Vec::with_capacity(bits.len());
+        for w in chunks.iter() {
+            out.extend((0..64).map(|j| one(w, j)));
+        }
+        let rest = chunks.remainder_bits();
+        out.extend((0..chunks.remainder_len() as u32).map(|j| one(rest, j)));
+        Arc::new(PrimitiveArray::<T>::new(out.into(), b.nulls().cloned()))
+    }
+    Some(match to {
+        DataType::Int8 => ones::<Int8Type>(b),
+        DataType::Int16 => ones::<Int16Type>(b),
+        DataType::Int32 => ones::<Int32Type>(b),
+        DataType::Int64 => ones::<Int64Type>(b),
+        DataType::UInt8 => ones::<UInt8Type>(b),
+        DataType::UInt16 => ones::<UInt16Type>(b),
+        DataType::UInt32 => ones::<UInt32Type>(b),
+        DataType::UInt64 => ones::<UInt64Type>(b),
+        DataType::Float32 => ones::<Float32Type>(b),
+        DataType::Float64 => ones::<Float64Type>(b),
+        _ => return None,
+    })
 }
 
 fn int_rank(dt: &DataType) -> (bool, u8) {
@@ -382,3 +420,19 @@ pub fn adapt_literal(s: &Scalar, target: &DataType, op: Operator) -> Option<Scal
     None
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bool_to_number_matches_arrow() {
+        let b: BooleanArray = (0..200).map(|i| (i % 7 != 0).then_some(i % 3 == 0)).collect();
+        // an offset that does not start on a word
+        let a: ArrayRef = Arc::new(b.slice(5, 150));
+        for to in [DataType::Int8, DataType::UInt16, DataType::Int32, DataType::Int64, DataType::Float32, DataType::Float64] {
+            let got = cast_array(&a, &to, &CastOptions::default()).unwrap();
+            assert_eq!(got.as_ref(), cast_with_options(&a, &to, &CastOptions::default()).unwrap().as_ref(), "{to}");
+        }
+    }
+}
