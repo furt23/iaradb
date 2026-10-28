@@ -64,8 +64,9 @@ pub struct ParquetSink {
     path: String,
 }
 
-/// Row groups encoding at once, per encode thread.
-const IN_FLIGHT_PER_THREAD: usize = 2;
+/// Row groups encoding at once, per encode thread (one already keeps the
+/// threads busy: two only held another row group each in memory).
+const IN_FLIGHT_PER_THREAD: usize = 1;
 
 /// The writer thread: encode the queued row groups and append them in
 /// order. Every column of every row group is a task of its own on the encode

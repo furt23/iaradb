@@ -37,15 +37,17 @@ impl ByteRange {
 }
 
 /// Split the files into ranges: one per file, or about `chunk_bytes` each
-/// (by default enough ranges for every thread, at least 4 MiB locally and
-/// 8 MiB remotely). `starts[i]` is where the data of file `i` begins.
+/// (by default enough ranges for every thread, 4 to 32 MiB locally and 8 to
+/// 64 MiB remotely: every worker holds a range's rows while it parses them,
+/// so a large file is cut finer, not into larger ranges). `starts[i]` is
+/// where the data of file `i` begins.
 pub fn plan(files: &[Blob], parallel: bool, chunk_bytes: Option<usize>, starts: &[usize]) -> Vec<ByteRange> {
     let threads = rayon::current_num_threads();
     let total: u64 = files.iter().map(|f| f.len()).sum();
     let remote = files.iter().any(|f| f.object().is_some());
     // remote ranges are larger: fewer requests, each worth its latency
-    let min = if remote { 8 << 20 } else { 4 << 20 };
-    let chunk = chunk_bytes.unwrap_or((total as usize / (threads * 4)).max(min)).max(1);
+    let (min, max) = if remote { (8 << 20, 64 << 20) } else { (4 << 20, 32 << 20) };
+    let chunk = chunk_bytes.unwrap_or((total as usize / (threads * 4)).clamp(min, max)).max(1);
     let mut ranges = vec![];
     for (fi, f) in files.iter().enumerate() {
         let len = f.len() as usize;
