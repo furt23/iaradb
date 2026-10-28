@@ -40,9 +40,19 @@ def test_syntax_error_reported():
 
 
 def test_sql_identifiers_skip_literals_and_comments():
-    ids = sql_identifiers("select a from t -- other\nwhere s = 'not_a_table' /* x_y */ and b > 1")
-    assert {"select", "a", "t", "where", "s", "b"} <= ids
-    assert not {"other", "not_a_table", "x_y"} & ids
+    ids = sql_identifiers("select a from t -- from other\nwhere s = 'from not_a_table' /* from x_y */ and b > 1")
+    assert ids == {"t"}
+
+
+def test_sql_identifiers_are_only_tables():
+    # columns, keywords and functions are not tables: a Python `date` or `count` is not read
+    assert sql_identifiers("select date, count(*) from orders o group by date") == {"orders"}
+    q = "with x as (select * from a), y as (select 1) select * from x join y on true join tpch.lineitem l using (id)"
+    assert sql_identifiers(q) == {"a", "tpch.lineitem"}
+    assert sql_identifiers('select * from a x, b as y, "s" . "c" where z > 1') == {"a", "b", "s.c"}
+    assert sql_identifiers("select * from read_parquet('p') join orders on true") == {"orders"}
+    assert sql_identifiers("merge into t using s on t.id = s.id when matched then update set a = 1") == {"t", "s"}
+    assert sql_identifiers("select * from (select * from inner_t) q") == {"inner_t"}
 
 
 # ---------------------------------------------------------------------------

@@ -356,12 +356,11 @@ class NotebookService:
         nearest definition above it)."""
         with self._lock:
             order = [c.id for c in self.notebook.cells] if self.notebook else list(self.values)
+            if cell_id in order:
+                order = order[: order.index(cell_id)]
             out: dict[str, Any] = {}
             for cid in order:
                 out.update(self.values.get(cid, {}))
-            if cell_id in order:
-                for cid in order[: order.index(cell_id)]:
-                    out.update(self.values.get(cid, {}))
             return out
 
     def cells(self) -> list[Cell] | None:

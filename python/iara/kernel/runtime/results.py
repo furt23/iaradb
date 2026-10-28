@@ -95,6 +95,8 @@ class ResultStore:
         self._entries: OrderedDict[str, _Entry] = OrderedDict()
         self._capacity = capacity
         self._lock = threading.Lock()
+        # pages are read on a pool: one sort at a time, so two never race on the spooled copy
+        self._sorting = threading.Lock()
         self.spool = spool if spool is not None else Spool()
 
     def put(
@@ -153,6 +155,10 @@ class ResultStore:
 
     def _sorted(self, rid: str, sort: list[dict[str, Any]]) -> pa.Table:
         key = tuple((s["column"], bool(s.get("descending"))) for s in sort)
+        with self._sorting:
+            return self._sorted_locked(rid, key)
+
+    def _sorted_locked(self, rid: str, key: tuple) -> pa.Table:
         with self._lock:
             entry = self._entries[rid]
             if entry.sorted_key == key and entry.sorted_table is not None:

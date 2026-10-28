@@ -186,6 +186,8 @@ def test_cells_redefine_names_and_read_the_nearest_definition_above(session: Ker
     assert nb.namespace()["n"] == 3 and nb.namespace()["m"] == "other"
     # completions and lint in a cell see the value above it; the Variables panel the last one
     assert nb.namespace("c")["df"] == [2, 3, 4] and nb.namespace()["df"] == "other"
+    # nothing defined below the cell leaks in
+    assert "m" not in nb.namespace("c") and "n" not in nb.namespace("c")
     assert {v["name"]: v["cell_id"] for v in nb.variables()}["df"] == "d"
     # editing the first definition re-runs the cells that read it, not the redefinition below
     cells[0] = py("a", "df = [5, 6]")

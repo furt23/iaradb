@@ -38,7 +38,7 @@ QUEUED = frozenset(
 ASSIST = frozenset({"assist.complete", "assist.signature", "assist.lint"})
 #: reads that may take a while (aggregating a large result): answered on a
 #: small pool of threads, so the reader stays free for ``interrupt``
-BACKGROUND = frozenset({"result.chart", "wrangle.profile"})
+BACKGROUND = frozenset({"result.page", "result.arrow", "result.chart", "wrangle.profile"})
 
 
 #: largest chunk returned by ``file.read``
