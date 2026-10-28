@@ -262,6 +262,8 @@ pub struct CollectLocal {
     batches: Vec<(usize, usize, RecordBatch)>,
     seq: usize,
     morsel_rows: usize,
+    /// where the batches of the morsel being run start in `batches`
+    morsel_start: usize,
 }
 
 impl CollectSink {
@@ -289,7 +291,7 @@ impl Sink for CollectSink {
     type Output = Vec<RecordBatch>;
 
     fn make_local(&self) -> CollectLocal {
-        CollectLocal { batches: vec![], seq: 0, morsel_rows: 0 }
+        CollectLocal { batches: vec![], seq: 0, morsel_rows: 0, morsel_start: 0 }
     }
 
     fn push(&self, local: &mut CollectLocal, morsel: usize, batch: RecordBatch) -> Result<()> {
@@ -304,6 +306,11 @@ impl Sink for CollectSink {
 
     fn morsel_done(&self, local: &mut CollectLocal, morsel: usize) -> Result<()> {
         let rows = std::mem::take(&mut local.morsel_rows);
+        // the decoded pages behind the morsel's strings are freed now, not when the result is
+        let (keys, mut run): (Vec<_>, Vec<_>) = local.batches.split_off(local.morsel_start).into_iter().map(|(m, s, b)| ((m, s), b)).unzip();
+        crate::exec::batch_mem::compact_run(&mut run)?;
+        local.batches.extend(keys.into_iter().zip(run).map(|((m, s), b)| (m, s, b)));
+        local.morsel_start = local.batches.len();
         if let Some(fetch) = self.fetch {
             let mut t = self.tracker.lock();
             if t.done.len() <= morsel {

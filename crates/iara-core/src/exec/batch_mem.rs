@@ -130,6 +130,32 @@ pub fn compact(b: RecordBatch) -> Result<RecordBatch> {
     Ok(RecordBatch::try_new_with_options(b.schema(), cols, &RecordBatchOptions::new().with_row_count(Some(b.num_rows())))?)
 }
 
+/// The batches of one morsel, with the view columns that together pin much
+/// more than they use compacted. A decoded Parquet page backs the strings of
+/// many batches (and of the neighbouring morsels), and a filter drops most of
+/// its rows without releasing the page: a result holding such batches keeps
+/// every page whole until it is dropped.
+pub fn compact_run(batches: &mut [RecordBatch]) -> Result<()> {
+    let Some(first) = batches.first() else { return Ok(()) };
+    let columns: Vec<usize> = (0..first.num_columns()).filter(|&i| matches!(first.column(i).data_type(), DataType::Utf8View | DataType::BinaryView)).collect();
+    for i in columns {
+        let arrays: Vec<&dyn Array> = batches.iter().map(|b| b.column(i).as_ref()).collect();
+        if !views_wasteful(&arrays) {
+            continue;
+        }
+        for b in batches.iter_mut() {
+            let c: ArrayRef = match b.column(i).data_type() {
+                DataType::Utf8View => Arc::new(b.column(i).as_string_view().gc()),
+                _ => Arc::new(b.column(i).as_binary_view().gc()),
+            };
+            let mut cols = b.columns().to_vec();
+            cols[i] = c;
+            *b = RecordBatch::try_new_with_options(b.schema(), cols, &RecordBatchOptions::new().with_row_count(Some(b.num_rows())))?;
+        }
+    }
+    Ok(())
+}
+
 /// Whether the view arrays reference many buffers, or much more buffer
 /// space than they use (worth a `gc` after concatenating them).
 pub fn views_wasteful(arrays: &[&dyn Array]) -> bool {
@@ -176,6 +202,27 @@ mod tests {
         assert!(compact_array(&a).is_none());
         assert!(!views_wasteful(&[a.as_ref()]));
         assert!(views_wasteful(&[taken.as_ref()]));
+    }
+
+    #[test]
+    fn a_run_of_batches_pinning_one_page_is_compacted_together() {
+        let long: Vec<String> = (0..60_000).map(|i| format!("a string longer than twelve bytes #{i:06}")).collect();
+        let a: ArrayRef = Arc::new(StringViewArray::from_iter_values(long.iter()));
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![arrow::datatypes::Field::new("s", DataType::Utf8View, true)]));
+        let mut run: Vec<RecordBatch> = [[1u32, 5], [100, 200]]
+            .iter()
+            .map(|idx| RecordBatch::try_new(schema.clone(), vec![arrow::compute::take(&a, &UInt32Array::from(idx.to_vec()), None).unwrap()]).unwrap())
+            .collect();
+        assert!(run[0].column(0).get_array_memory_size() > 500_000, "each batch pins the whole page");
+        compact_run(&mut run).unwrap();
+        for b in &run {
+            assert!(b.column(0).get_array_memory_size() < 4096);
+        }
+        assert_eq!(run[1].column(0).as_string_view().value(1), long[200]);
+        // a run that uses its page is left as it is
+        let mut whole = vec![RecordBatch::try_new(schema, vec![a.clone()]).unwrap()];
+        compact_run(&mut whole).unwrap();
+        assert!(Arc::ptr_eq(whole[0].column(0), &a));
     }
 
     #[test]
