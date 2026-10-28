@@ -81,7 +81,7 @@ Missing results: Daft cannot plan Q1, Q8, Q9 and Q14 on `DECIMAL(15,2)` columns.
 
 Polars runs DataFrame versions of the queries (`benchmarks/clickbench_polars.py`), each a direct translation of the SQL; its SQL frontend has no `regexp_replace` or `date_trunc` and rejects Q35's repeated group key. On the 40 queries both ran, the two frontends took the same time (21.6 s vs 21.5 s). `polars-sql` still runs the SQL. Q6, Q28 and Q29 name their aggregates (`MIN(EventDate) AS min_date`), since Daft names an unaliased aggregate after its column and two aggregates over one column collide. Daft runs out of memory on Q23.
 
-Where Iara is slower: `REGEXP_REPLACE` (Q28, 2.4 s against chDB's 1.6 s), `GROUP BY URL` (Q33, 1.09× DuckDB), `AVG(STRLEN(URL))` (Q27, 1.12× DuckDB: Iara's `strlen` counts characters, DuckDB's counts bytes) and the `ORDER BY SearchPhrase` top-N (Q25, 1.2× Polars).
+Where Iara is slower: `REGEXP_REPLACE` (Q28, 2.4 s against chDB's 1.6 s), `GROUP BY URL` (Q33, 1.09× DuckDB) and the `ORDER BY SearchPhrase` top-N (Q25, 1.2× Polars).
 
 ## DataFrame workloads
 
@@ -94,23 +94,30 @@ Nineteen DataFrame jobs (`benchmarks/realistic/`) on TPC-H SF100 tables, `hits.p
 | csv_to_parquet | 9.8 s / 2277 MB | 12.49 s / 2151 MB |
 | ndjson_groupby | 0.52 s / 105 MB | 0.7 s / 194 MB |
 | many_small_files | 1.02 s / 251 MB | 2.12 s / 778 MB |
-| feature_engineering_sink | 55.7 s / 5531 MB | 62.16 s / 2633 MB |
+| feature_engineering_sink | 49.4 s / 5029 MB | 54.18 s / 2725 MB |
 | full_sort_sink | 28.22 s / 36836 MB | 24.67 s / 40037 MB |
 | to_pandas | 11.32 s / 53035 MB | 40.51 s / 60448 MB |
 | top3_per_customer | 4.95 s / 41947 MB | 5.33 s / 28883 MB |
 | sessionize | 6.17 s / 7493 MB | 7.92 s / 10133 MB |
 | rolling_daily | 0.13 s / 172 MB | 0.13 s / 346 MB |
-| url_domains | 3.19 s / 4196 MB | 3.87 s / 2702 MB |
+| url_domains | 3.12 s / 4015 MB | 3.87 s / 2426 MB |
 | word_count | 10.5 s / 499 MB | 10.55 s / 1046 MB |
 | search_phrase_contains | 0.5 s / 902 MB | 0.46 s / 838 MB |
 | string_key_join | 4.21 s / 2551 MB | 4.99 s / 2924 MB |
 | dedupe_pairs | 2.63 s / 18193 MB | 3.36 s / 21831 MB |
-| wide_filter | 0.12 s / 1512 MB | 0.11 s / 749 MB |
+| wide_filter | 0.13 s / 1073 MB | 0.11 s / 764 MB |
 | conditional_aggs | 0.24 s / 203 MB | 0.31 s / 325 MB |
 | eager_session | 4.87 s / 38640 MB | 11.56 s / 54713 MB |
 
 
-`wide_filter` (105 columns of 671K rows) is 10% slower and holds twice the memory. Iara also uses more memory than Polars on `url_domains`, `top3_per_customer` (a ranked window over 10M groups holds its whole input, as Polars does, with about 45% more at the peak) and on `feature_engineering_sink` (row groups held by the Parquet writer while it encodes). The runs that follow another job pay for the previous one's page cache, so compare a job's times only within the same order.
+Iara uses more memory than Polars on four jobs:
+
+- `top3_per_customer` (42 GB against 29 GB): the window sink keeps the whole table, and ranking it adds a concatenated copy of the key columns, the sort keys and the rank column. Dropping rows that cannot rank in the first 3 as they arrive cut the peak to 23 GB but took 20 s instead of 5 s (every row is looked up in a table of 10M groups), so it is not in.
+- `feature_engineering_sink` (5.0 GB against 2.7 GB): the Parquet writer encodes 8 row groups at a time (32 before, 6.5 GB) and drops each column's rows as it encodes them.
+- `url_domains` (3.5 to 4.0 GB across runs, against 2.4 GB): the per-group index of a `COUNT(DISTINCT)` state takes 8 bytes a pair for integers and 16 for strings (32 before).
+- `wide_filter` (1.1 GB against 0.76 GB): a row group whose column chunks are one page each (DuckDB writes them) is no longer split between threads, which decompressed each page twice (1.5 GB before).
+
+What is left on the last three is mostly memory the allocator (mimalloc) keeps after it was freed, not memory Iara holds: a scan decompresses pages of 10-60 MB at several GB per second. Returning freed memory at once (`MIMALLOC_PURGE_DELAY=0`) with transparent huge pages off brought `wide_filter` to 0.91 GB and `url_domains` to 3.2 GB, at 25% and 20% more time, so the default keeps it. The runs that follow another job pay for the previous one's page cache, so compare a job's times only within the same order.
 
 ## Reproducing
 
