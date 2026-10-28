@@ -39,6 +39,11 @@ use table::{IdTable, PREFETCH_AHEAD};
 pub trait ColumnInterner: Send + Sync {
     /// Map every row of `array` to a dense id (appending unseen values).
     fn intern(&mut self, array: &ArrayRef, out: &mut Vec<u32>) -> Result<()>;
+    /// `intern` given each row's [`crate::hash::hash_array`] value: an
+    /// interner that hashes values the same way need not hash them again.
+    fn intern_hashed(&mut self, array: &ArrayRef, _hashes: &[u64], out: &mut Vec<u32>) -> Result<()> {
+        self.intern(array, out)
+    }
     /// Map selected rows of `array` to dense ids, and unselected rows to `u32::MAX`.
     fn intern_masked(&mut self, array: &ArrayRef, mask: &arrow::buffer::BooleanBuffer, out: &mut Vec<u32>) -> Result<()>;
     fn len(&self) -> usize;
@@ -315,7 +320,9 @@ impl BytesInterner {
         self.hashes = hashes;
     }
 
-    fn run_view(&mut self, a: &StringViewArray, out: &mut Vec<u32>) {
+    /// `given`: the rows' hash_bytes, when already known (strings past 12 bytes use it).
+    fn run_view(&mut self, a: &StringViewArray, given: Option<&[u64]>, out: &mut Vec<u32>) {
+        let long_hash = |i: usize| given.map_or_else(|| hash_bytes(a.value(i).as_bytes()), |g| g[i]);
         let views = a.views();
         let nulls = a.nulls().filter(|n| n.null_count() > 0);
         if !self.short.large() && !self.map.large() {
@@ -328,8 +335,7 @@ impl BytesInterner {
                         } else if len <= 12 {
                             self.short_id_hashed(hash_u128(view), view, a, i)
                         } else {
-                            let b = a.value(i).as_bytes();
-                            self.lookup(hash_bytes(b), b)
+                            self.lookup(long_hash(i), a.value(i).as_bytes())
                         };
                         out.push(id);
                     }
@@ -341,8 +347,7 @@ impl BytesInterner {
                         } else if view as u32 <= 12 {
                             self.short_id(view, a, i)
                         } else {
-                            let b = a.value(i).as_bytes();
-                            self.lookup(hash_bytes(b), b)
+                            self.lookup(long_hash(i), a.value(i).as_bytes())
                         };
                         out.push(id);
                     }
@@ -353,7 +358,7 @@ impl BytesInterner {
         let mut hashes = std::mem::take(&mut self.hashes);
         hashes.clear();
         hashes.extend(views.iter().enumerate().map(|(i, &view)| {
-            if view as u32 <= 12 { hash_u128(view) } else { hash_bytes(a.value(i).as_bytes()) }
+            if view as u32 <= 12 { hash_u128(view) } else { long_hash(i) }
         }));
         for (i, (&view, &h)) in views.iter().zip(&hashes).enumerate() {
             if let Some(&a) = hashes.get(i + PREFETCH_AHEAD) {
@@ -438,12 +443,22 @@ impl ColumnInterner for BytesInterner {
         match array.data_type() {
             DataType::Utf8 => run!(array.as_string::<i32>(), str::as_bytes),
             DataType::LargeUtf8 => run!(array.as_string::<i64>(), str::as_bytes),
-            DataType::Utf8View => self.run_view(array.as_string_view(), out),
+            DataType::Utf8View => self.run_view(array.as_string_view(), None, out),
             DataType::Binary => run!(array.as_binary::<i32>(), std::convert::identity),
             DataType::LargeBinary => run!(array.as_binary::<i64>(), std::convert::identity),
             DataType::BinaryView => run!(array.as_binary_view(), std::convert::identity),
             dt => unreachable!("bytes interner for {dt}"),
         }
+        Ok(())
+    }
+
+    fn intern_hashed(&mut self, array: &ArrayRef, hashes: &[u64], out: &mut Vec<u32>) -> Result<()> {
+        if array.data_type() != &DataType::Utf8View {
+            return self.intern(array, out);
+        }
+        out.clear();
+        out.reserve(array.len());
+        self.run_view(array.as_string_view(), Some(hashes), out);
         Ok(())
     }
 
@@ -941,6 +956,15 @@ impl GroupKeys {
             Composite::Packed(_) => unreachable!("packed keys return above"),
         }
         self.repack()
+    }
+
+    /// `intern` given each row's [`crate::hash::hash_columns`] value of `cols`
+    /// (used by one key column whose interner hashes values the same way).
+    pub fn intern_hashed(&mut self, cols: &[ArrayRef], hashes: &[u64], out: &mut Vec<u32>) -> Result<()> {
+        if cols.len() == 1 && self.dep.is_none() && self.composite.is_none() {
+            return self.interners[0].intern_hashed(&cols[0], hashes, out);
+        }
+        self.intern(cols, out)
     }
 
     pub fn intern(&mut self, cols: &[ArrayRef], out: &mut Vec<u32>) -> Result<()> {

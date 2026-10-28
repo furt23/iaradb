@@ -153,7 +153,8 @@ impl Radix {
 }
 
 /// Evaluated input columns of one partition chunk:
-/// `[keys..., agg0 args..., agg0 filter?, agg1 args..., ...]`.
+/// `[keys..., agg0 args..., agg0 filter?, agg1 args..., ...]`, then (one key
+/// column, not spilling) the rows' partition hashes as a `UInt64` column.
 type Chunk = Vec<ArrayRef>;
 
 /// The groups of one hash partition.
@@ -346,7 +347,10 @@ impl AggregateSink {
     /// a table that cannot grow under the limit turns spilling on.
     fn fold(&self, t: &mut PartTable, chunk: &[ArrayRef]) -> Result<()> {
         let (kcols, inputs) = self.split_chunk(chunk);
-        t.keys.intern(&kcols, &mut t.gids)?;
+        match chunk.get(self.chunk_width()) {
+            Some(h) => t.keys.intern_hashed(&kcols, h.as_primitive::<arrow::datatypes::UInt64Type>().values(), &mut t.gids)?,
+            None => t.keys.intern(&kcols, &mut t.gids)?,
+        }
         let ng = t.keys.len();
         t.accs.update(&inputs, &t.gids, ng)?;
         let want = ng * self.per_group + t.accs.state_bytes();
@@ -526,6 +530,11 @@ impl AggregateSink {
         }
     }
 
+    /// Columns of a chunk before its partition hashes.
+    fn chunk_width(&self) -> usize {
+        self.group_exprs.len() + self.aggs.iter().map(|a| a.input_arity() + a.filter.is_some() as usize).sum::<usize>()
+    }
+
     fn split_chunk(&self, chunk: &[ArrayRef]) -> (Vec<ArrayRef>, Vec<AccInput>) {
         let k = self.group_exprs.len();
         let keys = chunk[..k].to_vec();
@@ -616,7 +625,12 @@ impl AggregateSink {
             sorted.iter().map(|c| c.slice(start, end - start)).collect()
         };
         if !self.spilling.load(Ordering::Relaxed) {
-            let sorted = cols.iter().map(|c| take(c, &perm, None)).collect::<Result<Vec<_>, _>>()?;
+            let mut sorted = cols.iter().map(|c| take(c, &perm, None)).collect::<Result<Vec<_>, _>>()?;
+            // one key hashed alone: its interner hashes it the same way, and need not again
+            if self.group_exprs.len() == 1 && self.part_cols.get().is_none_or(|pc| pc[..] == [0]) {
+                let hashes: Vec<u64> = perm.values().iter().map(|&i| local.hashes[i as usize]).collect();
+                sorted.push(Arc::new(UInt64Array::from(hashes)));
+            }
             for i in 0..p {
                 let part = (start + i) % p;
                 if offsets[part] < offsets[part + 1] {
