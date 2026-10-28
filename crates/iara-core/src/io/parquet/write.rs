@@ -64,9 +64,13 @@ pub struct ParquetSink {
     path: String,
 }
 
-/// Row groups encoding at once, per encode thread (one already keeps the
-/// threads busy: two only held another row group each in memory).
-const IN_FLIGHT_PER_THREAD: usize = 1;
+/// Row groups encoding at once: one per this many encode threads, at least
+/// [`MIN_IN_FLIGHT`]. Each holds its rows (tens of MB for a wide table) and
+/// the encoders' buffers until its last column is done, and every column is
+/// a task of its own, so a few row groups keep the pool busy: at two per
+/// thread a 16-thread write held 1.4 GB more and finished no sooner.
+const IN_FLIGHT_THREADS: usize = 2;
+const MIN_IN_FLIGHT: usize = 4;
 
 /// The writer thread: encode the queued row groups and append them in
 /// order. Every column of every row group is a task of its own on the encode
@@ -80,7 +84,7 @@ fn write_groups(
 ) -> Result<SerializedFileWriter<Output>> {
     type Done = (usize, usize, Result<ArrowColumnChunk>);
     let (done_tx, done) = std::sync::mpsc::channel::<Done>();
-    let max_in_flight = IN_FLIGHT_PER_THREAD * encode_pool().current_num_threads();
+    let max_in_flight = (encode_pool().current_num_threads() / IN_FLIGHT_THREADS).max(MIN_IN_FLIGHT);
     // row groups handed to the pool, the next one to append, and the encoded
     // columns of those in between
     let (mut assigned, mut next) = (0usize, 0usize);
@@ -118,7 +122,8 @@ fn write_groups(
                 for (c, (mut w, leaves)) in writers.into_iter().zip(leaves).enumerate() {
                     let (tx, g) = (done_tx.clone(), assigned);
                     encode_pool().spawn(move || {
-                        let r = leaves.iter().try_for_each(|leaf| w.write(leaf)).and_then(|_| w.close());
+                        // each leaf is dropped once written: the column's rows go as it is encoded
+                        let r = leaves.into_iter().try_for_each(|leaf| w.write(&leaf)).and_then(|_| w.close());
                         // a closed channel: the write failed and stopped
                         let _ = tx.send((g, c, r.map_err(Into::into)));
                     });
