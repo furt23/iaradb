@@ -14,6 +14,7 @@ import { CodeEditor } from "@/features/editor/CodeEditor";
 import { IaraPanel } from "@/features/iara/IaraPanel";
 import { ReviewBar } from "@/features/iara/ReviewBar";
 import { ErrorState } from "@/features/shell/PageHeader";
+import { useShell } from "@/features/shell/ShellProvider";
 import { SqlResult } from "@/features/sql/SqlResult";
 import { SqlRunButtons } from "@/features/sql/SqlRunButtons";
 import { useSqlRunner } from "@/features/sql/useSqlRunner";
@@ -60,7 +61,7 @@ export function SqlFileTab({ path, shown, schema }: { path: string; shown: boole
   const runner = useSqlRunner();
   // what each parameter is set to in this tab: not part of the file
   const [values, setValues] = useState<Record<string, ParamRaw>>({});
-  const [iaraOpen, setIaraOpen] = useState(false);
+  const { iaraOpen, setIaraOpen } = useShell();
 
   // the file's text, the first time the tab is shown
   useEffect(() => {
@@ -162,7 +163,7 @@ export function SqlFileTab({ path, shown, schema }: { path: string; shown: boole
           </Button>
         )}
         <FileActionsMenu path={path} kind="sql" />
-        <Button startIcon={<IaraMark size={20} />} onClick={() => setIaraOpen((open) => !open)} sx={{ color: iaraOpen ? "secondary.main" : "text.secondary" }}>
+        <Button startIcon={<IaraMark size={20} />} onClick={() => setIaraOpen(!iaraOpen)} sx={{ color: iaraOpen ? "secondary.main" : "text.secondary" }}>
           Iara
         </Button>
         <SqlRunButtons runner={runner} onRun={run} query={body} source={path} values={paramValues} blocked={missing.length > 0} />

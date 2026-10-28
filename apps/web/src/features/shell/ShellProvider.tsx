@@ -5,6 +5,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { RAIL_KEY, railExpandedFrom, railStoredValue } from "./railPrefs";
 
 const STORAGE_KEY = "iara.sidePanel.v1";
+const IARA_KEY = "iara.agentPanel.v1";
 
 export interface ShellApi {
   /** the side panel is shown (it can be hidden for more room) */
@@ -16,6 +17,9 @@ export interface ShellApi {
   /** the quick open dialog (Ctrl/Cmd+K or Ctrl/Cmd+P) */
   quickOpen: boolean;
   setQuickOpen(open: boolean): void;
+  /** the Iara panel is open, in every tab and section that has one */
+  iaraOpen: boolean;
+  setIaraOpen(open: boolean): void;
 }
 
 const ShellContext = createContext<ShellApi | null>(null);
@@ -33,12 +37,14 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   const [panelOpen, setPanelOpen] = useState(true);
   const [railExpanded, setRailExpanded] = useState(true);
   const [quickOpen, setQuickOpen] = useState(false);
+  const [iaraOpen, setIaraState] = useState(false);
 
   // read after the first render, so the server and the first client render agree
   useEffect(() => {
     try {
       if (window.localStorage.getItem(STORAGE_KEY) === "closed") setPanelOpen(false);
       setRailExpanded(railExpandedFrom(window.localStorage.getItem(RAIL_KEY)));
+      if (window.localStorage.getItem(IARA_KEY) === "open") setIaraState(true);
     } catch {
       // storage unavailable
     }
@@ -68,6 +74,15 @@ export function ShellProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const setIaraOpen = useCallback((open: boolean) => {
+    setIaraState(open);
+    try {
+      window.localStorage.setItem(IARA_KEY, open ? "open" : "closed");
+    } catch {
+      // storage unavailable
+    }
+  }, []);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!isModKey(e) || e.shiftKey || e.altKey) return;
@@ -85,8 +100,8 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   }, [togglePanel]);
 
   const api = useMemo(
-    () => ({ panelOpen, togglePanel, railExpanded, toggleRail, quickOpen, setQuickOpen }),
-    [panelOpen, togglePanel, railExpanded, toggleRail, quickOpen],
+    () => ({ panelOpen, togglePanel, railExpanded, toggleRail, quickOpen, setQuickOpen, iaraOpen, setIaraOpen }),
+    [panelOpen, togglePanel, railExpanded, toggleRail, quickOpen, iaraOpen, setIaraOpen],
   );
   return <ShellContext.Provider value={api}>{children}</ShellContext.Provider>;
 }

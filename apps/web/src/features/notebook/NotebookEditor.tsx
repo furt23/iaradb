@@ -11,6 +11,7 @@ import { NotebookClusterSelect } from "@/features/compute/NotebookClusterSelect"
 import { FindContext } from "@/features/editor/findHighlight";
 import { IaraPanel } from "@/features/iara/IaraPanel";
 import { useNotify } from "@/features/shell/notify";
+import { useShell } from "@/features/shell/ShellProvider";
 import { FileActionsMenu } from "@/features/workbench/FileActionsMenu";
 import { fileIdOf } from "@/features/workbench/fileIdRegistry";
 import { notebookVariables } from "@/server/actions/notebooks";
@@ -62,9 +63,10 @@ function useHiddenOutputs() {
 }
 
 export function NotebookEditor({ initial, schema }: { initial: NotebookView; schema: Schema }) {
-  // the outline and Iara share the right side: opening one closes the other
-  const [side, setSide] = useState<"outline" | "iara" | null>(null);
-  const toggleSide = (which: "outline" | "iara") => setSide((open) => (open === which ? null : which));
+  // the outline (this tab's) and Iara (open in every tab) share the right side: opening one closes the other
+  const { iaraOpen, setIaraOpen } = useShell();
+  const [outlineOpen, setOutlineOpen] = useState(false);
+  const outlineShown = outlineOpen && !iaraOpen;
   const [scrollEl, setScrollEl] = useState<HTMLElement | null>(null);
   const [variables, setVariables] = useState<Variable[]>([]);
   const refreshVariables = useCallback(async () => {
@@ -182,10 +184,16 @@ export function NotebookEditor({ initial, schema }: { initial: NotebookView; sch
         onShowSetup={setup ? () => setSetupOpen(true) : undefined}
         autorun={nb.autorun}
         onAutorun={nb.setAutorun}
-        onToggleSide={() => toggleSide("outline")}
-        sideOpen={side === "outline"}
-        onToggleIara={() => toggleSide("iara")}
-        iaraOpen={side === "iara"}
+        onToggleSide={() => {
+          setOutlineOpen(!outlineShown);
+          setIaraOpen(false);
+        }}
+        sideOpen={outlineShown}
+        onToggleIara={() => {
+          setOutlineOpen(false);
+          setIaraOpen(!iaraOpen);
+        }}
+        iaraOpen={iaraOpen}
         onOutputs={(hide) => outputs.setHidden(hide ? new Set(cells.map((c) => c.id)) : new Set())}
         fileMenu={<FileActionsMenu path={state.path} kind="notebook" cells={state.cells} />}
         cluster={<NotebookClusterSelect path={state.path} onCluster={setClusterId} onAttached={nb.reset} />}
@@ -263,9 +271,9 @@ export function NotebookEditor({ initial, schema }: { initial: NotebookView; sch
           </Box>
           <RunPanel current={state.current} lastRun={state.lastRun} cells={cells} states={state.states} progress={state.progress} rootRef={rootRef} />
         </Box>
-        {side === "outline" && <NotebookSidePanel cells={cells} variables={variables} scrollRoot={scrollEl} />}
-        {side === "iara" && (
-          <IaraPanel fileId={fileIdOf(state.path) ?? state.path} surface="notebook" getContext={iara.getContext} adapter={iara.adapter} onClose={() => setSide(null)} />
+        {outlineShown && <NotebookSidePanel cells={cells} variables={variables} scrollRoot={scrollEl} />}
+        {iaraOpen && (
+          <IaraPanel fileId={fileIdOf(state.path) ?? state.path} surface="notebook" getContext={iara.getContext} adapter={iara.adapter} onClose={() => setIaraOpen(false)} />
         )}
       </Box>
     </Box>
