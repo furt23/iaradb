@@ -255,6 +255,7 @@ pub enum ScalarFunc {
     Upper,
     Lower,
     Length,
+    OctetLength,
     Trim,
     LTrim,
     RTrim,
@@ -382,7 +383,8 @@ impl ScalarFunc {
             "power" | "pow" => Power,
             "upper" | "ucase" | "to_uppercase" => Upper,
             "lower" | "lcase" | "to_lowercase" => Lower,
-            "length" | "len" | "char_length" | "character_length" | "len_chars" | "strlen" => Length,
+            "length" | "len" | "char_length" | "character_length" | "len_chars" => Length,
+            "strlen" | "octet_length" | "len_bytes" => OctetLength,
             "trim" | "strip" | "strip_chars" => Trim,
             "ltrim" | "lstrip" | "strip_chars_start" => LTrim,
             "rtrim" | "rstrip" | "strip_chars_end" => RTrim,
@@ -431,6 +433,7 @@ impl ScalarFunc {
             Upper => "upper",
             Lower => "lower",
             Length => "length",
+            OctetLength => "octet_length",
             Trim => "trim",
             LTrim => "ltrim",
             RTrim => "rtrim",
@@ -479,7 +482,7 @@ impl ScalarFunc {
             Reverse if crate::nested::is_list(&first) => first,
             Upper | Lower | Trim | LTrim | RTrim | Substring | Replace | Concat | Left | Right
             | Reverse => Utf8,
-            Length | StrPos => Int64,
+            Length | OctetLength | StrPos => Int64,
             StartsWith | EndsWith | Contains => Boolean,
             Coalesce | Greatest | Least => common_supertype(args.iter()).ok_or_else(|| {
                 WhError::Plan(format!("{}: incompatible argument types {args:?}", self.name()))

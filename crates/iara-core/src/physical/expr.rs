@@ -704,7 +704,7 @@ fn compile_function(func: ScalarFunc, args: &[Expr], schema: &PlanSchema) -> Res
             a[0] = to_utf8(a[0].clone())?;
         }
         // read as it is: a view array's strings are not copied to be counted
-        Length => {
+        Length | OctetLength => {
             nargs(1, 1)?;
             if a[0].data_type() != DataType::Utf8View {
                 a[0] = to_utf8(a[0].clone())?;

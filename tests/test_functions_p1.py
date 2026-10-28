@@ -224,11 +224,15 @@ def test_expr_strings(table):
     both(nums, lambda: w("s").str.zfill(5).alias("r"), lambda: p("s").str.zfill(5).alias("r"))
 
 
-def test_length_counts_characters_of_view_strings() -> None:
+def test_length_counts_characters_strlen_bytes() -> None:
     # inline (up to 12 bytes) and buffered strings, ASCII and not, NULL
     vals = ["", "abc", "twelve bytes", "thirteen bytes", "héllo wörld", "ação longa demais para caber", None]
     for typ in (pa.string_view(), pa.string()):
         t = pa.table({"s": pa.array(vals, typ)})
-        got = ia.sql("select length(s) as n, strlen(s) as m from t", t=t).collect().to_arrow().to_pylist()
-        want = [None if v is None else len(v) for v in vals]
-        assert [r["n"] for r in got] == want and [r["m"] for r in got] == want, typ
+        got = ia.sql("select length(s) as n, strlen(s) as m, octet_length(s) as o from t", t=t).collect().to_arrow().to_pylist()
+        chars = [None if v is None else len(v) for v in vals]
+        octets = [None if v is None else len(v.encode()) for v in vals]
+        assert [r["n"] for r in got] == chars, typ
+        assert [r["m"] for r in got] == octets and [r["o"] for r in got] == octets, typ
+        df = ia.from_arrow(t).select(F.col("s").str.len_bytes().alias("b")).to_arrow()
+        assert df.column("b").to_pylist() == octets, typ

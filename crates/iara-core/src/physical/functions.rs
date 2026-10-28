@@ -256,7 +256,15 @@ fn eval_arrays(func: ScalarFunc, args: &[ColumnarValue], m: usize, dt: &DataType
             };
             Arc::new(out)
         }
-        Trim => map_str_ref(arr(0)?.as_string::<i32>(), str::trim).clone(),
+        OctetLength => {
+            let a = arr(0)?;
+            let out = match a.as_string_view_opt() {
+                Some(v) => v.views().iter().map(|&view| view as u32 as i64).collect::<Vec<_>>(),
+                None => a.as_string::<i32>().value_offsets().windows(2).map(|w| (w[1] - w[0]) as i64).collect(),
+            };
+            Arc::new(Int64Array::new(out.into(), a.nulls().cloned()))
+        }
+        Trim =>map_str_ref(arr(0)?.as_string::<i32>(), str::trim).clone(),
         LTrim => map_str_ref(arr(0)?.as_string::<i32>(), str::trim_start).clone(),
         RTrim => map_str_ref(arr(0)?.as_string::<i32>(), str::trim_end).clone(),
         Reverse => map_str(arr(0)?.as_string::<i32>(), |s| Some(s.chars().rev().collect())),

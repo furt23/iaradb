@@ -638,6 +638,9 @@ class _StrNamespace:
     def len_chars(self) -> Expr:
         return self._x._f("length")
 
+    def len_bytes(self) -> Expr:
+        return self._x._f("octet_length")
+
     def strip_chars(self) -> Expr:
         return self._x._f("trim")
 
