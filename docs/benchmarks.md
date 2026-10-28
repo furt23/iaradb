@@ -91,26 +91,26 @@ Nineteen DataFrame jobs (`benchmarks/realistic/`) on TPC-H SF100 tables, `hits.p
 |---|---:|---:|
 | csv_groupby | 3.38 s / 171 MB | 6.23 s / 525 MB |
 | csv_big_aggregate | 110.7 s / 140 MB | 335.16 s / 234 MB |
-| csv_to_parquet | 14.17 s / 10436 MB | 12.85 s / 1228 MB |
+| csv_to_parquet | 9.8 s / 2277 MB | 12.49 s / 2151 MB |
 | ndjson_groupby | 9.36 s / 323 MB | 8.08 s / 616 MB |
 | many_small_files | 1.02 s / 251 MB | 2.12 s / 778 MB |
-| feature_engineering_sink | 78.68 s / 7067 MB | 55.03 s / 2707 MB |
+| feature_engineering_sink | 55.7 s / 5531 MB | 62.16 s / 2633 MB |
 | full_sort_sink | 28.22 s / 36836 MB | 24.67 s / 40037 MB |
-| to_pandas | out of memory | 45.7 s / 60162 MB |
-| top3_per_customer | 9.07 s / 40401 MB | 5.03 s / 28463 MB |
+| to_pandas | 11.32 s / 53035 MB | 40.51 s / 60448 MB |
+| top3_per_customer | 4.95 s / 41947 MB | 5.33 s / 28883 MB |
 | sessionize | 6.17 s / 7493 MB | 7.92 s / 10133 MB |
 | rolling_daily | 0.17 s / 143 MB | 0.11 s / 371 MB |
 | url_domains | 3.87 s / 3232 MB | 4.78 s / 9625 MB |
 | word_count | 12.06 s / 485 MB | 13.7 s / 1306 MB |
 | search_phrase_contains | 0.74 s / 359 MB | 0.73 s / 862 MB |
-| string_key_join | 4.08 s / 10051 MB | 4.99 s / 2924 MB |
+| string_key_join | 4.21 s / 2551 MB | 4.99 s / 2924 MB |
 | dedupe_pairs | 3.34 s / 20214 MB | 3.12 s / 20881 MB |
 | wide_filter | 0.18 s / 1589 MB | 0.14 s / 775 MB |
 | conditional_aggs | 0.48 s / 171 MB | 0.3 s / 416 MB |
 | eager_session | 4.87 s / 38640 MB | 11.56 s / 54713 MB |
 
 
-Iara runs out of memory on `to_pandas` and is slower on `top3_per_customer` (a ranked window over 15M groups) and `feature_engineering_sink`. The runs that follow another job pay for the previous one's page cache, so compare a job's times only within the same order.
+Iara uses more memory than Polars on `top3_per_customer` (a ranked window over 10M groups holds its whole input, as Polars does, with about 45% more at the peak) and on `feature_engineering_sink` (row groups held by the Parquet writer while it encodes). The runs that follow another job pay for the previous one's page cache, so compare a job's times only within the same order.
 
 ## Reproducing
 
