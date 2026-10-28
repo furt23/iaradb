@@ -161,20 +161,18 @@ fn date_trunc_ts(dt: NaiveDateTime, unit: &str) -> Result<NaiveDateTime> {
 /// bytes it may point into are ASCII, else counted (NULL rows get 0 under
 /// their NULL).
 fn view_char_lengths(v: &StringViewArray) -> Int64Array {
-    let ascii = v.data_buffers().iter().all(|b| b.as_slice().is_ascii());
+    // per buffer: one non-ASCII string sends only its own buffer's strings to the slow count
+    let ascii: Vec<bool> = v.data_buffers().iter().map(|b| b.as_slice().is_ascii()).collect();
     let vals: Vec<i64> = v
         .views()
         .iter()
         .enumerate()
         .map(|(i, &view)| {
             let len = view as u32 as usize;
-            // inline strings of up to 12 bytes sit in the view after the length
-            let inline = len <= 12;
-            if inline && (view >> 32).to_le_bytes()[..len].is_ascii() || !inline && ascii {
-                len as i64
-            } else {
-                v.value(i).chars().count() as i64
-            }
+            // inline strings of up to 12 bytes sit in the view after the length;
+            // longer ones name their buffer in bits 64..96
+            let plain = if len <= 12 { (view >> 32).to_le_bytes()[..len].is_ascii() } else { ascii[(view >> 64) as u32 as usize] };
+            if plain { len as i64 } else { v.value(i).chars().count() as i64 }
         })
         .collect();
     Int64Array::new(vals.into(), v.nulls().cloned())
