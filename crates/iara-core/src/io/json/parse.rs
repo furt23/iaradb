@@ -18,6 +18,40 @@ pub enum Value<'a> {
 
 pub type Member<'a> = (Cow<'a, str>, Value<'a>);
 
+/// A decimal number as Rust's `f64` parser reads one (what was accepted
+/// before): `[+-]? (digits [. digits*] | . digits) [(e|E) [+-]? digits]`,
+/// checked without converting it (the column converts it once).
+fn is_number(b: &[u8]) -> bool {
+    let digits = |i: &mut usize| {
+        let s = *i;
+        while *i < b.len() && b[*i].is_ascii_digit() {
+            *i += 1;
+        }
+        *i > s
+    };
+    let mut i = usize::from(matches!(b.first(), Some(b'+' | b'-')));
+    let int = digits(&mut i);
+    let frac = if b.get(i) == Some(&b'.') {
+        i += 1;
+        digits(&mut i)
+    } else {
+        false
+    };
+    if !int && !frac {
+        return false;
+    }
+    if matches!(b.get(i), Some(b'e' | b'E')) {
+        i += 1;
+        if matches!(b.get(i), Some(b'+' | b'-')) {
+            i += 1;
+        }
+        if !digits(&mut i) {
+            return false;
+        }
+    }
+    i == b.len()
+}
+
 fn err(msg: impl std::fmt::Display, at: usize) -> WhError {
     WhError::Execution(format!("invalid JSON: {msg} (at byte {at} of the record)"))
 }
@@ -25,11 +59,30 @@ fn err(msg: impl std::fmt::Display, at: usize) -> WhError {
 pub struct Parser<'a> {
     s: &'a [u8],
     pos: usize,
+    /// `s` is known to be UTF-8: its strings are not checked one by one
+    utf8: bool,
 }
 
 impl<'a> Parser<'a> {
     pub fn new(s: &'a [u8]) -> Self {
-        Self { s, pos: 0 }
+        Self { s, pos: 0, utf8: false }
+    }
+
+    /// A parser over text already checked to be UTF-8 (all of it at once is
+    /// much faster than every string on its own).
+    pub fn utf8(s: &'a [u8], checked: bool) -> Self {
+        Self { s, pos: 0, utf8: checked }
+    }
+
+    /// `s[start..end]` as text; both ends are at ASCII bytes of the JSON
+    /// syntax (quotes, brackets, a number's ends), so on char boundaries.
+    fn text(&self, start: usize, end: usize) -> Result<&'a str> {
+        let b = &self.s[start..end];
+        if self.utf8 {
+            // SAFETY: `s` is UTF-8 and both ends are char boundaries
+            return Ok(unsafe { std::str::from_utf8_unchecked(b) });
+        }
+        std::str::from_utf8(b).map_err(|_| err("invalid UTF-8", start))
     }
 
     pub fn at_end(&mut self) -> bool {
@@ -90,7 +143,7 @@ impl<'a> Parser<'a> {
         self.skip_ws();
         let start = self.pos;
         self.value()?;
-        Ok(std::str::from_utf8(&self.s[start..self.pos]).map_err(|_| err("invalid UTF-8", start))?)
+        self.text(start, self.pos)
     }
 
     /// The whole of `text` as one value (nothing may follow it).
@@ -156,8 +209,8 @@ impl<'a> Parser<'a> {
         while self.pos < self.s.len() && matches!(self.s[self.pos], b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E') {
             self.pos += 1;
         }
-        let text = std::str::from_utf8(&self.s[start..self.pos]).expect("ascii");
-        if text.parse::<f64>().is_err() {
+        let text = self.text(start, self.pos)?;
+        if !is_number(text.as_bytes()) {
             return Err(err(format!("bad number '{text}'"), start));
         }
         Ok(Value::Num(text))
@@ -174,8 +227,7 @@ impl<'a> Parser<'a> {
                     depth -= 1;
                     if depth == 0 {
                         self.pos += 1;
-                        let text = std::str::from_utf8(&self.s[start..self.pos]).map_err(|_| err("invalid UTF-8", start))?;
-                        return Ok(Value::Raw(text));
+                        return Ok(Value::Raw(self.text(start, self.pos)?));
                     }
                 }
                 b'"' => {
@@ -216,7 +268,7 @@ impl<'a> Parser<'a> {
         match self.s.get(i) {
             Some(b'"') => {
                 self.pos = i + 1;
-                std::str::from_utf8(&self.s[start..i]).map(Cow::Borrowed).map_err(|_| err("invalid UTF-8", start))
+                self.text(start, i).map(Cow::Borrowed)
             }
             Some(_) => self.escaped(start, i),
             None => Err(err("unterminated string", start - 1)),
@@ -285,6 +337,16 @@ impl<'a> Parser<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn numbers_as_f64_reads_them() {
+        for t in ["0", "-12", "+7", "3.25", "1.", ".5", "1e9", "2.5E-3", "-0.0e+1"] {
+            assert!(is_number(t.as_bytes()) && t.parse::<f64>().is_ok(), "{t}");
+        }
+        for t in ["", "-", ".", "1e", "1e+", "1-2", "1.2.3", "e5", "--1", "1+"] {
+            assert!(!is_number(t.as_bytes()) && t.parse::<f64>().is_err(), "{t}");
+        }
+    }
 
     fn members(line: &str) -> Vec<(String, Value<'_>)> {
         let mut out = vec![];

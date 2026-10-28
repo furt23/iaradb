@@ -76,7 +76,7 @@ impl Column {
 pub struct BatchBuilder {
     out: SchemaRef,
     columns: Vec<Column>,
-    slot: HashMap<String, usize>,
+    slot: HashMap<String, usize, foldhash::fast::FixedState>,
     rows: usize,
     found: Vec<Option<usize>>,
 }

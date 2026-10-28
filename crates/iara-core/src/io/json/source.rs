@@ -77,8 +77,10 @@ impl JsonSource {
         }
         let mut batch = BatchBuilder::new(self.out_schema.clone())?;
         let mut members: Vec<Member> = vec![];
+        // all of it checked at once; invalid text is found again, with its place, string by string
+        let utf8 = std::str::from_utf8(data).is_ok();
         for line in records(data) {
-            let mut p = Parser::new(line);
+            let mut p = Parser::utf8(line, utf8);
             p.object(&mut members).map_err(|e| with_hint(e, line))?;
             if !p.at_end() {
                 return Err(with_hint(crate::error::WhError::Execution("invalid JSON: text after the object".into()), line));
@@ -97,7 +99,7 @@ impl JsonSource {
     fn array(&self, data: &[u8], emit: Emit<'_>) -> Result<()> {
         let mut batch = BatchBuilder::new(self.out_schema.clone())?;
         let mut members: Vec<Member> = vec![];
-        let mut p = Parser::new(data);
+        let mut p = Parser::utf8(data, std::str::from_utf8(data).is_ok());
         let mut more = p.array_open()?;
         let mut rows = 0;
         while more {
