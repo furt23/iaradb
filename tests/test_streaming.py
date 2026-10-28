@@ -129,6 +129,13 @@ def test_memory_limit_spills_and_matches(ctx: ia.SessionContext, limit) -> None:
     assert profile["spilled_bytes"] > 0 and 0 < profile["memory_peak"]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="the allocator's figures come from jemalloc (Linux, macOS)")
+def test_memory_usage_reports_the_allocator() -> None:
+    ia.sql("select sum(x) as s from t", t=pa.table({"x": np.arange(N)})).collect()
+    u = ia.memory_usage()
+    assert 0 < u["heap"] <= u["resident"]
+
+
 def test_memory_limits_parse() -> None:
     try:
         ia.set_memory_limit(123456)

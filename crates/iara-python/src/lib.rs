@@ -31,6 +31,10 @@ mod storage;
 mod stream;
 mod window;
 
+#[cfg(unix)]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+#[cfg(not(unix))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 

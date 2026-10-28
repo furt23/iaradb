@@ -19,7 +19,8 @@ jobs:
       matrix:
         include:
           - { os: ubuntu-latest, target: x86_64, manylinux: auto }
-          - { os: ubuntu-24.04-arm, target: aarch64, manylinux: auto }
+          # jemalloc for 64 KB pages too: a build for 4 KB pages crashes on ARM kernels with 64 KB pages
+          - { os: ubuntu-24.04-arm, target: aarch64, manylinux: auto, docker_options: "-e JEMALLOC_SYS_WITH_LG_PAGE=16" }
           - { os: macos-13, target: x86_64 }
           - { os: macos-14, target: aarch64 }
           - { os: windows-latest, target: x64 }
@@ -29,6 +30,7 @@ jobs:
         with:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux || 'auto' }}
+          docker-options: ${{ matrix.docker_options }}
           args: --release --out dist
       - uses: actions/upload-artifact@v4
         with:

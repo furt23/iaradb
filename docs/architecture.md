@@ -56,7 +56,9 @@ Aggregation tables, join build sides, sort buffers and window buffers reserve me
 - sort writes sorted runs and merges them;
 - window functions spill by `PARTITION BY` partition.
 
-A single partition must still fit in memory. `iara.memory_usage()` returns `{limit, used, peak, spilled}`.
+A single partition must still fit in memory. `iara.memory_usage()` returns `{limit, used, peak, spilled}`, and on Linux and macOS `heap` (bytes the allocator has handed out) and `resident` (bytes it holds in memory).
+
+The allocator is jemalloc on Linux and macOS and mimalloc on Windows. jemalloc gives blocks of 8 MB and more back to the system as they are freed, so the process holds close to what it uses; queries that rebuild large hash tables pay for faulting that memory in again.
 
 ## Running queries
 

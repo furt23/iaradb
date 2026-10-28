@@ -14,6 +14,14 @@ arrow.workspace = true
 chrono.workspace = true
 pyo3 = { version = "0.29", features = ["abi3-py310", "extension-module"] }
 parking_lot.workspace = true
+
+# the global allocator: jemalloc on Linux and macOS (as Polars and DuckDB),
+# mimalloc on Windows; jemalloc's TLS model must allow loading by dlopen
+[target.'cfg(unix)'.dependencies]
+tikv-jemallocator = { version = "0.6", features = ["disable_initial_exec_tls"] }
+tikv-jemalloc-sys = { version = "0.6", features = ["stats"] }
+
+[target.'cfg(not(unix))'.dependencies]
 mimalloc = { version = "0.1", default-features = false }
 
 [features]
