@@ -258,21 +258,13 @@ impl Layout {
         F: Fn(Range<usize>, Range<usize>, &mut [T]) -> Result<()> + Sync,
     {
         let mut out = vec![init; self.n];
-        let target = (self.n / (rayon::current_num_threads() * 4)).max(4096);
-        let units = self.units(split, target);
-        // consecutive units grouped into tasks of about `target` rows
+        let units = self.units(split);
         let mut tasks: Vec<(&[Unit], &mut [T])> = vec![];
         let mut rest: &mut [T] = &mut out;
-        let mut i = 0;
-        while i < units.len() {
-            let first = i;
-            let start = units[i].1.start;
-            while i < units.len() && (i == first || units[i].1.end - start <= target) {
-                i += 1;
-            }
-            let len = units[i - 1].1.end - start;
+        for t in tasks_of(&units, self.task_rows()) {
+            let len = t[t.len() - 1].1.end - t[0].1.start;
             let (head, tail) = std::mem::take(&mut rest).split_at_mut(len);
-            tasks.push((&units[first..i], head));
+            tasks.push((t, head));
             rest = tail;
         }
         tasks.into_par_iter().try_for_each(|(units, slice)| {
@@ -282,8 +274,44 @@ impl Layout {
         Ok(out)
     }
 
-    /// (partition, rows) work units covering `0..n` in order.
-    fn units(&self, split: bool, target: usize) -> Vec<Unit> {
+    /// [`Layout::for_chunks`] with the outputs in input order: every task
+    /// fills a buffer of its own and writes it to its rows' input positions,
+    /// so neither a sorted copy of the output nor the inverse permutation is
+    /// held next to it.
+    pub fn for_chunks_unsorted<T, F>(&self, init: T, split: bool, f: F) -> Result<Vec<T>>
+    where
+        T: Copy + Send + Sync,
+        F: Fn(Range<usize>, Range<usize>, &mut [T]) -> Result<()> + Sync,
+    {
+        let Some(perm) = &self.perm else {
+            return self.for_chunks(init, split, f);
+        };
+        let mut out = vec![init; self.n];
+        let dst = Out(out.as_mut_ptr());
+        let units = self.units(split);
+        tasks_of(&units, self.task_rows()).into_par_iter().try_for_each(|units| -> Result<()> {
+            let dst = dst;
+            let base = units[0].1.start;
+            let mut buf = vec![init; units[units.len() - 1].1.end - base];
+            units.iter().try_for_each(|(p, r)| f(p.clone(), r.clone(), &mut buf[r.start - base..r.end - base]))?;
+            for (k, v) in buf.into_iter().enumerate() {
+                // SAFETY: `perm` is a permutation of 0..n: every input position is written once
+                unsafe { dst.0.add(perm[base + k] as usize).write(v) };
+            }
+            Ok(())
+        })?;
+        Ok(out)
+    }
+
+    /// Rows per parallel task.
+    fn task_rows(&self) -> usize {
+        (self.n / (rayon::current_num_threads() * 4)).max(4096)
+    }
+
+    /// (partition, rows) work units covering `0..n` in order: with `split`,
+    /// partitions larger than a task are cut.
+    fn units(&self, split: bool) -> Vec<Unit> {
+        let target = self.task_rows();
         let mut units = Vec::with_capacity(self.partitions.len());
         for p in &self.partitions {
             if !split || p.len() <= target {
@@ -304,12 +332,32 @@ impl Layout {
 /// A partition and the rows of it that one call fills.
 type Unit = (Range<usize>, Range<usize>);
 
+/// Consecutive units grouped into tasks of about `target` rows.
+fn tasks_of(units: &[Unit], target: usize) -> Vec<&[Unit]> {
+    let mut tasks = vec![];
+    let mut i = 0;
+    while i < units.len() {
+        let first = i;
+        let start = units[i].1.start;
+        while i < units.len() && (i == first || units[i].1.end - start <= target) {
+            i += 1;
+        }
+        tasks.push(&units[first..i]);
+    }
+    tasks
+}
+
 /// A pointer written from several threads at disjoint positions.
-#[derive(Clone, Copy)]
-struct Out(*mut u32);
+struct Out<T>(*mut T);
+impl<T> Clone for Out<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<T> Copy for Out<T> {}
 // SAFETY: every thread writes positions no other thread writes
-unsafe impl Send for Out {}
-unsafe impl Sync for Out {}
+unsafe impl<T: Send> Send for Out<T> {}
+unsafe impl<T: Send> Sync for Out<T> {}
 
 /// `take(a, idx)` in parallel chunks (the indices are shared, not copied).
 fn par_take(a: &ArrayRef, idx: &ScalarBuffer<u32>) -> Result<ArrayRef> {
@@ -347,6 +395,32 @@ mod tests {
             okeys: vec![],
             oopts: vec![],
             order_key: OnceLock::new(),
+        }
+    }
+
+    #[test]
+    fn chunks_in_input_order_match_the_sorted_ones_unsorted() {
+        use std::sync::Arc;
+
+        use arrow::array::{AsArray, Int64Array};
+        use arrow::datatypes::Int64Type;
+
+        let n = 1 << 20;
+        let mut l = layout(n);
+        // an odd multiplier permutes 0..2^20
+        l.perm = Some(ScalarBuffer::from((0..n as u64).map(|i| (i * 2_654_435_761 % n as u64) as u32).collect::<Vec<_>>()));
+        l.partitions = (0..n).step_by(1000).map(|s| s..(s + 1000).min(n)).collect();
+        let fill = |p: Range<usize>, rows: Range<usize>, out: &mut [i64]| {
+            for (k, o) in out.iter_mut().enumerate() {
+                *o = (rows.start + k - p.start) as i64 * 7 + p.start as i64;
+            }
+            Ok(())
+        };
+        for split in [false, true] {
+            let sorted = l.for_chunks(0i64, split, fill).unwrap();
+            let want = l.unsort(Arc::new(Int64Array::from(sorted))).unwrap();
+            let got = l.for_chunks_unsorted(0i64, split, fill).unwrap();
+            assert_eq!(want.as_primitive::<Int64Type>().values().as_ref(), &got[..]);
         }
     }
 

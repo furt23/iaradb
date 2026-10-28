@@ -91,10 +91,10 @@ pub fn sort(keys: &[ArrayRef], opts: &[SortOptions]) -> Option<PackedSort> {
     let bits: Vec<u32> = codes.iter().map(|c| c.1).collect();
     let total: u32 = bits.iter().sum();
     let (perm, words) = if total <= 32 {
-        let w = pack::<u64>(&codes, n, total + 32);
+        let w = pack::<u64>(codes, n, total + 32);
         (w.par_iter().with_min_len(MIN_LEN).map(|x| x.low32()).collect(), Words::U64(w))
     } else if total <= 96 {
-        let w = pack::<u128>(&codes, n, total + 32);
+        let w = pack::<u128>(codes, n, total + 32);
         (w.par_iter().with_min_len(MIN_LEN).map(|x| x.low32()).collect(), Words::U128(w))
     } else {
         return None;
@@ -103,13 +103,13 @@ pub fn sort(keys: &[ArrayRef], opts: &[SortOptions]) -> Option<PackedSort> {
 }
 
 /// The packed words (keys, then the row index in the low 32 of `bits`), sorted.
-fn pack<W: Word>(codes: &[(Vec<u64>, u32)], n: usize, bits: u32) -> Vec<W> {
+fn pack<W: Word>(codes: Vec<(Vec<u64>, u32)>, n: usize, bits: u32) -> Vec<W> {
     let mut w: Vec<W> = (0..n)
         .into_par_iter()
         .with_min_len(MIN_LEN)
         .map(|i| {
             let mut acc = W::from(0u64);
-            for (c, bits) in codes {
+            for (c, bits) in &codes {
                 if *bits > 0 {
                     acc = (acc << *bits) | W::from(c[i]);
                 }
@@ -117,6 +117,8 @@ fn pack<W: Word>(codes: &[(Vec<u64>, u32)], n: usize, bits: u32) -> Vec<W> {
             (acc << 32) | W::from(i as u64)
         })
         .collect();
+    // the codes are in the words now: not held through the sort's own copy
+    drop(codes);
     if n >= BUCKET_SORT_MIN {
         w = bucket_sort(w, bits);
     } else if n > 1 << 15 {

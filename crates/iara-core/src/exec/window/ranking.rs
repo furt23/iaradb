@@ -15,7 +15,7 @@ pub fn evaluate(f: &WindowFunctionExpr, layout: &Layout) -> Result<ArrayRef> {
     // peer groups only for the functions that read them
     let ps = || layout.peer_start();
     let pe = || layout.peer_end();
-    let sorted: ArrayRef = match f.func {
+    Ok(match f.func {
         WindowFunc::RowNumber => ints(layout, true, |p, rows, out| {
             for (k, o) in out.iter_mut().enumerate() {
                 *o = (rows.start + k - p.start) as i64 + 1;
@@ -73,14 +73,14 @@ pub fn evaluate(f: &WindowFunctionExpr, layout: &Layout) -> Result<ArrayRef> {
             })?
         }
         other => return Err(WhError::Execution(format!("{} is not a ranking function", other.name()))),
-    };
-    layout.unsort(sorted)
+    })
 }
 
 /// `f(partition, rows, out)` fills the outputs of `rows`; with `split` a
 /// large partition comes in several chunks, otherwise `rows` is all of it.
+/// The outputs come back in input order.
 fn ints(layout: &Layout, split: bool, f: impl Fn(Range<usize>, Range<usize>, &mut [i64]) + Sync) -> Result<ArrayRef> {
-    let v = layout.for_chunks(0i64, split, |p, rows, out| {
+    let v = layout.for_chunks_unsorted(0i64, split, |p, rows, out| {
         f(p, rows, out);
         Ok(())
     })?;
@@ -89,7 +89,7 @@ fn ints(layout: &Layout, split: bool, f: impl Fn(Range<usize>, Range<usize>, &mu
 
 /// Position-based float outputs (always splittable).
 fn floats(layout: &Layout, f: impl Fn(Range<usize>, Range<usize>, &mut [f64]) + Sync) -> Result<ArrayRef> {
-    let v = layout.for_chunks(0f64, true, |p, rows, out| {
+    let v = layout.for_chunks_unsorted(0f64, true, |p, rows, out| {
         f(p, rows, out);
         Ok(())
     })?;
