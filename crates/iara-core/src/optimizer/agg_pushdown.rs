@@ -23,6 +23,10 @@ use crate::physical::planner::{estimate_rows, expr_ndv};
 
 /// Pre-aggregate when the pushed side has at least this many rows per group.
 const MIN_ROWS_PER_GROUP: f64 = 4.0;
+/// Never pre-aggregate into more than this many times the groups of the
+/// aggregation above the join: with few final groups that aggregation is
+/// cheap, and a wide pre-aggregation costs more than the join rows it saves.
+const MAX_GROUP_GROWTH: f64 = 8.0;
 
 /// The join under `plan` (through projections and aliases), and each column
 /// of `plan` as an expression over the join's columns.
@@ -184,7 +188,7 @@ fn try_rewrite(a: &Aggregate) -> Result<Option<LogicalPlan>> {
             }
         }
     }
-    if !worth_it(join_plan, j, right, &extra_cols) {
+    if !worth_it(a, join_plan, j, right, &extra_cols) {
         return Ok(None);
     }
 
@@ -248,8 +252,10 @@ fn try_rewrite(a: &Aggregate) -> Result<Option<LogicalPlan>> {
 /// The join keeps most rows of the pushed side (a foreign key into an
 /// unfiltered table), and that side has several rows per group: at most one
 /// group per distinct join key of the other side, times the distinct values
-/// of the other columns it groups by.
-fn worth_it(join_plan: &LogicalPlan, j: &Join, right: bool, extra_cols: &BTreeSet<usize>) -> bool {
+/// of the other columns it groups by. And those groups are not many more
+/// than the final ones (`GROUP BY c_mktsegment` over orders joined by
+/// customer name keeps the 5 segments, not millions of names).
+fn worth_it(a: &Aggregate, join_plan: &LogicalPlan, j: &Join, right: bool, extra_cols: &BTreeSet<usize>) -> bool {
     let (pushed, other) = if right { (&j.right, &j.left) } else { (&j.left, &j.right) };
     let rows = estimate_rows(pushed);
     let other_rows = estimate_rows(other);
@@ -269,5 +275,11 @@ fn worth_it(join_plan: &LogicalPlan, j: &Join, right: bool, extra_cols: &BTreeSe
         let c = Expr::Column(pushed.schema().column(i - offset));
         groups *= expr_ndv(pushed, &c).unwrap_or(rows).max(1.0);
     }
-    rows >= MIN_ROWS_PER_GROUP * groups.min(rows)
+    let pushed_groups = groups.min(rows);
+    // unknown final groups (a computed key): no limit
+    let top_groups = a.group_by.iter().map(|g| expr_ndv(&a.input, g)).product::<Option<f64>>();
+    if top_groups.is_some_and(|top| pushed_groups > MAX_GROUP_GROWTH * top.max(1.0)) {
+        return false;
+    }
+    rows >= MIN_ROWS_PER_GROUP * pushed_groups
 }

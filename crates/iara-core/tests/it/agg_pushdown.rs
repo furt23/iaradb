@@ -158,6 +158,12 @@ fn grouping_by_a_column_of_the_pushed_side() {
 }
 
 #[test]
+fn few_final_groups() {
+    // 5 nations: pre-aggregating 2000 orders into 50 customers is not worth it (50 > 8 x 5)
+    check("select c.nk, sum(o.ov){f}, count(*){f} from cust c join ord o on c.ck = o.ok group by c.nk order by c.nk", false);
+}
+
+#[test]
 fn not_pushed() {
     let ctx = ctx();
     for sql in [
