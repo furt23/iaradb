@@ -141,11 +141,54 @@ pub struct CountDistinctAcc {
     by_group: OnceLock<ByGroup>,
 }
 
-/// The pairs of each group: `(part, kind, entry)` from `starts[g]` to
-/// `starts[g + 1]`, kind 0 = int, 1 = short, 2 = long.
-struct ByGroup {
+/// Entries sorted by group: those of group `g` are `entries[starts[g]..starts[g + 1]]`
+/// (no `starts` when there are none).
+struct Csr<T> {
     starts: Vec<u32>,
-    entries: Vec<(u16, u8, u128)>,
+    entries: Vec<T>,
+}
+
+impl<T: Copy + Default> Csr<T> {
+    /// `pairs` calls its argument with every (group, entry), the same way each time.
+    fn new(groups: usize, pairs: impl Fn(&mut dyn FnMut(u32, T))) -> Self {
+        let mut starts = vec![0u32; groups + 1];
+        let mut total = 0usize;
+        pairs(&mut |g, _| {
+            starts[g as usize + 1] += 1;
+            total += 1;
+        });
+        if total == 0 {
+            return Self { starts: vec![], entries: vec![] };
+        }
+        for g in 0..groups {
+            starts[g + 1] += starts[g];
+        }
+        let mut at = starts.clone();
+        let mut entries = vec![T::default(); total];
+        pairs(&mut |g, e| {
+            entries[at[g as usize] as usize] = e;
+            at[g as usize] += 1;
+        });
+        Self { starts, entries }
+    }
+
+    fn of(&self, g: u32) -> &[T] {
+        match self.starts.get(g as usize..g as usize + 2) {
+            Some(s) => &self.entries[s[0] as usize..s[1] as usize],
+            None => &[],
+        }
+    }
+}
+
+/// The pairs of each group, by kind. An entry holds the least that finds its
+/// pair again: the part follows from the hash, so it is not stored (an entry
+/// was 32 bytes whatever the kind, and the index of a state with tens of
+/// millions of pairs took gigabytes).
+struct ByGroup {
+    ints: Csr<i64>,
+    shorts: Csr<u128>,
+    /// (hash of the bytes, index into the arena of its part)
+    longs: Csr<(u64, u32)>,
 }
 
 impl ByGroup {
@@ -159,37 +202,11 @@ impl ByGroup {
             })
             .max()
             .map_or(0, |g| g as usize + 1);
-        let mut starts = vec![0u32; groups + 1];
-        let mut count = |g: u32| starts[g as usize + 1] += 1;
-        for p in parts {
-            p.ints.iter().for_each(|e| count(e.0));
-            p.shorts.iter().for_each(|e| count(e.0));
-            p.longs.iter().for_each(|e| count(e.1));
+        Self {
+            ints: Csr::new(groups, |put| parts.iter().for_each(|p| p.ints.iter().for_each(|&(g, v)| put(g, v)))),
+            shorts: Csr::new(groups, |put| parts.iter().for_each(|p| p.shorts.iter().for_each(|&(g, v)| put(g, v)))),
+            longs: Csr::new(groups, |put| parts.iter().for_each(|p| p.longs.iter().for_each(|&(h, g, i)| put(g, (h, i))))),
         }
-        for g in 0..groups {
-            starts[g + 1] += starts[g];
-        }
-        let mut at = starts.clone();
-        let mut entries = vec![(0u16, 0u8, 0u128); starts[groups] as usize];
-        let mut put = |g: u32, e: (u16, u8, u128)| {
-            entries[at[g as usize] as usize] = e;
-            at[g as usize] += 1;
-        };
-        for (pi, p) in parts.iter().enumerate() {
-            let pi = pi as u16;
-            p.ints.iter().for_each(|&(g, v)| put(g, (pi, 0, v as u64 as u128)));
-            p.shorts.iter().for_each(|&(g, v)| put(g, (pi, 1, v)));
-            p.longs.iter().for_each(|&(h, g, i)| put(g, (pi, 2, (h as u128) << 32 | i as u128)));
-        }
-        Self { starts, entries }
-    }
-
-    fn of(&self, g: u32) -> &[(u16, u8, u128)] {
-        let g = g as usize;
-        if g + 1 >= self.starts.len() {
-            return &[];
-        }
-        &self.entries[self.starts[g] as usize..self.starts[g + 1] as usize]
     }
 }
 
@@ -210,22 +227,16 @@ impl CountDistinctAcc {
     fn merge_groups(&mut self, other: &CountDistinctAcc, src: &[u32], dst: &[u32]) {
         let index = other.by_group.get_or_init(|| ByGroup::new(&other.parts));
         for (&s, &d) in src.iter().zip(dst) {
-            for &(p, kind, e) in index.of(s) {
-                match kind {
-                    0 => {
-                        let v = e as u64 as i64;
-                        let h = hash_u64(v as u64);
-                        self.parts[part_of(h)].insert_int(d, v, h);
-                    }
-                    1 => {
-                        let h = hash_u128(e);
-                        self.parts[part_of(h)].insert_short(d, e, h);
-                    }
-                    _ => {
-                        let (h, i) = ((e >> 32) as u64, e as u32);
-                        self.parts[part_of(h)].insert_long(d, other.parts[p as usize].bytes(i), h);
-                    }
-                }
+            for &v in index.ints.of(s) {
+                let h = hash_u64(v as u64);
+                self.parts[part_of(h)].insert_int(d, v, h);
+            }
+            for &v in index.shorts.of(s) {
+                let h = hash_u128(v);
+                self.parts[part_of(h)].insert_short(d, v, h);
+            }
+            for &(h, i) in index.longs.of(s) {
+                self.parts[part_of(h)].insert_long(d, other.parts[part_of(h)].bytes(i), h);
             }
         }
     }
