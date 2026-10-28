@@ -28,9 +28,9 @@ const PARTITION_ROWS: usize = 1 << 15;
 const MAX_PARTITION_BITS: u32 = 11;
 /// Rows ahead of the probed one whose directory word is prefetched (their
 /// entries are prefetched at half this distance).
-const PREFETCH_AHEAD: usize = 16;
+pub(crate) const PREFETCH_AHEAD: usize = 16;
 /// Directories smaller than this (bytes) stay in the cache: no prefetching.
-const PREFETCH_MIN_BYTES: usize = 1 << 18;
+pub(crate) const PREFETCH_MIN_BYTES: usize = 1 << 18;
 /// Build rows per histogram/scatter task.
 const CHUNK_ROWS: usize = 1 << 16;
 
@@ -60,7 +60,7 @@ impl<T> SendPtr<T> {
 }
 
 #[inline(always)]
-fn prefetch<T>(p: *const T) {
+pub(crate) fn prefetch<T>(p: *const T) {
     #[cfg(target_arch = "x86_64")]
     // SAFETY: a prefetch is a hint; it never faults
     unsafe {

@@ -19,6 +19,7 @@ mod functions_p1;
 mod join_filter;
 mod join_order;
 mod join_residual;
+mod join_string_keys;
 mod json_io;
 mod json_nested;
 mod lists;

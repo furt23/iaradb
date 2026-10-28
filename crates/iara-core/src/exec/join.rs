@@ -24,7 +24,7 @@ use rayon::prelude::*;
 use crate::error::{Result, WhError};
 use crate::exec::batch_mem;
 use crate::exec::join_spill::{PartitionedSpill, grace_partitions};
-use crate::exec::join_table::IntTable;
+use crate::exec::join_table::{IntTable, PREFETCH_AHEAD, PREFETCH_MIN_BYTES, prefetch};
 use crate::exec::memory::{self, Reservation};
 use crate::exec::pipeline::{Emit, Operator, Sink};
 use crate::exec::spill::SpillFile;
@@ -85,6 +85,8 @@ struct Packing {
 
 enum BuildKeys {
     Int { table: IntTable, packing: Option<Packing> },
+    /// one string column: its values compared as they are, without a row encoding
+    Str { keys: StringViewArray, hashes: Vec<u64>, chains: Chains },
     Rows { conv: RowConverter, rows: Rows, hashes: Vec<u64>, chains: Chains },
 }
 
@@ -111,6 +113,7 @@ unsafe impl Sync for SendPtr {}
 /// Normalised probe/build keys: either packed i64s or row-format bytes.
 enum KeyBatch {
     Int { values: ScalarBuffer<i64>, valid: Option<Vec<bool>> },
+    Str { keys: StringViewArray, hashes: Vec<u64>, valid: Option<NullBuffer> },
     Rows { rows: Rows, hashes: Vec<u64>, valid: Option<NullBuffer> },
 }
 
@@ -131,10 +134,16 @@ impl JoinHashTable {
         }
         let keys = match ints {
             Some((values, packing)) => BuildKeys::Int { table: IntTable::build(&values, valid.as_ref()), packing },
+            None if key_cols.len() == 1 && is_string(key_cols[0].data_type()) => {
+                let keys = string_views(&key_cols[0])?;
+                let hashes: Vec<u64> = (0..n).into_par_iter().with_min_len(1 << 14).map(|i| hash_bytes(keys.value(i).as_bytes())).collect();
+                let chains = Chains::build(&hashes, valid.as_ref());
+                BuildKeys::Str { keys, hashes, chains }
+            }
             None => rows_keys(&key_cols, valid.as_ref())?,
         };
         if crate::exec::pipeline::profiling() {
-            if let BuildKeys::Rows { chains, .. } = &keys {
+            if let BuildKeys::Rows { chains, .. } | BuildKeys::Str { chains, .. } = &keys {
                 chains.report(n);
             }
         }
@@ -209,6 +218,11 @@ impl JoinHashTable {
                     }
                 }
             }
+            BuildKeys::Str { .. } => {
+                let keys = string_views(&cols[0])?;
+                let hashes = (0..n).map(|i| hash_bytes(keys.value(i).as_bytes())).collect();
+                Ok(KeyBatch::Str { keys, hashes, valid: combined_nulls(cols) })
+            }
             BuildKeys::Rows { conv, .. } => {
                 let rows = conv.convert_columns(cols)?;
                 let hashes = (0..rows.num_rows()).map(|i| hash_bytes(rows.row(i).as_ref())).collect();
@@ -223,6 +237,37 @@ impl JoinHashTable {
         match (&self.keys, kb) {
             (BuildKeys::Int { table, .. }, KeyBatch::Int { values, valid }) => {
                 table.probe(values, valid.as_deref(), on_match)
+            }
+            (BuildKeys::Str { keys: bk, hashes: bh, chains }, KeyBatch::Str { keys, hashes, valid }) => {
+                // a table out of cache: fetch the bucket heads, then the first rows of the chains, ahead of the probe
+                let far = chains.heads.len() * 4 > PREFETCH_MIN_BYTES;
+                let half = PREFETCH_AHEAD / 2;
+                for (i, &h) in hashes.iter().enumerate() {
+                    if far {
+                        if let Some(&ah) = hashes.get(i + PREFETCH_AHEAD) {
+                            prefetch(&chains.heads[ah as usize & chains.mask]);
+                        }
+                        if let Some(&ah) = hashes.get(i + half) {
+                            let first = chains.heads[ah as usize & chains.mask];
+                            if first != 0 {
+                                let b = (first - 1) as usize;
+                                prefetch(&bh[b]);
+                                prefetch(&bk.views()[b]);
+                            }
+                        }
+                    }
+                    if valid.as_ref().is_some_and(|v| v.is_null(i)) {
+                        continue;
+                    }
+                    let mut cur = chains.heads[h as usize & chains.mask];
+                    while cur != 0 {
+                        let b = (cur - 1) as usize;
+                        if bh[b] == h && bk.value(b) == keys.value(i) && !on_match(i, b) {
+                            break;
+                        }
+                        cur = chains.next[b];
+                    }
+                }
             }
             (BuildKeys::Rows { rows: br, hashes: bh, chains, .. }, KeyBatch::Rows { rows, hashes, valid }) => {
                 for (i, &h) in hashes.iter().enumerate() {
@@ -242,6 +287,18 @@ impl JoinHashTable {
             _ => unreachable!(),
         }
     }
+}
+
+fn is_string(t: &DataType) -> bool {
+    matches!(t, DataType::Utf8 | DataType::Utf8View)
+}
+
+/// A string column as views (a `Utf8` column keeps its buffer: only views are made).
+fn string_views(a: &ArrayRef) -> Result<StringViewArray> {
+    Ok(match a.data_type() {
+        DataType::Utf8View => a.as_string_view().clone(),
+        _ => cast(a, &DataType::Utf8View)?.as_string_view().clone(),
+    })
 }
 
 fn rows_keys(cols: &[ArrayRef], valid: Option<&NullBuffer>) -> Result<BuildKeys> {
@@ -458,6 +515,8 @@ impl Sink for JoinBuildSink {
         let batches: Vec<RecordBatch> = all.into_iter().map(|(_, b)| b).collect();
         let t0 = std::time::Instant::now();
         let batch = concat_parallel(&self.schema, &batches)?;
+        // the parts, now copied: not held through the table's build
+        drop(batches);
         let t1 = t0.elapsed();
         let keys = self.key_exprs.iter().map(|e| e.evaluate_array(&batch)).collect::<Result<Vec<_>>>()?;
         let t = JoinHashTable::build(batch, keys, self.track_matches)?.holding(held);
