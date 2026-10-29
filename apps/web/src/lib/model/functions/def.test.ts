@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Call, Expr } from "../ast";
 import { parse } from "../parse";
-import { bind, fail, list, merge, ModelError, noText, type Typed } from "./def";
+import { bind, fail, list, merge, ModelError, needAggregate, noText, variadic, type Typed } from "./def";
 
 function callOf(source: string): Call {
   const [s] = parse(`x = ${source}`).statements;
@@ -83,6 +83,32 @@ describe("noText and fail", () => {
   it("fail throws a ModelError carrying the span", () => {
     const e = exprOf("1");
     expect(() => fail(e, "no")).toThrow(ModelError);
+  });
+});
+
+describe("variadic", () => {
+  it("lets the named keywords through, by name, and refuses the others", () => {
+    expect(Object.keys(variadic(callOf("f(1, 2, default=3)"), ["default"]))).toEqual(["default"]);
+    expect(variadic(callOf("f(1, 2)"))).toEqual({});
+    expect(thrown(() => variadic(callOf("f(1, other=3)"), ["default"]))).toBe("f() has no argument named other");
+    expect(thrown(() => variadic(callOf("f(default=3)")))).toBe("f() has no argument named default");
+  });
+});
+
+describe("needAggregate", () => {
+  const typed = (level: Typed["level"], bare?: Typed["bare"]): Typed => ({ level, sql: ["x"], datasets: [], bare });
+
+  it("takes an aggregation", () => {
+    expect(() => needAggregate("calculate", exprOf("1"), typed("aggregate"))).not.toThrow();
+  });
+
+  it("asks a bare column to be wrapped, pointing at the column", () => {
+    const span = exprOf("1").span;
+    expect(thrown(() => needAggregate("calculate", exprOf("1"), typed("row", { text: "orders.a", span })))).toBe("`orders.a` must be inside an aggregation, e.g. sum(orders.a)");
+  });
+
+  it("refuses a fixed value, naming the function", () => {
+    expect(thrown(() => needAggregate("ytd", exprOf("1"), typed("scalar")))).toBe("ytd() needs a measure or an aggregation like sum(orders.total), not a fixed value");
   });
 });
 

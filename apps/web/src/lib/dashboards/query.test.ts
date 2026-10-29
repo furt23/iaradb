@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { canPick, checkPicks, datasetQuery, filterValueProblem, mergeParams, narrows, optionsQuery, paramValuesOf, pickableIds, quoteIdent } from "./query";
+import { canPick, checkPicks, datasetQuery, datasetRows, filterValueProblem, mergeParams, narrows, optionsQuery, paramValuesOf, pickableIds, quoteIdent, rowsQuery } from "./query";
 import type { ChartWidget, Dataset, FilterWidget, Widget } from "./types";
 
 const sales: Dataset = { name: "sales", sql: "SELECT * FROM sales;", params: {} };
@@ -198,7 +198,7 @@ describe("paramValuesOf", () => {
 
 describe("optionsQuery", () => {
   it("lists a column's distinct values, wrapped like any dataset", () => {
-    const q = optionsQuery({ ...sales, sql: "SELECT * FROM sales -- all" }, 'a"b', {});
+    const q = optionsQuery(datasetRows({ ...sales, sql: "SELECT * FROM sales -- all" }, {}), 'a"b');
     expect(q).toEqual({
       query: 'SELECT DISTINCT "a""b" AS value FROM (\nSELECT * FROM sales -- all\n) AS _d WHERE "a""b" IS NOT NULL ORDER BY 1 LIMIT 500',
       params: {},
@@ -207,8 +207,38 @@ describe("optionsQuery", () => {
 
   it("needs the dataset's own placeholders", () => {
     const d: Dataset = { name: "sales", sql: "SELECT * FROM sales WHERE year = :year", params: {} };
-    expect(optionsQuery(d, "region", {})).toEqual({ missing: ["year"] });
-    expect(optionsQuery(d, "region", { year: "x" })).toMatchObject({ params: { params: { year: "x" } } });
+    expect(optionsQuery(datasetRows(d, {}), "region")).toEqual({ missing: ["year"] });
+    expect(optionsQuery(datasetRows(d, { year: "x" }), "region")).toMatchObject({ params: { params: { year: "x" } } });
+  });
+
+  it("lists the values of any rows, a calendar's too", () => {
+    const rows = { query: "SELECT d AS date FROM calendar", params: { params: { year: 2024 }, param_types: { year: "number" as const } } };
+    expect(optionsQuery(rows, "date")).toEqual({
+      query: 'SELECT DISTINCT "date" AS value FROM (\nSELECT d AS date FROM calendar\n) AS _d WHERE "date" IS NOT NULL ORDER BY 1 LIMIT 500',
+      params: rows.params,
+    });
+  });
+});
+
+describe("datasetRows and rowsQuery", () => {
+  it("give the dataset's statement with its placeholders bound, or the ones missing", () => {
+    const d: Dataset = { name: "sales", sql: "SELECT * FROM sales WHERE year = :year", params: { year: { type: "number" } } };
+    expect(datasetRows(d, { year: "2024" })).toEqual({ query: d.sql, params: { params: { year: 2024 }, param_types: { year: "number" } } });
+    expect(datasetRows(d, {})).toEqual({ missing: ["year"] });
+    expect(datasetRows(sales, {})).toEqual({ query: sales.sql, params: {} });
+  });
+
+  it("narrow rows that are not a dataset's: filters and picks by the name given, and the rows' own parameters", () => {
+    const rows = { query: "SELECT d AS date FROM calendar WHERE y = :year", params: { params: { year: 2024 }, param_types: { year: "number" as const } } };
+    const byDate = filter({ control: "date_range", fields: [{ dataset: "dates", column: "date" }] });
+    const q = rowsQuery("dates", rows, [byDate], { f1: { from: "2024-02-01" } } as never, [{ id: 3, column: "month", value: "2024-03-01" }]);
+    expect(q).toEqual({
+      query: 'SELECT * FROM (\nSELECT d AS date FROM calendar WHERE y = :year\n) AS _d\nWHERE CAST("date" AS DATE) >= :_f0_from\n  AND CAST("month" AS VARCHAR) = :_c3',
+      params: { params: { year: 2024, _f0_from: "2024-02-01", _c3: "2024-03-01" }, param_types: { year: "number", _f0_from: "date", _c3: "text" } },
+    });
+    // a filter on another dataset's column does not apply
+    expect(rowsQuery("other", rows, [byDate], { f1: { from: "2024-02-01" } } as never).query).toBe("SELECT * FROM (\nSELECT d AS date FROM calendar WHERE y = :year\n) AS _d");
+    expect(() => rowsQuery("dates", { query: "SELECT 1; SELECT 2", params: {} }, [], {})).toThrow("a dataset holds one query");
   });
 });
 
@@ -307,6 +337,17 @@ describe("datasetQuery: narrowed by another dataset", () => {
         '\n  AND "region_id" IN (SELECT "id" FROM (\nSELECT * FROM (\nSELECT * FROM regions\n) AS _d\nWHERE CAST("name" AS VARCHAR) = :_c0\n) AS _n0)',
       params: { params: { _f0: "EU", _c2: 2024, _c0: "N" }, param_types: { _f0: "text", _c2: "number", _c0: "text" } },
     });
+  });
+
+  it("compares the column as a DATE when the relationship says so (a timestamp against a calendar's dates)", () => {
+    const calendar = { query: 'SELECT d AS "date" FROM calendar', params: {} };
+    const q = datasetQuery(sales, [], {}, {}, [], [{ column: "sold_at", key: "date", cast: "date", query: calendar, alias: "_n2" }]);
+    expect(q).toEqual({
+      query: `SELECT * FROM (\nSELECT * FROM sales\n) AS _d\nWHERE CAST("sold_at" AS DATE) IN (SELECT "date" FROM (\n${calendar.query}\n) AS _n2)`,
+      params: {},
+    });
+    // without the cast the column is compared as it is
+    expect((datasetQuery(sales, [], {}, {}, [], [{ column: "sold_at", key: "date", query: calendar, alias: "_n2" }]) as { query: string }).query).toContain('WHERE "sold_at" IN (SELECT');
   });
 
   it("is the plain query without semi-joins, and quotes the columns", () => {

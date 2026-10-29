@@ -1,15 +1,20 @@
 /**
- * Stage 4: a model and a request for measures to one SELECT. Every fact (a
- * dataset the measures aggregate) is grouped on its own by the chart's columns,
- * reached through the relationships (facts.ts); this file puts the facts side
- * by side on those columns and renders the measures over their results.
+ * Stage 4: a model and a request for measures to one SELECT. Every fact (the
+ * rows of a dataset that some aggregations read, in one filter context and
+ * along one window) is grouped on its own by the chart's columns, reached
+ * through the relationships (facts.ts); this file puts the facts side by side
+ * on those columns and renders the measures over their results.
  */
 
 import { quoteIdent } from "@/lib/dashboards/query";
 
-import { factSql, keyName, planFacts, type Fact } from "./facts";
+import { guard } from "./calendar";
+import { factSql, keyName, planFacts, type Fact, type Ignore } from "./facts";
+import { pathToOne } from "./graph";
 import { render } from "./parts";
-import type { Model } from "./types";
+import type { Measure, Model, Param, Template } from "./types";
+
+export type { Ignore } from "./facts";
 
 /** a column a chart groups by: `column` of `dataset`, named `as` in the result */
 export interface GroupField {
@@ -19,8 +24,11 @@ export interface GroupField {
 }
 
 export interface ModelQuery {
-  /** the rows of a dataset the query reads, already narrowed by the filters: a query text (called once per dataset the query reads) */
-  source(dataset: string): string;
+  /**
+   * the rows of a dataset the query reads, narrowed by the dashboard's filters and picks except those in
+   * `ignore`: a query text (called once per dataset and ignore set; without `ignore` when there is none)
+   */
+  source(dataset: string, ignore?: Ignore): string;
   x: GroupField | null;
   group: GroupField | null;
   measures: string[];
@@ -35,6 +43,8 @@ export interface Compiled {
   datasets: string[];
   /** for the author: "`<measure>` does not reach <dataset>.<column>: its total repeats" */
   notes: string[];
+  /** the params the SQL uses (`:name`), for the caller to bind */
+  params: Param[];
 }
 
 /**
@@ -47,18 +57,27 @@ function sameKey(a: string, b: string): string {
 }
 
 /**
- * The facts that give the result its rows: those that reach more grouping columns than no other
- * fact does. A fact that reaches fewer only joins in (its total repeats on every row).
- * Without grouping columns the result is one row, so the first fact will do.
+ * The plain facts that give the result its rows: those that reach more grouping columns than no other
+ * plain fact does. A fact that reaches fewer, or reads past the chart's filters, only joins in (its
+ * value repeats). Without grouping columns the result is one row, so the first fact will do.
  */
 function rowSources(facts: Fact[], keyCount: number): number[] {
+  if (keyCount === 0) return [0];
   const reaches = (f: Fact) => f.paths.flatMap((p, i) => (p ? [i] : []));
   const covers = (g: Fact, f: Fact) => reaches(g).length > reaches(f).length && reaches(f).every((i) => g.paths[i]);
-  const all = facts.map((_, i) => i);
-  return keyCount === 0 ? [0] : all.filter((i) => !facts.some((g) => covers(g, facts[i])));
+  const plain = facts.flatMap((f, i) => (f.plain ? [i] : []));
+  return plain.filter((i) => !plain.some((j) => covers(facts[j], facts[i])));
 }
 
-/** throws on no measures, an unknown measure, or a grouping column that no measure's dataset reaches */
+/** `:name` in a piece of SQL */
+const PARAM = /(?<![:\w]):([A-Za-z_]\w*)/g;
+
+/** a measure's template as SQL: an atom by `atomSql`, a rank as RANK() over the chart's x values, within each series */
+function renderTemplate(t: Template, atomSql: (atom: number) => string, series: string | null): string {
+  return render(t, atomSql, (inner) => `RANK() OVER (${series ? `PARTITION BY ${series} ` : ""}ORDER BY (${inner}) DESC NULLS LAST)`);
+}
+
+/** throws on no measures, an unknown measure, a grouping column that no measure's dataset reaches, or a window that cannot run along x */
 export function modelQuery(model: Model, q: ModelQuery): Compiled {
   if (q.measures.length === 0) throw new Error("no measures were asked for");
   if (!Number.isInteger(q.limit) || q.limit < 1) throw new Error("limit must be a positive whole number");
@@ -72,22 +91,26 @@ export function modelQuery(model: Model, q: ModelQuery): Compiled {
   const twice = named.find((n, i) => named.indexOf(n) !== i);
   if (twice !== undefined) throw new Error(`the result would have two columns named ${twice}`);
 
-  const { facts, where } = planFacts(model.relationships, chosen, keys);
-  keys.forEach((k, i) => {
-    if (!facts.some((f) => f.paths[i])) throw new Error(`nothing in ${q.measures.join(", ")} reaches ${k.dataset}.${k.column}`);
-  });
-
-  // each dataset's text is asked for once and used wherever the dataset is
-  const texts = new Map<string, string>();
-  const source = (dataset: string) => {
-    if (!texts.has(dataset)) {
-      const s = q.source(dataset);
-      // a `--` comment at the end of the source would swallow the closing parenthesis
-      texts.set(dataset, s.includes("--") ? `\n${s}\n` : s);
+  const reaching = (m: Measure, k: GroupField) => m.datasets.every((d) => pathToOne(model.relationships, d, k.dataset));
+  keys.forEach((k) => {
+    if (!chosen.some((m) => m.datasets.some((d) => pathToOne(model.relationships, d, k.dataset)))) {
+      throw new Error(`nothing in ${q.measures.join(", ")} reaches ${k.dataset}.${k.column}`);
     }
-    return texts.get(dataset)!;
+  });
+  const { facts, where } = planFacts(model, chosen, keys, q.x !== null);
+
+  // each dataset's text is asked for once per set of filters it leaves out, and used wherever it is
+  const texts = new Map<string, string>();
+  const read = new Set<string>();
+  const source = (dataset: string, ignore?: Ignore) => {
+    const id = ignore ? `${dataset}\0${JSON.stringify(ignore)}` : dataset;
+    if (!texts.has(id)) {
+      read.add(dataset);
+      texts.set(id, guard(ignore ? q.source(dataset, ignore) : q.source(dataset)));
+    }
+    return texts.get(id)!;
   };
-  facts.forEach((f) => source(f.dataset));
+  facts.forEach((f) => source(f.dataset, f.ignore));
   const subqueries = facts.map((f) => factSql(f, keys, source));
 
   // one fact is a subquery; several are named, because their keys and their values are both read
@@ -107,33 +130,42 @@ export function modelQuery(model: Model, q: ModelQuery): Compiled {
     base = `(${rows.map(part).join(" UNION ")}) AS _k`;
   }
   const joined = facts.flatMap((f, i) => {
-    if (rows.length === 1 && rows[0] === i) return [];
+    // a fact with nothing to read only gives rows
+    if ((rows.length === 1 && rows[0] === i) || f.atoms.length === 0) return [];
     const shared = f.paths.flatMap((p, k) => (p ? [k] : []));
     if (shared.length === 0) return [` CROSS JOIN ${from(i)}`];
     return [` LEFT JOIN ${from(i)} ON ${shared.map((k) => sameKey(key(k), `_q${i}.${keyName(k)}`)).join(" AND ")}`];
   });
 
-  const select = [
-    ...keys.map((k, i) => `${key(i)} AS ${quoteIdent(k.as)}`),
-    ...chosen.map((m) => {
-      const value = render(m.expr, (a) => {
+  // a rank stands within each series
+  const series = q.group ? key(keys.length - 1) : null;
+  const values = chosen.map((m) =>
+    renderTemplate(
+      m.expr,
+      (a) => {
         const { fact, alias } = where(m.atoms[a]);
         return `_q${fact}.${quoteIdent(alias)}`;
-      });
-      return `${value} AS ${quoteIdent(m.name)}`;
-    }),
-  ];
+      },
+      series,
+    ),
+  );
+  const select = [...keys.map((k, i) => `${key(i)} AS ${quoteIdent(k.as)}`), ...chosen.map((m, i) => `${values[i]} AS ${quoteIdent(m.name)}`)];
   const order = keys.length === 0 ? "" : ` ORDER BY ${q.order === "x" ? keys.map((_, i) => key(i)).join(", ") : `${quoteIdent(chosen[0].name)} DESC NULLS LAST`}`;
   const withs = several ? `WITH ${subqueries.map((s, i) => `_q${i} AS (${s})`).join(", ")} ` : "";
 
   const notes = chosen.flatMap((m) =>
-    keys.flatMap((k, i) =>
-      m.datasets.some((d) => !facts.find((f) => f.dataset === d)!.paths[i]) ? [`\`${m.name}\` does not reach ${k.dataset}.${k.column}: its total repeats`] : [],
-    ),
+    keys.flatMap((k) => (reaching(m, k) ? [] : [`\`${m.name}\` does not reach ${k.dataset}.${k.column}: its total repeats`])),
   );
+
+  // the pieces of SQL the model wrote, as they are emitted
+  const used = new Set<string>();
+  [...facts.flatMap((f) => [...f.atoms.map((a) => a.sql), ...f.filters.map((c) => c.sql)]), ...values].forEach((s) => {
+    for (const [, name] of s.matchAll(PARAM)) used.add(name);
+  });
   return {
     sql: `${withs}SELECT ${select.join(", ")} FROM ${base}${joined.join("")}${order} LIMIT ${q.limit}`,
-    datasets: [...texts.keys()],
+    datasets: [...read],
     notes,
+    params: model.params.filter((p) => used.has(p.name)),
   };
 }

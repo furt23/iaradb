@@ -8,6 +8,8 @@ import { detectParams, mergeSpecs } from "@/features/queries/queryParams";
 import { ID } from "@/lib/dashboards/config";
 import { datasetStatement } from "@/lib/dashboards/query";
 import type { Dashboard, PublishedDashboard, Share, ViewDashboard } from "@/lib/dashboards/types";
+import { checkModel } from "@/lib/model/check";
+import type { Model } from "@/lib/model/types";
 
 import type { StudioUser } from "../auth/access";
 import { dataDir } from "../compute/store";
@@ -37,10 +39,18 @@ function checkedShare(share: Share): Share {
   return { kind: "emails", emails };
 }
 
+/** The model of a dashboard, checked against its datasets (whose columns are not known here); null: it has none. */
+function modelOf(model: string, datasets: { name: string }[]): Model | null {
+  return model.trim() ? checkModel(model, Object.fromEntries(datasets.map((d) => [d.name, null]))).model : null;
+}
+
 /** Why a dashboard cannot be published yet (empty: it can). */
 function problemsOf(d: Dashboard): string[] {
   const out = d.problems.map((p) => `${p.file}: ${p.error}`);
   const datasets = new Set(d.datasets.map((x) => x.name));
+  // a filter can be on a calendar's column, or set a measure's parameter
+  const model = modelOf(d.model, d.datasets);
+  const filterable = new Set([...datasets, ...(model?.calendars.map((c) => c.name) ?? [])]);
   for (const x of d.datasets) {
     try {
       datasetStatement(x.sql);
@@ -48,11 +58,11 @@ function problemsOf(d: Dashboard): string[] {
       out.push(`dataset ${x.name}: ${(e as Error).message}`);
     }
   }
-  const placeholders = new Set(d.datasets.flatMap((x) => detectParams(x.sql)));
+  const placeholders = new Set([...d.datasets.flatMap((x) => detectParams(x.sql)), ...(model?.params.map((p) => p.name) ?? [])]);
   for (const w of d.widgets) {
     if ((w.kind === "chart" || w.kind === "table") && !datasets.has(w.dataset)) out.push(`widget ${w.id}: there is no dataset ${w.dataset}`);
     if (w.kind !== "filter") continue;
-    for (const f of w.fields ?? []) if (!datasets.has(f.dataset)) out.push(`filter ${w.id}: there is no dataset ${f.dataset}`);
+    for (const f of w.fields ?? []) if (!filterable.has(f.dataset)) out.push(`filter ${w.id}: there is no dataset ${f.dataset}`);
     if (w.param && !placeholders.has(w.param)) out.push(`filter ${w.id}: no dataset has the placeholder :${w.param}`);
   }
   const widgets = new Set(d.widgets.map((w) => w.id));
@@ -123,10 +133,17 @@ export function canView(p: PublishedDashboard, user: StudioUser): boolean {
   return !user.viewer || p.share.kind === "team" || p.share.emails.includes(user.email.trim().toLowerCase());
 }
 
-/** What a viewer's browser receives: no datasets, so no SQL, and no model. */
+/**
+ * What a viewer's browser receives: no datasets, so no SQL, and no model. Only
+ * the type and default of the model's parameters go out, so that a filter can be
+ * drawn for a measure's parameter; a dataset's placeholder of the same name wins.
+ */
 export function viewOf(p: PublishedDashboard): ViewDashboard {
   const params: ParamSpecs = {};
   const specs = p.datasets.map((d) => mergeSpecs(detectParams(d.sql), d.params));
+  for (const m of modelOf(p.model, p.datasets)?.params ?? []) {
+    if (!specs.some((s) => Object.hasOwn(s, m.name))) params[m.name] = { type: typeof m.default === "number" ? "number" : "text", default: m.default };
+  }
   for (const w of p.widgets) {
     if (w.kind !== "filter" || !w.param) continue;
     const spec = specs.find((s) => Object.hasOwn(s, w.param!))?.[w.param];

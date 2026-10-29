@@ -1,7 +1,7 @@
 /** Conditions and safe division. */
 
-import { sql } from "../parts";
-import { bind, merge, noText, type FnDef } from "./def";
+import { sql, type Parts } from "../parts";
+import { bind, fail, merge, noText, variadic, type FnDef } from "./def";
 
 export const LOGIC_FUNCTIONS: readonly FnDef[] = [
   {
@@ -32,6 +32,23 @@ export const LOGIC_FUNCTIONS: readonly FnDef[] = [
         // the divisor is written twice: one atom once the measure numbers them
         sql: sql`CASE WHEN (${den}) = 0 OR (${den}) IS NULL THEN ${alternate} ELSE CAST((${num}) AS DOUBLE) / (${den}) END`,
       };
+    },
+  },
+  {
+    kind: "expr",
+    name: "switch",
+    signature: "switch(condition1, value1, condition2, value2, ..., default=None)",
+    doc: 'The value after the first condition that holds, else `default` (empty without one). Example: switch(sum(orders.total) > 1000, "high", sum(orders.total) > 100, "medium", default="low")',
+    check(call, cx) {
+      const { default: fallback } = variadic(call, ["default"]);
+      const n = call.args.length;
+      if (n < 2) fail(call, "switch() needs at least one condition and its value: switch(condition, value, default=other)");
+      if (n % 2 !== 0) fail(call.args[n - 1], "switch() takes conditions and values in pairs: this condition has no value");
+      const parts = [...call.args, ...(fallback ? [fallback] : [])].map((node) => ({ node, typed: cx.expr(node) }));
+      let out: Parts = ["CASE"];
+      for (let i = 0; i < n; i += 2) out = sql`${out} WHEN ${parts[i].typed.sql} THEN ${parts[i + 1].typed.sql}`;
+      if (fallback) out = sql`${out} ELSE ${parts[n].typed.sql}`;
+      return { ...merge(parts), sql: sql`${out} END` };
     },
   },
 ];

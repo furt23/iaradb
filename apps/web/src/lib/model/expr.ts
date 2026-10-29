@@ -9,7 +9,7 @@ import type { Attr, Binary, Call, Expr, Name, Unary } from "./ast";
 import { fail, merge, noText, type FnCx, type Typed } from "./functions/def";
 import { FUNCTIONS, PLANNED } from "./functions/registry";
 import { partsOf, sql, type Parts } from "./parts";
-import type { ColumnRef, Measure, Relationship, Schema } from "./types";
+import type { Calendar, ColumnRef, Measure, Param, Relationship, Schema } from "./types";
 import { quoteIdent } from "@/lib/dashboards/query";
 
 /** What a name defined by an earlier line stands for. */
@@ -20,9 +20,13 @@ export type Entry =
   | { kind: "broken" };
 
 export interface Env {
+  /** the datasets' columns, calendars' included */
   schema: Schema;
   names: ReadonlyMap<string, Entry>;
   relationships: readonly Relationship[];
+  calendars: readonly Calendar[];
+  /** grows as `param(...)` calls are checked */
+  params: Param[];
 }
 
 const ARITHMETIC = new Set(["+", "-", "*", "/", "%"]);
@@ -97,18 +101,21 @@ function checkBinary(node: Binary, cx: FnCx): Typed {
   return { ...merge([{ node: node.left, typed: l }, { node: node.right, typed: r }]), sql: binarySql(node.op, l.sql, r.sql) };
 }
 
-function checkCall(node: Call, cx: FnCx, wholeValue: boolean): Typed {
+function checkCall(node: Call, cx: FnCx, wholeValue: boolean, assigned?: string): Typed {
   const def = FUNCTIONS.get(node.func);
   if (!def) return fail({ span: node.funcSpan }, PLANNED.has(node.func) ? `${node.func} is not available yet` : `unknown function ${node.func}`);
   if (def.kind === "statement") fail(node, `${node.func}(...) has to be a line of its own`);
-  if (def.kind === "assignment" && !wholeValue) fail(node, `${node.func}(...) has to be the whole value of a line: name = ${node.func}(...)`);
-  return def.check(node, cx);
+  // a declaration is checked by its line (checkModel), never as a value
+  if (def.kind === "declaration" || (def.kind === "assignment" && !wholeValue)) {
+    fail(node, `${node.func}(...) has to be the whole value of a line: name = ${node.func}(...)`);
+  }
+  return def.check(node, wholeValue ? { ...cx, assigned } : cx);
 }
 
 /** What functions get to call back into the checker. */
-export function exprContext(env: Env): FnCx & { walk(node: Expr, wholeValue: boolean): Typed } {
-  const cx: FnCx & { walk(node: Expr, wholeValue: boolean): Typed } = {
-    walk(node, wholeValue) {
+export function exprContext(env: Env): FnCx & { walk(node: Expr, wholeValue: boolean, assigned?: string): Typed } {
+  const cx: FnCx & { walk(node: Expr, wholeValue: boolean, assigned?: string): Typed } = {
+    walk(node, wholeValue, assigned) {
       switch (node.kind) {
         case "num":
           return { level: "scalar", sql: [node.value], datasets: [] };
@@ -121,7 +128,7 @@ export function exprContext(env: Env): FnCx & { walk(node: Expr, wholeValue: boo
         case "attr":
           return checkAttr(node, env);
         case "call":
-          return checkCall(node, cx, wholeValue);
+          return checkCall(node, cx, wholeValue, assigned);
         case "unary":
           return checkUnary(node, cx);
         case "binary":
@@ -135,14 +142,17 @@ export function exprContext(env: Env): FnCx & { walk(node: Expr, wholeValue: boo
       return fail(node, `expected a dataset name (datasets: ${datasetList(env)})`);
     },
     relationships: env.relationships,
+    calendars: env.calendars,
+    params: env.params,
   };
   return cx;
 }
 
 /**
  * Checks `node`. `wholeValue`: it is the entire right-hand side of an
- * assignment, where `measure(...)` is allowed.
+ * assignment, where `measure(...)` is allowed; `assigned` is that name, which
+ * `param(...)` has to repeat.
  */
-export function checkExpr(node: Expr, env: Env, wholeValue = false): Typed {
-  return exprContext(env).walk(node, wholeValue);
+export function checkExpr(node: Expr, env: Env, wholeValue = false, assigned?: string): Typed {
+  return exprContext(env).walk(node, wholeValue, assigned);
 }

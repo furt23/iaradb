@@ -4,10 +4,11 @@ import { checkModel } from "../check";
 import { FUNCTIONS, MODEL_FUNCTIONS, PLANNED } from "./registry";
 
 describe("registry", () => {
-  it("lists every function of the first phase", () => {
-    expect(MODEL_FUNCTIONS.map((f) => f.name).sort()).toEqual(
-      ["avg", "count", "count_distinct", "count_rows", "divide", "if_", "max", "measure", "min", "relate", "sum"],
-    );
+  it("lists every function of the language", () => {
+    expect(MODEL_FUNCTIONS.map((f) => f.name).sort()).toEqual([
+      "all_", "avg", "calculate", "calendar", "count", "count_distinct", "count_rows", "divide", "if_", "max", "measure", "min", "mtd", "param", "previous_period",
+      "previous_year", "qtd", "rank", "relate", "rolling", "running_total", "sum", "switch", "ytd",
+    ]);
   });
 
   it("gives the editor a name, a signature that starts with it, and a doc", () => {
@@ -18,7 +19,8 @@ describe("registry", () => {
     }
   });
 
-  it("has unique names, and none of them is a planned one", () => {
+  it("has unique names, and none of them is a planned one (none is planned now)", () => {
+    expect(PLANNED.size).toBe(0);
     expect(new Set(MODEL_FUNCTIONS.map((f) => f.name)).size).toBe(MODEL_FUNCTIONS.length);
     expect(FUNCTIONS.size).toBe(MODEL_FUNCTIONS.length);
     for (const name of PLANNED) expect(FUNCTIONS.has(name)).toBe(false);
@@ -30,11 +32,13 @@ describe("registry", () => {
   });
 
   it("documents examples that check", () => {
-    const schema = { orders: ["total", "profit", "status", "customer_id"], customers: ["id"] };
+    const schema = { orders: ["total", "profit", "status", "customer_id", "created"], customers: ["id"] };
     for (const f of MODEL_FUNCTIONS) {
       const example = /Example: (.+)$/.exec(f.doc)?.[1];
       expect(example, `${f.name} has an example`).toBeDefined();
-      const source = /^(relate\(|\w+ = )/.test(example!) ? example! : `m = ${example}`;
+      const line = /^(relate\(|\w+ = )/.test(example!) ? example! : `m = ${example}`;
+      // the time functions need a calendar (the calendar's own example is the only one that makes one)
+      const source = f.name === "calendar" ? line : `dates = calendar(orders.created)\n${line}`;
       expect(checkModel(source, schema).diagnostics, f.name).toEqual([]);
     }
   });

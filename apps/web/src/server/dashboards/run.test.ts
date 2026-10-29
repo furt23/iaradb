@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ExtractEntry } from "@/lib/dashboards/extracts";
 import type { ChartWidget, Dataset, FilterWidget, NumberFormat, TableWidget, Widget } from "@/lib/dashboards/types";
-import type { Measure, Model, Relationship } from "@/lib/model/types";
+import type { Ignore } from "@/lib/model/compile";
+import type { Calendar, Measure, Model, Param, Relationship } from "@/lib/model/types";
 
 import { datasetHash } from "./extractStore";
 import { explainDatasets, HIDDEN_ERROR, renderDashboard, withSql, type RunDeps } from "./run";
@@ -11,6 +12,11 @@ import { explainDatasets, HIDDEN_ERROR, renderDashboard, withSql, type RunDeps }
 const modelMock = vi.hoisted(() => ({ check: vi.fn(), query: vi.fn() }));
 vi.mock("@/lib/model/check", () => ({ checkModel: modelMock.check }));
 vi.mock("@/lib/model/compile", () => ({ modelQuery: modelMock.query }));
+// a calendar's rows are stood in for by a query that shows the rows of its sources
+vi.mock("@/lib/model/calendar", () => ({
+  calendarSql: (cal: Calendar, base: (dataset: string) => string) =>
+    `SELECT "date" FROM (${cal.columns.map((c) => `SELECT "${c.column}" AS "date" FROM (${base(c.dataset)}) AS _s`).join(" UNION ")}) AS ${cal.name}`,
+}));
 
 const columns = [
   { name: "region", type: "string_view" },
@@ -392,11 +398,11 @@ describe("extracts", () => {
 });
 
 const span = { from: 0, to: 0, line: 1, col: 1 };
-const measure = (name: string, over: Partial<Measure> = {}): Measure => ({ name, datasets: ["sales"], atoms: [{ dataset: "sales", sql: `SUM("${name}")` }], expr: [{ atom: 0 }], span, ...over });
-const rel = (many: string, one: string): Relationship => {
+const measure = (name: string, over: Partial<Measure> = {}): Measure => ({ name, datasets: ["sales"], atoms: [{ dataset: "sales", sql: `SUM("${name}")`, agg: "sum" }], expr: [{ atom: 0 }], span, ...over });
+const rel = (many: string, one: string, cast?: "date"): Relationship => {
   const [md, mc] = many.split(".");
   const [od, oc] = one.split(".");
-  return { many: { dataset: md, column: mc }, one: { dataset: od, column: oc }, span };
+  return { many: { dataset: md, column: mc }, one: { dataset: od, column: oc }, span, ...(cast && { cast }) };
 };
 const MODEL = "revenue = sum(sales.amount)";
 const resultColumns = [
@@ -409,7 +415,7 @@ const runs = (k: { calls: Call[] }) => k.calls.filter((c) => c.method === "sql.r
 
 /** what the compiler is asked for */
 interface Ask {
-  source(dataset: string): string;
+  source(dataset: string, ignore?: Ignore): string;
   x: { dataset: string; column: string; as: string } | null;
   group: { dataset: string; column: string; as: string } | null;
   measures: string[];
@@ -417,14 +423,17 @@ interface Ask {
   limit: number;
 }
 
-/** The checker and the compiler stood in: the query names what was asked, and holds the source of each dataset the measures and the groupings are over (they join with `+`). */
-function useCompiler(model: Model, notes: string[] = []) {
+/**
+ * The checker and the compiler stood in: the query names what was asked, and holds the source of each dataset the measures and the groupings are over (they join with `+`).
+ * `ignore` says what a dataset is asked without (as a measure that changes the filter context does), `params` the parameters of the measures.
+ */
+function useCompiler(model: Model, notes: string[] = [], extra: { params?: Param[]; ignore?: (dataset: string) => Ignore | undefined } = {}) {
   modelMock.check.mockReset().mockReturnValue({ model, diagnostics: [] });
   modelMock.query.mockReset().mockImplementation((m: Model, q: Ask) => {
     const unknown = q.measures.find((n) => !m.measures.some((x) => x.name === n));
     if (unknown) throw new Error(`there is no measure ${unknown}`);
     const datasets = [...new Set([...q.measures.flatMap((n) => m.measures.find((x) => x.name === n)!.datasets), ...[q.x, q.group].flatMap((f) => (f ? [f.dataset] : []))])];
-    return { sql: `MEASURES ${q.measures.join(",")} BY ${q.x?.as ?? null}/${q.group?.as ?? null} ${q.order} ${q.limit} FROM ${datasets.map((d) => q.source(d)).join(" + ")}`, datasets, notes };
+    return { sql: `MEASURES ${q.measures.join(",")} BY ${q.x?.as ?? null}/${q.group?.as ?? null} ${q.order} ${q.limit} FROM ${datasets.map((d) => q.source(d, extra.ignore?.(d))).join(" + ")}`, datasets, notes, params: extra.params ?? [] };
   });
 }
 
@@ -448,6 +457,8 @@ describe("measure charts", () => {
   const model: Model = {
     relationships: [],
     measures: [measure("revenue", { format: money }), measure("margin", { format: percent }), measure("units"), measure("stores_count", { datasets: ["stores"] })],
+    calendars: [],
+    params: [],
   };
   const stores: Dataset = { name: "stores", sql: "SELECT * FROM stores", params: {} };
   const BASE = "SELECT * FROM (\nSELECT * FROM sales\n) AS _d";
@@ -693,6 +704,8 @@ describe("filter propagation", () => {
   const shop: Model = {
     relationships: [rel("sales.customer_id", "customers.id"), rel("sales.product_id", "products.id"), rel("products.category_id", "categories.id"), rel("targets.product_id", "products.id")],
     measures: [measure("revenue"), measure("goal", { datasets: ["targets"] })],
+    calendars: [],
+    params: [],
   };
   const tableOn = (dataset: string): TableWidget => ({ id: `t_${dataset}`, kind: "table", dataset });
   const filterOn = (id: string, dataset: string, column: string): FilterWidget => ({ id, kind: "filter", control: "select", fields: [{ dataset, column }], value_type: "text" });
@@ -782,7 +795,7 @@ describe("filter propagation", () => {
   });
 
   it("makes no semi-join without relationships", async () => {
-    useCompiler({ relationships: [], measures: shop.measures });
+    useCompiler({ ...shop, relationships: [] });
     const k = fakeKernel();
     await renderShop([tableOn("sales"), filterOn("f_reg", "customers", "region")], { f_reg: "EU" }, deps(k.request));
     expect(sent(k)).toEqual([{ query: plain("sales"), params: undefined }]);
@@ -995,6 +1008,244 @@ describe("filter propagation", () => {
       const r = await renderShop([tableOn("products"), tableOn("sales"), byProduct, filterOn("f_cat", "categories", "name")], { f_cat: "Toys" }, deps(live.request), [], datasets);
       expect(live.calls.filter((c) => c.method === "wrangle.sql")).toHaveLength(1);
       expect([r.widgets.t_products.kind, r.widgets.t_sales.kind]).toEqual(["table", "table"]);
+    });
+  });
+  describe("calendars, what a measure asks for without, and parameters", () => {
+    const dates: Calendar = { name: "dates", columns: [{ dataset: "sales", column: "sold_at" }, { dataset: "targets", column: "goal_date" }], span };
+    const dated: Model = { ...shop, relationships: [...shop.relationships, rel("sales.sold_at", "dates.date", "date"), rel("targets.goal_date", "dates.date", "date")], calendars: [dates] };
+    const byMonth: ChartWidget = { id: "m_month", kind: "chart", dataset: "sales", measures: ["revenue"], spec: { kind: "line", x: "dates.month", y: [], agg: "sum" } };
+    const byChannel: ChartWidget = { id: "m_chan", kind: "chart", dataset: "sales", measures: ["revenue"], spec: { kind: "bar", x: "channel", y: [], agg: "sum" } };
+    const dateFilter = (id: string, column: string): FilterWidget => ({ id, kind: "filter", control: "date_range", fields: [{ dataset: "dates", column }] });
+
+    /** the calendar's rows as the stand-in builds them from its sources, read as `read` says; the narrowing wraps them as `SELECT * FROM (rows) AS _d` */
+    const rowsFrom = (read: (name: string) => string) =>
+      `SELECT "date" FROM (SELECT "sold_at" AS "date" FROM (${read("sales")}) AS _s UNION SELECT "goal_date" AS "date" FROM (${read("targets")}) AS _s) AS dates`;
+    const rows = rowsFrom(plain);
+    const calendar = `SELECT * FROM (\n${rows}\n) AS _d`;
+    /** a condition on the sales' date column, over the calendar narrowed by `where` */
+    const throughDates = (where: string) => `CAST("sold_at" AS DATE) IN (SELECT "date" FROM (\n${calendar}\nWHERE ${where}\n) AS _n2)`;
+    const january = { f_date: { from: "2024-01-01", to: "2024-01-31" } };
+    const inJanuary = 'CAST("date" AS DATE) >= :_f0_from\n  AND CAST("date" AS DATE) <= :_f0_to';
+    const januaryParams = { _f0_from: "2024-01-01", _f0_to: "2024-01-31" };
+
+    /** extracts of the datasets in `fresh`, each read from `s3://bucket/<name>/v1.parquet` */
+    const extractsFor = (live: { request: RunDeps["request"] }, serving: { request: RunDeps["request"] }, fresh: Dataset[], allow: string[] | null = ["main"]): RunDeps => ({
+      ...deps(live.request),
+      allow,
+      extracts: {
+        manifest: {
+          datasets: Object.fromEntries(
+            fresh.map((d) => [d.name, { version: "v1", rows: 2, bytes: 100, columns, sources: [`main.public.${d.name}`], hash: datasetHash(d), refreshed_at: 1 } satisfies ExtractEntry]),
+          ),
+        },
+        serve: serving.request as never,
+        url: (name, v) => `s3://bucket/${name}/${v}.parquet`,
+      },
+    });
+
+    describe("a calendar", () => {
+      beforeEach(() => useCompiler(dated));
+
+      it("is a dataset a chart can group by: its rows are the unfiltered rows of its sources, and the model is checked without it among the datasets", async () => {
+        const k = measureKernel();
+        const r = await renderShop([byMonth], {}, deps(k.request));
+        expect(modelMock.query).toHaveBeenLastCalledWith(dated, expect.objectContaining({ x: { dataset: "dates", column: "month", as: "dates.month" }, group: null, order: "x" }));
+        expect(sent(k)).toEqual([{ query: `MEASURES revenue BY dates.month/null x 5001 FROM ${plain("sales")} + ${calendar}`, params: undefined }]);
+        expect(modelMock.check.mock.calls).toEqual([[MODEL, { sales: null, customers: null, products: null, categories: null, targets: null }]]);
+        expect(r.widgets.m_month.kind).toBe("chart");
+        // a text that is not a dataset or a calendar is a column of the chart's own dataset
+        modelMock.query.mockClear();
+        await renderShop([{ ...byMonth, spec: { ...byMonth.spec, x: "ghost.month" } }], {}, deps(measureKernel().request));
+        expect(modelMock.query.mock.calls.at(-1)![1]).toMatchObject({ x: { dataset: "sales", column: "ghost.month" } });
+      });
+
+      it("narrows the facts that point at it with a filter on its columns: the date column compared as a DATE, in tables and measure charts", async () => {
+        const k = measureKernel();
+        await renderShop([tableOn("sales"), byMonth, dateFilter("f_date", "date")], january, deps(k.request));
+        const bySales = narrowed("sales", throughDates(inJanuary));
+        const inCalendar = `${calendar}\nWHERE ${inJanuary}`;
+        expect(sent(k)).toEqual([
+          { query: bySales, params: januaryParams },
+          // the calendar is narrowed by its own filter too, and the facts through it
+          { query: `MEASURES revenue BY dates.month/null x 5001 FROM ${bySales} + ${inCalendar}`, params: januaryParams },
+        ]);
+        expect(runs(k)[0].params.param_types).toEqual({ _f0_from: "date", _f0_to: "date" });
+      });
+
+      it("narrows the facts and the other charts with the pick on its column, and not the chart that was picked", async () => {
+        const k = measureKernel();
+        await renderShop([tableOn("sales"), byMonth], {}, deps(k.request), [{ widget: "m_month", value: "2024-03-01" }]);
+        expect(sent(k)).toEqual([
+          { query: narrowed("sales", throughDates('CAST("month" AS VARCHAR) = :_c0')), params: { _c0: "2024-03-01" } },
+          { query: `MEASURES revenue BY dates.month/null x 5001 FROM ${plain("sales")} + ${calendar}`, params: undefined },
+        ]);
+      });
+
+      it("lists the values of its column for a filter, over its whole rows", async () => {
+        const k = fakeKernel();
+        const year = dateFilter("f_year", "year");
+        const r = await renderShop([year, tableOn("sales")], { f_year: { from: "2024-01-01" } }, deps(k.request));
+        expect(runs(k).map((c) => c.params.query).at(-1)).toBe(`SELECT DISTINCT "year" AS value FROM (\n${rows}\n) AS _d WHERE "year" IS NOT NULL ORDER BY 1 LIMIT 500`);
+        expect(r.widgets.f_year).toEqual({ kind: "filter", options: ["EU", "US"] });
+        // a calendar the model does not have is not a dataset either
+        const lost = await renderShop([{ ...year, fields: [{ dataset: "ghost", column: "year" }] }], {}, deps(fakeKernel().request));
+        expect(lost.widgets.f_year).toEqual({ kind: "error", message: "there is no dataset ghost" });
+      });
+
+      it("reads its sources, so a query that reads it runs on the serving kernel only when all of them have a fresh extract", async () => {
+        const parquet = (name: string) => `SELECT * FROM (\nSELECT * FROM read_parquet('s3://bucket/${name}/v1.parquet')\n) AS _d`;
+        const fresh = measureKernel();
+        const liveOnly = fakeKernel();
+        const r = await renderShop([byMonth, dateFilter("f_date", "date")], january, extractsFor(liveOnly, fresh, [sales, targets]));
+        expect(liveOnly.calls).toEqual([]);
+        const inCalendar = `SELECT * FROM (\n${rowsFrom(parquet)}\n) AS _d\nWHERE ${inJanuary}`;
+        const throughCalendar = `CAST("sold_at" AS DATE) IN (SELECT "date" FROM (\n${inCalendar}\n) AS _n2)`;
+        expect(sent(fresh)).toEqual([{ query: `MEASURES revenue BY dates.month/null x 5001 FROM ${parquet("sales")}\nWHERE ${throughCalendar} + ${inCalendar}`, params: januaryParams }]);
+        expect(runs(fresh)[0].params).not.toHaveProperty("allow");
+        expect(r.widgets.m_month.kind).toBe("chart");
+
+        // targets has no extract: the whole query is live
+        const live = measureKernel();
+        const serving = fakeKernel();
+        await renderShop([byMonth, dateFilter("f_date", "date")], january, extractsFor(live, serving, [sales]));
+        expect(serving.calls).toEqual([]);
+        expect(sent(live)[0].query).toContain(plain("targets"));
+        expect(sent(live)[0].query).not.toContain("read_parquet");
+        expect(runs(live)[0].params.allow).toEqual(["main"]);
+
+        // the options of a calendar column go the same way
+        const options = fakeKernel();
+        await renderShop([dateFilter("f_year", "year")], {}, extractsFor(fakeKernel(), options, [sales, targets]));
+        expect(runs(options).map((c) => c.params.query)).toEqual([`SELECT DISTINCT "year" AS value FROM (\n${rowsFrom(parquet)}\n) AS _d WHERE "year" IS NOT NULL ORDER BY 1 LIMIT 500`]);
+      });
+
+      it("needs the viewer to read what its sources were built from", async () => {
+        const r = await renderShop([byMonth, dateFilter("f_year", "year")], {}, extractsFor(measureKernel(), measureKernel(), [sales, targets], ["main.public.sales"]));
+        const lost = { kind: "error", message: "no read grant on table main.public.targets" };
+        expect(r.widgets.m_month).toEqual(lost);
+        expect(r.widgets.f_year).toEqual(lost);
+      });
+    });
+
+    describe("a measure that asks for a dataset without some filters", () => {
+      const customersEU = { f_reg: "EU", f_tier: "gold" };
+      const filters = [filterOn("f_reg", "customers", "region"), filterOn("f_tier", "customers", "tier")];
+      const salesWithout = (ignore: Ignore) => useCompiler(shop, [], { ignore: (d) => (d === "sales" ? ignore : undefined) });
+
+      it("reads the dataset whole of what the ignore names, and narrowed as usual otherwise", async () => {
+        const asked = (k: { calls: Call[] }) => sent(k).map((c) => c.query);
+        useCompiler(shop);
+        const usual = measureKernel();
+        await renderShop([byChannel, ...filters], customersEU, deps(usual.request));
+        const customers = narrowed("customers", '"region" = :_f0', '"tier" = :_f1');
+        expect(asked(usual)).toEqual([`MEASURES revenue BY channel/null value 101 FROM ${narrowed("sales", within("customer_id", "id", customers, 0))}`]);
+
+        // the customers' filters do not apply to the sales this measure reads, and their parameters are not sent
+        salesWithout({ datasets: ["customers"], columns: [] });
+        const without = measureKernel();
+        await renderShop([byChannel, ...filters], customersEU, deps(without.request));
+        expect(sent(without)).toEqual([{ query: `MEASURES revenue BY channel/null value 101 FROM ${plain("sales")}`, params: undefined }]);
+      });
+
+      it("drops the filters on the columns it names only: the others still narrow, by the names they always have", async () => {
+        salesWithout({ datasets: [], columns: [{ dataset: "customers", column: "region" }] });
+        const k = measureKernel();
+        await renderShop([byChannel, ...filters], customersEU, deps(k.request));
+        expect(sent(k)).toEqual([
+          { query: `MEASURES revenue BY channel/null value 101 FROM ${narrowed("sales", within("customer_id", "id", narrowed("customers", '"tier" = :_f1'), 0))}`, params: { _f1: "gold" } },
+        ]);
+      });
+
+      it("takes the picks off too", async () => {
+        salesWithout({ datasets: ["customers"], columns: [] });
+        const k = measureKernel();
+        const regionChart: ChartWidget = { id: "c_region", kind: "chart", dataset: "customers", spec: { kind: "bar", x: "region", y: ["n"], agg: "sum" } };
+        await renderShop([byChannel, regionChart], {}, deps(k.request), [{ widget: "c_region", value: "EU" }]);
+        expect(sent(k).find((c) => String(c.query).startsWith("MEASURES"))).toEqual({ query: `MEASURES revenue BY channel/null value 101 FROM ${plain("sales")}`, params: undefined });
+      });
+
+      it("is routed by what it reads: a dataset it leaves out does not need a fresh extract", async () => {
+        // customers has no extract: the usual query reads it, and goes live; the one that leaves it out stays on the serving kernel
+        useCompiler(shop);
+        const usualLive = measureKernel();
+        const usualServing = fakeKernel();
+        await renderShop([byChannel, ...filters], customersEU, extractsFor(usualLive, usualServing, [sales]));
+        expect(usualServing.calls).toEqual([]);
+        expect(runs(usualLive).some((c) => String(c.params.query).startsWith("MEASURES"))).toBe(true);
+
+        salesWithout({ datasets: ["customers"], columns: [] });
+        const live = fakeKernel();
+        const serving = measureKernel();
+        const r = await renderShop([byChannel, ...filters], customersEU, extractsFor(live, serving, [sales]));
+        expect(live.calls.filter((c) => c.method === "sql.run" && !String(c.params.query).startsWith("SELECT DISTINCT"))).toEqual([]);
+        expect(runs(serving).map((c) => c.params.query)).toEqual([`MEASURES revenue BY channel/null value 101 FROM SELECT * FROM (\nSELECT * FROM read_parquet('s3://bucket/sales/v1.parquet')\n) AS _d`]);
+        expect(r.widgets.m_chan.kind).toBe("chart");
+      });
+    });
+
+    describe("the parameters of measures", () => {
+      const discount: Param = { name: "discount", default: 0.1, span };
+      const label: Param = { name: "label", default: "gross", span };
+      const setDiscount: FilterWidget = { id: "p_disc", kind: "filter", control: "text", param: "discount" };
+      const setLabel: FilterWidget = { id: "p_label", kind: "filter", control: "text", param: "label" };
+      const bound = (k: { calls: Call[] }) => [runs(k)[0].params.params, runs(k)[0].params.param_types];
+
+      beforeEach(() => useCompiler(shop, [], { params: [discount, label] }));
+
+      it("take their default, a number for a number and text for text", async () => {
+        const k = measureKernel();
+        await renderShop([byChannel], {}, deps(k.request));
+        expect(bound(k)).toEqual([{ discount: 0.1, label: "gross" }, { discount: "number", label: "text" }]);
+      });
+
+      it("take the value of the filter that sets them, and the default when it holds none", async () => {
+        const k = measureKernel();
+        await renderShop([byChannel, setDiscount, setLabel], { p_disc: "0.25", p_label: "net" }, deps(k.request));
+        expect(bound(k)).toEqual([{ discount: 0.25, label: "net" }, { discount: "number", label: "text" }]);
+        const empty = measureKernel();
+        await renderShop([byChannel, setDiscount, setLabel], { p_disc: "", p_label: "" }, deps(empty.request));
+        expect(bound(empty)).toEqual([{ discount: 0.1, label: "gross" }, { discount: "number", label: "text" }]);
+      });
+
+      it("join the parameters of the filters and of the datasets the query reads", async () => {
+        const k = measureKernel();
+        await renderShop([byChannel, filterOn("f_reg", "customers", "region"), setDiscount], { f_reg: "EU", p_disc: "0.25" }, deps(k.request));
+        expect(runs(k)[0].params.params).toEqual({ _f0: "EU", discount: 0.25, label: "gross" });
+      });
+
+      it("fail the chart when the filter's value is not a number for a number, and run nothing", async () => {
+        const k = measureKernel();
+        const r = await renderShop([byChannel, setDiscount, tableOn("customers")], { p_disc: "a lot" }, deps(k.request));
+        expect(r.widgets.m_chan).toEqual({ kind: "error", message: ":discount must be a number" });
+        expect(r.widgets.t_customers.kind).toBe("table");
+        expect(runs(k).some((c) => String(c.params.query).startsWith("MEASURES"))).toBe(false);
+      });
+
+      it("fail the chart when a dataset it reads binds the same name to another value or type, and not when it is the same", async () => {
+        const reads = (spec: object) => [set("sales", "SELECT * FROM sales WHERE d = :discount"), customers, products, categories, targets].map((d) => (d.name === "sales" ? { ...d, params: { discount: spec } } : d)) as Dataset[];
+        const k = measureKernel();
+        // a text placeholder against a number
+        const text = await renderShop([byChannel, setDiscount], { p_disc: "0.25" }, deps(k.request), [], reads({ type: "text" }));
+        expect(text.widgets.m_chan).toEqual({ kind: "error", message: ":discount is bound to two different values in one query" });
+        expect(k.calls).toEqual([]);
+        // the same type, and the same value (the filter's, or both defaults)
+        const same = measureKernel();
+        const ok = await renderShop([byChannel, setDiscount], { p_disc: "0.25" }, deps(same.request), [], reads({ type: "number" }));
+        expect(ok.widgets.m_chan.kind).toBe("chart");
+        expect(runs(same)[0].params.params).toEqual({ discount: 0.25, label: "gross" });
+        const defaults = measureKernel();
+        expect((await renderShop([byChannel], {}, deps(defaults.request), [], reads({ type: "number", default: 0.1 }))).widgets.m_chan.kind).toBe("chart");
+        // two defaults that differ
+        const apart = await renderShop([byChannel], {}, deps(measureKernel().request), [], reads({ type: "number", default: 0.2 }));
+        expect(apart.widgets.m_chan).toEqual({ kind: "error", message: ":discount is bound to two different values in one query" });
+      });
+
+      it("send nothing for a measure without parameters", async () => {
+        useCompiler(shop);
+        const k = measureKernel();
+        await renderShop([byChannel], {}, deps(k.request));
+        expect(runs(k)[0].params.params).toBeUndefined();
+      });
     });
   });
 });

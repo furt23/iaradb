@@ -37,8 +37,8 @@ describe("imports", () => {
     expect(d[0]).toMatchObject({ message: "iara.model has no nope", severity: "error", line: 1, col: 29 });
   });
 
-  it("say when a name is planned for later", () => {
-    expect(messages("from iara.model import calendar, ytd")).toEqual(["calendar is not available yet", "ytd is not available yet"]);
+  it("accept every function of the language", () => {
+    expect(messages("from iara.model import calendar, ytd, calculate, all_, switch, param, rank, rolling, running_total")).toEqual([]);
   });
 
   it("refuse other modules", () => {
@@ -48,14 +48,11 @@ describe("imports", () => {
 });
 
 describe("names", () => {
-  it("rejects unknown names, unknown functions and planned functions", () => {
+  it("rejects unknown names and unknown functions", () => {
     expect(messages("m = sum(nope.a)")).toEqual(["unknown name nope"]);
     expect(messages("m = nope(1)")).toEqual(["unknown function nope"]);
     expect(messages("m = orders(1)")).toEqual(["unknown function orders"]);
-    for (const f of ["calculate", "all_", "ytd", "qtd", "mtd", "previous_year", "previous_period", "running_total", "rolling", "rank", "switch", "param", "calendar"]) {
-      expect(messages(`m = ${f}(1)`)).toEqual([`${f} is not available yet`]);
-    }
-    expect(messages("m = rank")).toEqual(["rank is not available yet"]);
+    expect(messages("m = rank")).toEqual(["`rank` is a function: call it, e.g. rank(...)"]);
   });
 
   it("points the unknown-function error at the function name", () => {
@@ -71,7 +68,7 @@ describe("names", () => {
   it("does not let a dataset, a function or an earlier name be assigned again", () => {
     expect(messages("orders = 1")).toEqual(["`orders` is a dataset name: pick another name"]);
     expect(messages("sum = 1")).toEqual(["`sum` is a function name: pick another name"]);
-    expect(messages("calendar = 1")).toEqual(["`calendar` is kept for a function that is not available yet: pick another name"]);
+    expect(messages("calendar = 1")).toEqual(["`calendar` is a function name: pick another name"]);
     const d = check("m = sum(orders.a)\nm = sum(orders.b)").diagnostics;
     expect(d).toHaveLength(1);
     expect(d[0]).toMatchObject({ message: "`m` is already defined", line: 2, col: 1, from: 18, to: 19 });
@@ -94,7 +91,7 @@ describe("levels", () => {
       {
         name: "revenue",
         datasets: ["orders"],
-        atoms: [{ dataset: "orders", sql: 'SUM("a")' }],
+        atoms: [{ dataset: "orders", sql: 'SUM("a")', agg: "sum" }],
         expr: [{ atom: 0 }],
         span: { from: 0, to: 23, line: 1, col: 1 },
       },
@@ -151,7 +148,7 @@ describe("levels", () => {
 
   it("has count_rows(dataset) as an aggregate, and nothing else takes a dataset", () => {
     expect(sqlOf("m = count_rows(orders)")).toBe("COUNT(*)");
-    expect(measureOf("m = count_rows(orders)")).toMatchObject({ datasets: ["orders"], atoms: [{ dataset: "orders", sql: "COUNT(*)" }] });
+    expect(measureOf("m = count_rows(orders)")).toMatchObject({ datasets: ["orders"], atoms: [{ dataset: "orders", sql: "COUNT(*)", agg: "count" }] });
     expect(messages("m = count_rows(orders.a)")[0]).toContain("expected a dataset name");
     expect(messages("m = count_rows(1)")[0]).toContain("expected a dataset name");
     expect(messages("m = count_rows(nope)")).toEqual(["unknown name nope"]);
@@ -175,7 +172,7 @@ describe("levels", () => {
 describe("SQL", () => {
   it("renders the aggregations", () => {
     expect(sqlOf("m = sum(orders.a)")).toBe('SUM("a")');
-    expect(sqlOf("m = avg(orders.a)")).toBe('AVG("a")');
+    expect(sqlOf("m = avg(orders.a)")).toBe('(CAST(SUM("a") AS DOUBLE) / NULLIF(COUNT("a"), 0))');
     expect(sqlOf("m = min(orders.a)")).toBe('MIN("a")');
     expect(sqlOf("m = max(orders.a)")).toBe('MAX("a")');
     expect(sqlOf("m = count(orders.a)")).toBe('COUNT("a")');
@@ -262,15 +259,15 @@ describe("atoms and templates", () => {
   it("makes an atom of each aggregation and leaves the text around it in the template", () => {
     const m = measureOf("m = (sum(orders.a) - sum(orders.b)) / sum(orders.a)")!;
     expect(m.atoms).toEqual([
-      { dataset: "orders", sql: 'SUM("a")' },
-      { dataset: "orders", sql: 'SUM("b")' },
+      { dataset: "orders", sql: 'SUM("a")', agg: "sum" },
+      { dataset: "orders", sql: 'SUM("b")', agg: "sum" },
     ]);
     expect(m.expr).toEqual(["(CAST(((", { atom: 0 }, " - ", { atom: 1 }, ")) AS DOUBLE) / (", { atom: 0 }, "))"]);
   });
 
   it("writes the same aggregation once, however often it is used", () => {
-    const m = measureOf("m = sum(orders.a) + sum(orders.a) * 2 + avg(orders.a)")!;
-    expect(m.atoms.map((a) => a.sql)).toEqual(['SUM("a")', 'AVG("a")']);
+    const m = measureOf("m = sum(orders.a) + sum(orders.a) * 2 + max(orders.a)")!;
+    expect(m.atoms.map((a) => a.sql)).toEqual(['SUM("a")', 'MAX("a")']);
     expect(m.expr.filter((p) => typeof p !== "string")).toEqual([{ atom: 0 }, { atom: 0 }, { atom: 1 }]);
     expect(measureOf("m = divide(sum(orders.a), sum(orders.b))")!.atoms).toHaveLength(2);
   });
@@ -278,8 +275,8 @@ describe("atoms and templates", () => {
   it("does not mix the same SQL over two datasets", () => {
     const m = measureOf("m = count_rows(orders) + count_rows(customers)")!;
     expect(m.atoms).toEqual([
-      { dataset: "orders", sql: "COUNT(*)" },
-      { dataset: "customers", sql: "COUNT(*)" },
+      { dataset: "orders", sql: "COUNT(*)", agg: "count" },
+      { dataset: "customers", sql: "COUNT(*)", agg: "count" },
     ]);
   });
 
@@ -313,8 +310,8 @@ describe("measures over several datasets", () => {
     expect(model.measures[0]).toMatchObject({
       datasets: ["orders", "customers"],
       atoms: [
-        { dataset: "orders", sql: 'SUM("a")' },
-        { dataset: "customers", sql: 'SUM("id")' },
+        { dataset: "orders", sql: 'SUM("a")', agg: "sum" },
+        { dataset: "customers", sql: 'SUM("id")', agg: "sum" },
       ],
     });
   });
@@ -329,8 +326,8 @@ describe("measures that use measures", () => {
   it("brings the atoms and the template of the measure used, in parentheses", () => {
     const m = measureOf("revenue = sum(orders.a)\norders_n = count_rows(orders)\nm = revenue / orders_n")!;
     expect(m.atoms).toEqual([
-      { dataset: "orders", sql: 'SUM("a")' },
-      { dataset: "orders", sql: "COUNT(*)" },
+      { dataset: "orders", sql: 'SUM("a")', agg: "sum" },
+      { dataset: "orders", sql: "COUNT(*)", agg: "count" },
     ]);
     expect(m.expr).toEqual(["(CAST(((", { atom: 0 }, ")) AS DOUBLE) / ((", { atom: 1 }, ")))"]);
   });
@@ -348,14 +345,14 @@ describe("measures that use measures", () => {
 
   it("does not change the measure it uses", () => {
     const { model } = check("a = sum(orders.a)\nm = a * 2");
-    expect(model.measures[0]).toMatchObject({ atoms: [{ sql: 'SUM("a")' }], expr: [{ atom: 0 }] });
+    expect(model.measures[0]).toMatchObject({ atoms: [{ sql: 'SUM("a")', agg: "sum" }], expr: [{ atom: 0 }] });
   });
 });
 
 describe("measure()", () => {
   it("is a plain measure without options, with no format or label keys", () => {
     const [m] = check("m = measure(sum(orders.a))").model.measures;
-    expect(m).toEqual({ name: "m", datasets: ["orders"], atoms: [{ dataset: "orders", sql: 'SUM("a")' }], expr: [{ atom: 0 }], span: expect.anything() });
+    expect(m).toEqual({ name: "m", datasets: ["orders"], atoms: [{ dataset: "orders", sql: 'SUM("a")', agg: "sum" }], expr: [{ atom: 0 }], span: expect.anything() });
     expect("format" in m).toBe(false);
     expect("label" in m).toBe(false);
   });
@@ -496,7 +493,8 @@ describe("relate", () => {
   it("checks that the columns exist when known", () => {
     expect(messages("relate(orders.nope, customers.id)")).toEqual(["orders has no column nope"]);
     expect(messages("relate(orders.b, nope.id)")).toEqual(["unknown name nope"]);
-    expect(messages("m = sum(orders.a)\nrelate(m.b, customers.id)")).toEqual(["`m` is not a dataset (datasets: orders, customers, items, loose)"]);
+    // relationships are read in the first pass, before the measures: of the names, only a param is known then
+    expect(messages('rate = param("rate", 1)\nrelate(rate.b, customers.id)')).toEqual(["`rate` is not a dataset (datasets: orders, customers, items, loose)"]);
   });
 
   it("wants two columns", () => {
@@ -559,6 +557,63 @@ describe("the relationship graph", () => {
     // line 2 is refused (a cycle), so line 3 is not one too
     const d = check("relate(orders.b, customers.id)\nrelate(customers.name, orders.a)\nrelate(items.order_id, orders.a)").diagnostics;
     expect(d.map((x) => x.line)).toEqual([2]);
+  });
+});
+
+describe("the two passes", () => {
+  it("reads relate, calendar and param lines first, so a measure can use what is declared below it", () => {
+    const source = [
+      "m = calculate(sum(items.qty), orders.status == \"x\")",
+      "n = ytd(sum(orders.a)) * rate",
+      "k = calculate(sum(orders.a), dates.year == 2024)",
+      "relate(items.order_id, orders.a)",
+      "dates = calendar(orders.day)",
+      'rate = param("rate", 2)',
+    ].join("\n");
+    const { model, diagnostics } = check(source);
+    expect(diagnostics).toEqual([]);
+    expect(model.measures.map((x) => x.name)).toEqual(["m", "n", "k"]);
+    expect(model.relationships).toHaveLength(2);
+    expect(model.calendars.map((c) => c.name)).toEqual(["dates"]);
+    expect(model.params.map((p) => p.name)).toEqual(["rate"]);
+  });
+
+  it("has no calendars or params when the file declares none", () => {
+    const { model } = check("m = sum(orders.a)");
+    expect(model.calendars).toEqual([]);
+    expect(model.params).toEqual([]);
+  });
+
+  it("still needs an earlier line for a name that is not declared in the first pass", () => {
+    expect(messages("m = n + 1\nn = 2")).toEqual(["unknown name n"]);
+    expect(messages('m = sum(orders.a) * k\nk = param("k", 2)')).toEqual([]);
+  });
+
+  it("gives a name to the line that came first, whatever the pass", () => {
+    const d = (source: string) => check(source).diagnostics.map((x) => [x.line, x.message]);
+    expect(d('x = sum(orders.a)\nx = param("x", 1)')).toEqual([[2, "`x` is already defined"]]);
+    expect(d('x = param("x", 1)\nx = sum(orders.a)')).toEqual([[2, "`x` is already defined"]]);
+    expect(d("x = sum(orders.a)\nx = calendar(orders.day)")).toEqual([[2, "`x` is already defined"]]);
+    expect(d("x = [1]\nx = calendar(orders.day)")[1]).toEqual([2, "`x` is already defined"]);
+    expect(check('x = sum(orders.a)\nx = param("x", 1)').model.measures.map((m) => m.name)).toEqual(["x"]);
+    expect(check('x = sum(orders.a)\nx = param("x", 1)').model.params).toEqual([]);
+  });
+
+  it("reports the errors of both passes together, in order of position", () => {
+    const d = check('m = sum(orders.nope)\nrelate(orders.nope, customers.id)\nrate = param("rate", None)').diagnostics;
+    expect(d.map((x) => x.line)).toEqual([1, 2, 3]);
+  });
+
+  it("leaves a declaration with an error out and keeps the rest", () => {
+    const { model, diagnostics } = check('relate(orders.nope, customers.id)\nrate = param("rate", None)\nm = sum(orders.a)');
+    expect(diagnostics).toHaveLength(2);
+    expect(model.relationships).toEqual([]);
+    expect(model.measures.map((x) => x.name)).toEqual(["m"]);
+  });
+
+  it("lists the params in file order, whichever pass found them", () => {
+    const source = 'a = sum(orders.a) * param("first", 1)\nsecond = param("second", 2)\nb = sum(orders.a) * param("third", 3)';
+    expect(check(source).model.params.map((p) => p.name)).toEqual(["first", "second", "third"]);
   });
 });
 

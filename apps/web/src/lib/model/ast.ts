@@ -78,6 +78,22 @@ export interface Binary {
 
 export type Expr = Num | Str | Const | Name | Attr | Call | Unary | Binary;
 
+/** The `dataset.column` nodes inside an expression, in order of appearance (what a calculate filter reads). */
+export function attrs(e: Expr): Attr[] {
+  switch (e.kind) {
+    case "attr":
+      return [e];
+    case "unary":
+      return attrs(e.operand);
+    case "binary":
+      return [...attrs(e.left), ...attrs(e.right)];
+    case "call":
+      return [...e.args, ...e.kwargs.map((k) => k.value)].flatMap(attrs);
+    default:
+      return [];
+  }
+}
+
 /** `from iara.model import a, b` */
 export interface ImportStmt {
   kind: "import";

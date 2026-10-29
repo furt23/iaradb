@@ -166,10 +166,14 @@ export interface PickBy {
   id?: number;
 }
 
-/** A dataset narrowed by the rows of another (a dimension's, reached by a relationship): `column IN (SELECT key FROM (query) AS alias)`. */
+/**
+ * A dataset narrowed by the rows of another (a dimension's, reached by a relationship): `column IN (SELECT key FROM (query) AS alias)`.
+ * `cast: "date"`: the column is compared as a DATE (a timestamp is not a calendar's date).
+ */
 export interface Semi {
   column: string;
   key: string;
+  cast?: "date";
   query: { query: string; params: QueryParams };
   alias: string;
 }
@@ -238,15 +242,50 @@ export function narrows(dataset: string, filters: FilterWidget[], values: Filter
 }
 
 /**
- * The query of a dataset for the viewer's values: its own placeholders from
- * `paramValues` (or their defaults), the field filters that include it as
+ * The rows of a dataset as they are read: its statement and its placeholders
+ * from `paramValues` (or their defaults); `missing`: placeholders without a value.
+ * A calendar's rows have the same form (narrow.ts), so narrowing and filter
+ * options work on both.
+ */
+export function datasetRows(dataset: Dataset, paramValues: Record<string, ParamRaw>): DatasetQuery {
+  const own = datasetParams(dataset, paramValues);
+  return own.missing.length ? { missing: own.missing } : { query: dataset.sql, params: own.query };
+}
+
+/**
+ * `rows` (named `name`) narrowed: the field filters that include it as
  * conditions, the `picks` (a column and the value a chart's category holds) as
  * conditions too, and the `semis` that narrow it through a relationship, whose
  * parameters join its own. A filter's parameters are named by its position in
  * `filters` (`_f2`, `_f2_from`), a pick's by its `id` (`_c1`, `_c1_1`), so one
- * name is one value in every dataset of a query. `missing`: placeholders without
- * a value. Throws when the dataset is not one query or a filter value is not
- * valid for its filter.
+ * name is one value in every dataset of a query. Throws when `rows` is not one
+ * statement or a filter value is not valid for its filter.
+ */
+export function rowsQuery(
+  name: string,
+  rows: { query: string; params: QueryParams },
+  filters: FilterWidget[],
+  values: FilterValues,
+  picks: PickBy[] = [],
+  semis: Semi[] = [],
+): { query: string; params: QueryParams } {
+  const params: Record<string, ParamValue> = { ...rows.params.params };
+  const param_types: Record<string, ParamType> = { ...rows.params.param_types };
+  const where = conditionsOf(name, filters, values, picks, params, param_types);
+  let merged: QueryParams = Object.keys(params).length ? { params, param_types } : {};
+  for (const s of semis) {
+    const c = quoteIdent(s.column);
+    where.push(`${s.cast === "date" ? `CAST(${c} AS DATE)` : c} IN (SELECT ${quoteIdent(s.key)} FROM (\n${s.query.query}\n) AS ${s.alias})`);
+    merged = mergeParams(merged, s.query.params);
+  }
+  const query = `SELECT * FROM ${source(rows.query)}${where.length ? `\nWHERE ${where.join("\n  AND ")}` : ""}`;
+  return { query, params: merged };
+}
+
+/**
+ * The query of a dataset for the viewer's values: its own placeholders from
+ * `paramValues` (or their defaults), narrowed as `rowsQuery` does. `missing`:
+ * placeholders without a value.
  */
 export function datasetQuery(
   dataset: Dataset,
@@ -256,24 +295,13 @@ export function datasetQuery(
   picks: PickBy[] = [],
   semis: Semi[] = [],
 ): DatasetQuery {
-  const own = datasetParams(dataset, paramValues);
-  if (own.missing.length) return { missing: own.missing };
-  const params: Record<string, ParamValue> = { ...own.query.params };
-  const param_types: Record<string, ParamType> = { ...own.query.param_types };
-  const where = conditionsOf(dataset.name, filters, values, picks, params, param_types);
-  let merged: QueryParams = Object.keys(params).length ? { params, param_types } : {};
-  for (const s of semis) {
-    where.push(`${quoteIdent(s.column)} IN (SELECT ${quoteIdent(s.key)} FROM (\n${s.query.query}\n) AS ${s.alias})`);
-    merged = mergeParams(merged, s.query.params);
-  }
-  const query = `SELECT * FROM ${source(dataset.sql)}${where.length ? `\nWHERE ${where.join("\n  AND ")}` : ""}`;
-  return { query, params: merged };
+  const rows = datasetRows(dataset, paramValues);
+  return "missing" in rows ? rows : rowsQuery(dataset.name, rows, filters, values, picks, semis);
 }
 
-/** The distinct values of a column of a dataset (what a filter offers). */
-export function optionsQuery(dataset: Dataset, column: string, paramValues: Record<string, ParamRaw>): DatasetQuery {
-  const own = datasetParams(dataset, paramValues);
-  if (own.missing.length) return { missing: own.missing };
+/** The distinct values of a column of some rows (what a filter offers). */
+export function optionsQuery(rows: DatasetQuery, column: string): DatasetQuery {
+  if ("missing" in rows) return rows;
   const c = quoteIdent(column);
-  return { query: `SELECT DISTINCT ${c} AS value FROM ${source(dataset.sql)} WHERE ${c} IS NOT NULL ORDER BY 1 LIMIT ${MAX_LIST}`, params: own.query };
+  return { query: `SELECT DISTINCT ${c} AS value FROM ${source(rows.query)} WHERE ${c} IS NOT NULL ORDER BY 1 LIMIT ${MAX_LIST}`, params: rows.params };
 }

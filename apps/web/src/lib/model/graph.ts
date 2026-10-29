@@ -28,6 +28,11 @@ export function pathToOne(rels: readonly Relationship[], from: string, to: strin
   return walk(rels, from).get(to) ?? null;
 }
 
+/** the datasets a path passes through, `from` first: what a filter removed from one of them cuts off */
+export function visited(from: string, path: readonly Relationship[]): string[] {
+  return [from, ...path.map((r) => r.one.dataset)];
+}
+
 /** every dataset reachable from `from` through many→one steps, `from` first */
 export function reachable(rels: readonly Relationship[], from: string): string[] {
   return [...walk(rels, from).keys()];

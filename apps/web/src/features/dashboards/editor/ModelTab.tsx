@@ -20,6 +20,7 @@ import type { Checked } from "@/lib/model/types";
 
 import { columnsIn, type FoundColumns } from "./useDatasetColumns";
 import { modelSchema } from "./useModel";
+import { useModelComplete } from "./useModelComplete";
 
 const SECTION_HEADING = { fontSize: 12, fontWeight: 650, color: "text.secondary" };
 const MONO = { fontFamily: "var(--font-mono, monospace)", fontSize: 12, overflowWrap: "anywhere" } as const;
@@ -61,15 +62,16 @@ export function ModelTab({
     async (code: string) => checkModel(code, schema).diagnostics.map(({ from, to, severity, message }) => ({ from, to, severity, message })),
     [schema],
   );
+  const complete = useModelComplete(checked.model, schema);
   // memoised: the editor rebuilds its extensions when it gets a new assist object
-  const assist = useMemo(() => ({ lint }), [lint]);
+  const assist = useMemo(() => ({ lint, complete }), [lint, complete]);
 
   const first = datasets[0];
   const numeric = first ? columnsIn(found, first.name).find((c) => isNumericType(c.type)) : undefined;
   const example = first
     ? `${t("# one measure per line: name = expression; datasets are available by name")}\n${numeric ? `total = sum(${first.name}.${numeric.name})` : `rows = count_rows(${first.name})`}\n`
     : "";
-  const { measures, relationships } = checked.model;
+  const { measures, relationships, calendars, params } = checked.model;
   const formatText = (f: NumberFormat) => [t(STYLE_LABEL[f.style]), f.currency].filter(Boolean).join(" ");
   const none = <Typography sx={{ fontSize: 12, color: "text.disabled" }}>{t("None yet")}</Typography>;
 
@@ -109,6 +111,12 @@ export function ModelTab({
             {relationships.length
               ? relationships.map((r) => <Typography key={r.span.from} sx={MONO}>{`${r.many.dataset}.${r.many.column} → ${r.one.dataset}.${r.one.column}`}</Typography>)
               : none}
+          </Section>
+          <Section heading={t("Calendars")}>
+            {calendars.length ? calendars.map((c) => <Typography key={c.span.from} sx={MONO}>{`${c.name} ← ${c.columns.map((x) => `${x.dataset}.${x.column}`).join(", ")}`}</Typography>) : none}
+          </Section>
+          <Section heading={t("Parameters")}>
+            {params.length ? params.map((p) => <Typography key={p.span.from} sx={MONO}>{`${p.name} = ${JSON.stringify(p.default)}`}</Typography>) : none}
           </Section>
           <Section heading={t("Functions")}>
             {MODEL_FUNCTIONS.map((f) => (

@@ -238,7 +238,22 @@ A dashboard is a canvas of datasets (one SQL query each) and widgets (charts or 
 
 Datasets are imported by default. Publishing, each scheduled run and "Refresh now" run the dataset once, with the publisher's grants, and store the result as a Parquet file under `_iara/extracts/<dashboard id>/` in the bucket (`.iara/extracts/` in the workspace without one). Renders read that copy in a kernel Studio runs itself, so filters and chart picks need no cluster. A viewer must have grants on every table the dataset read. A dataset with parameters of its own (`:name`), or with `-- iara:mode live` in its header (`"mode": "live"` in a recipe), runs on every render instead; the switch is in the editor's Data tab. While a dataset has no copy built from its current query, it runs live. A copy over `IARA_EXTRACT_MAX_MB` fails that dataset's refresh. With every dataset imported, runs store no initial-view render.
 
-The Model tab edits the dashboard's `model.py`: measures, one per line, such as `revenue = sum(orders.o_totalprice)` or `margin = measure(divide(sum(orders.profit), sum(orders.o_totalprice)), format="percent")`. The file has Python syntax but is never run: Studio checks it as you type and turns each measure into SQL. Datasets are available by name. Functions: `sum`, `avg`, `min`, `max`, `count`, `count_distinct`, `count_rows`, `if_`, `divide` (empty instead of a division by zero, which fails the chart with `/`), `measure` (format and label) and `relate(many.column, one.column)`. An aggregation reads one dataset; a measure can combine aggregations of several (`attainment = divide(sum(orders.total), sum(targets.value))`). A bar, line, area, pie or counter chart can draw measures instead of a column and an aggregation (Measures in the chart's settings), grouped by its dataset's columns or by a related dataset's column (`nation.n_name`).
+The Model tab edits the dashboard's `model.py`: measures, one per line, such as `revenue = sum(orders.o_totalprice)` or `margin = measure(divide(sum(orders.profit), sum(orders.o_totalprice)), format="percent")`. The file has Python syntax but is never run: Studio checks it as you type, completes names (Ctrl+Space) and turns each measure into SQL. Datasets are available by name. In a chart's settings, "New measure" adds one line to the model, and "Quick measure" writes it from a template (sum of a column, % of total, year to date, change vs previous year, running total, rank, rolling total).
+
+| Function | What it gives |
+|---|---|
+| `sum`, `avg`, `min`, `max`, `count`, `count_distinct`, `count_rows(dataset)` | an aggregation of one dataset's rows |
+| `if_(cond, a, b)`, `switch(c1, v1, c2, v2, default=v)` | a choice, per row or over aggregations |
+| `divide(a, b, alternate=None)` | `a / b`, empty (or `alternate`) when `b` is 0 or empty; `/` fails the chart instead |
+| `measure(expr, format=, decimals=, currency=, compact=, label=)` | a measure with a number format and a label |
+| `relate(many.column, one.column)` | a relationship |
+| `calculate(m, filters…)`, `all_(dataset or dataset.column)` | `m` with filters added (a filter on a column replaces the dashboard's filter and the chart's grouping on it) or removed: `divide(m, calculate(m, all_(customer)))` is a share of the total |
+| `dates = calendar(orders.o_orderdate, …)` | a dataset of dates (`date`, `year`, `quarter`, `month`, `week`, `month_of_year`, `day_of_week`) related to those columns; one per model |
+| `ytd`, `qtd`, `mtd`, `previous_year`, `previous_period(m, unit)` | along a chart grouped by a calendar column, reading past the calendar's filters |
+| `running_total(m)`, `rolling(m, n)`, `rank(m)` | along the chart's x: the total so far, the total of the last `n` values or periods, the rank (1 = highest) within each series |
+| `rate = param("rate", 0.1)` | `:rate`, set by a dashboard parameter filter, else the default |
+
+An aggregation reads one dataset; a measure can combine aggregations of several (`attainment = divide(sum(orders.total), sum(targets.value))`). A bar, line, area, pie or counter chart can draw measures instead of a column and an aggregation (Measures in the chart's settings), grouped by its dataset's columns or by a related dataset's column (`nation.n_name`).
 
 `relate(orders.o_custkey, customer.c_custkey)` says each order points at one customer. A filter or a chart pick on `customer` then narrows `orders` and every widget on it, and further along a chain (`nation` → `customer` → `orders`); a filter on `orders` does not narrow `customer`. The relationships may not form a cycle, and two datasets have at most one path between them. A measure whose datasets do not reach the column a chart groups by repeats its total in every group, and the editor marks that chart with a note.
 

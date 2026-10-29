@@ -3,6 +3,7 @@
 import type { ParamSpec } from "@/features/queries/queryHeader";
 import { detectParams, mergeSpecs } from "@/features/queries/queryParams";
 import type { Dataset } from "@/lib/dashboards/types";
+import type { Param } from "@/lib/model/types";
 
 /**
  * The tables of a catalog schema, each once: the schema also lists the default
@@ -41,13 +42,14 @@ export function paramNames(datasets: Dataset[]): string[] {
   return [...new Set(datasets.flatMap((d) => detectParams(d.sql)))];
 }
 
-/** How the first dataset that declares `:name` asks for it. */
-export function paramSpecOf(datasets: Dataset[], name: string): ParamSpec | undefined {
+/** How the first dataset that declares `:name` asks for it, else the model's param of that name (a number when its default is one, else text). */
+export function paramSpecOf(datasets: Dataset[], name: string, params: Param[]): ParamSpec | undefined {
   for (const d of datasets) {
     const names = detectParams(d.sql);
     if (names.includes(name)) return mergeSpecs(names, d.params)[name];
   }
-  return undefined;
+  const param = params.find((p) => p.name === name);
+  return param && { type: typeof param.default === "number" ? "number" : "text", default: param.default };
 }
 
 /** The names of a select's options, with the current value kept when it is not among them (a column or dataset that went away). */

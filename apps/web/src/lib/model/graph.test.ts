@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { conflict, outgoing, pathToOne, reachable } from "./graph";
+import { conflict, outgoing, pathToOne, reachable, visited } from "./graph";
 import type { Relationship } from "./types";
 
 const span = { from: 0, to: 0, line: 1, col: 1 };
@@ -99,5 +99,29 @@ describe("conflict", () => {
     // adding orders → regions when items → orders → customers → regions exists
     const message = conflict([items, orders, customers], rel("orders.region_id", "regions.id"));
     expect(message).toContain("gives orders a second path to regions");
+  });
+});
+
+describe("visited", () => {
+  it("lists the datasets a path passes through, the start first, so that a removed one on the way is found", () => {
+    expect(visited("items", pathToOne(RELS, "items", "regions")!)).toEqual(["items", "orders", "customers", "regions"]);
+    expect(visited("orders", [])).toEqual(["orders"]);
+  });
+});
+
+describe("a calendar's relationships", () => {
+  const dated = { ...rel("orders.o_date", "dates.date"), cast: "date" as const };
+  const withCalendar = [dated, rel("goals.d", "dates.date"), ...RELS];
+
+  it("are steps like any other, the cast kept on the step", () => {
+    expect(pathToOne(withCalendar, "orders", "dates")).toEqual([dated]);
+    expect(pathToOne(withCalendar, "orders", "dates")![0].cast).toBe("date");
+    expect(pathToOne(withCalendar, "items", "dates")).toEqual([items, dated]);
+    expect(pathToOne(withCalendar, "dates", "orders")).toBeNull();
+  });
+
+  it("let two facts share the calendar, and refuse a second path to it", () => {
+    expect(conflict([dated], rel("goals.d", "dates.date"))).toBeNull();
+    expect(conflict([dated, orders], rel("orders.other_date", "dates.date"))).toContain("gives orders a second path to dates");
   });
 });

@@ -190,11 +190,20 @@ function Editor({ slug, opened }: { slug: string; opened: OpenedDashboard }) {
     layoutSaver.schedule(LAYOUT, items);
   };
 
-  const changeModel = (source: string) => {
-    setModel(source);
-    staleData.current = true;
-    modelSaver.schedule(MODEL, source);
-  };
+  /**
+   * `now`: saved at once, and resolved when it has been. The widget settings add a measure that way and then
+   * change the chart to draw it: that save runs the dashboard, so this one does not (nothing draws the measure yet).
+   */
+  const changeModel = useCallback(
+    async (source: string, now = false) => {
+      setModel(source);
+      modelSaver.schedule(MODEL, source);
+      if (!now) staleData.current = true;
+      else await modelSaver.flush();
+    },
+    [modelSaver],
+  );
+  const modelState = useMemo(() => ({ model: checked.model, source: model, setSource: changeModel }), [checked.model, model, changeModel]);
 
   const addWidget = async (kind: NewKind) => {
     const dataset = latest.current.datasets[0]?.name ?? "";
@@ -304,7 +313,7 @@ function Editor({ slug, opened }: { slug: string; opened: OpenedDashboard }) {
         </Alert>
       )}
       {tab === "canvas" && (
-        <ModelContext.Provider value={checked.model}>
+        <ModelContext.Provider value={modelState}>
           <CanvasTab
             dashboard={dashboard}
             data={data}
@@ -319,7 +328,7 @@ function Editor({ slug, opened }: { slug: string; opened: OpenedDashboard }) {
           />
         </ModelContext.Provider>
       )}
-      {tab === "model" && <ModelTab source={model} checked={checked} datasets={dashboard.datasets} found={columns.found} load={columns.load} onChange={changeModel} />}
+      {tab === "model" && <ModelTab source={model} checked={checked} datasets={dashboard.datasets} found={columns.found} load={columns.load} onChange={(source) => void changeModel(source)} />}
       <DataTab slug={slug} kernelKey={`dashboard:${dashboard.config.id}`} datasets={dashboard.datasets} shown={tab === "data"} schema={schema} onAdd={addDataset} onSaveRecipe={saveRecipe} onDelete={(name) => void removeDataset(name)} onDatasetSaved={putDataset} />
       <AskDialog open={dialog === "ask"} slug={slug} onClose={() => setDialog(null)} onSaved={() => void reload()} />
       <SettingsDialog open={dialog === "settings"} config={dashboard.config} onSave={(config) => void changeConfig(config)} onClose={() => setDialog(null)} />

@@ -18,9 +18,11 @@ import type { ChartWidget, Dataset, Widget } from "@/lib/dashboards/types";
 
 import { ChartStyleSettings } from "./ChartStyleSettings";
 import { ColumnFormatSettings } from "./ColumnFormatSettings";
+import { CALENDAR_COLUMN_INFO, isCalendar } from "./calendarColumns";
 import { withCurrent } from "./datasets";
 import { FilterSettings } from "./FilterSettings";
 import { widgetLabel } from "./newWidget";
+import { NewMeasure } from "./NewMeasure";
 import { columnsIn, type FoundColumns } from "./useDatasetColumns";
 import { relatedDatasets, useModel } from "./useModel";
 
@@ -53,7 +55,9 @@ export function WidgetPanel({
   const model = useModel();
   // a measure chart also reads the datasets its measures reach, so their columns are read too
   const related = widget.kind === "chart" && widget.measures?.length ? relatedDatasets(model, widget.dataset, widget.measures) : [];
-  const used = [...usedDatasets(widget), ...related];
+  // a calendar is the model's own: its columns are known, there is nothing to read
+  const columnsOf = (name: string) => (isCalendar(model.calendars, name) ? CALENDAR_COLUMN_INFO : columnsIn(found, name));
+  const used = [...usedDatasets(widget), ...related].filter((name) => !isCalendar(model.calendars, name));
   const key = used.join(",");
   // the columns are read again each time the panel opens or the datasets are
   useEffect(() => {
@@ -63,7 +67,7 @@ export function WidgetPanel({
   /** The columns a chart takes its x and group from: its dataset's as they are, and with measures the related datasets' as `dataset.column`. */
   const chartColumns = (chart: ChartWidget): ColumnInfo[] => [
     ...columnsIn(found, chart.dataset),
-    ...related.flatMap((name) => columnsIn(found, name).map((c) => ({ ...c, name: `${name}.${c.name}` }))),
+    ...related.flatMap((name) => columnsOf(name).map((c) => ({ ...c, name: `${name}.${c.name}` }))),
   ];
 
   const datasetSelect = (value: string, set: (name: string) => void) => (
@@ -146,6 +150,12 @@ export function WidgetPanel({
               load(dataset).then((columns) => onChange({ ...widget, dataset, spec: fitSpec(widget.spec, columns) }), () => undefined);
             })}
             {measureSelect(widget)}
+            <NewMeasure
+              datasets={datasets}
+              found={found}
+              load={load}
+              onAdded={(name) => onChange({ ...widget, measures: widget.spec.kind === "counter" ? [name] : [...(widget.measures ?? []), name] }, true)}
+            />
             <Box sx={{ mx: -2 }}>
               <ChartControls spec={widget.spec} columns={chartColumns(widget)} hideValues={!!widget.measures?.length} onChange={(spec) => onChange({ ...widget, spec })} />
             </Box>

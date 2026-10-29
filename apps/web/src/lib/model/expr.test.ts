@@ -5,7 +5,7 @@ import { checkExpr, type Entry, type Env } from "./expr";
 import { ModelError } from "./functions/def";
 import { parse } from "./parse";
 
-const sum = { dataset: "orders", sql: 'SUM("a")' };
+const sum = { dataset: "orders", sql: 'SUM("a")', agg: "sum" as const };
 const measure = { name: "revenue", datasets: ["orders"], atoms: [sum], expr: [{ atom: 0 }], span: { from: 0, to: 0, line: 1, col: 1 } };
 const names = new Map<string, Entry>([
   ["revenue", { kind: "measure", measure }],
@@ -13,7 +13,7 @@ const names = new Map<string, Entry>([
   ["tag", { kind: "const", sql: "'x'", text: true }],
   ["bad", { kind: "broken" }],
 ]);
-const env: Env = { schema: { orders: ["a", "b"], loose: null }, names, relationships: [] };
+const env: Env = { schema: { orders: ["a", "b"], loose: null }, names, relationships: [], calendars: [], params: [] };
 
 function exprOf(source: string): Expr {
   const [s] = parse(`x = ${source}`).statements;
@@ -21,7 +21,7 @@ function exprOf(source: string): Expr {
   return s.value;
 }
 
-const typed = (source: string, wholeValue = false) => checkExpr(exprOf(source), env, wholeValue);
+const typed = (source: string, wholeValue = false, assigned?: string) => checkExpr(exprOf(source), env, wholeValue, assigned);
 const error = (source: string) => {
   try {
     typed(source);
@@ -50,7 +50,7 @@ describe("checkExpr", () => {
   });
 
   it("gives an aggregation one atom, which reads the one dataset of its columns", () => {
-    expect(typed("sum(orders.a * 2)")).toEqual({ level: "aggregate", sql: [{ dataset: "orders", sql: 'SUM(("a" * 2))' }], datasets: ["orders"] });
+    expect(typed("sum(orders.a * 2)")).toEqual({ level: "aggregate", sql: [{ dataset: "orders", sql: 'SUM(("a" * 2))', agg: "sum" }], datasets: ["orders"] });
     expect(error("sum(orders.a * loose.x)")).toBe("an aggregation reads one dataset: sum(...) reads orders and loose");
   });
 
@@ -81,6 +81,19 @@ describe("checkExpr", () => {
     expect(typed("measure(revenue, label='R')", true)).toMatchObject({ level: "aggregate", label: "R" });
     expect(error("measure(revenue)")).toContain("has to be the whole value of a line");
     expect(error("relate(orders.a, loose.x)")).toBe("relate(...) has to be a line of its own");
+  });
+
+  it("gives param the name of the line only when it is the whole value of it", () => {
+    expect(typed('param("rate", 0.1)', true, "rate")).toEqual({ level: "scalar", sql: [":rate"], datasets: [] });
+    expect(() => typed('param("rate", 0.1)', true, "r")).toThrow("has to be the same as the name it is assigned to");
+    expect(typed('revenue * param("other", 1)', true, "r").level).toBe("aggregate");
+    expect(typed('param("free", "x")').text).toBe(true);
+    expect(env.params.map((p) => p.name)).toEqual(["rate", "other", "free"]);
+  });
+
+  it("takes a calendar only as a line of its own", () => {
+    expect(error("calendar(orders.a)")).toBe("calendar(...) has to be the whole value of a line: name = calendar(...)");
+    expect(() => typed("calendar(orders.a)", true, "dates")).toThrow("has to be the whole value of a line");
   });
 
   it("puts the error on the node at fault", () => {

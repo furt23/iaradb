@@ -1,17 +1,19 @@
 /**
  * SQL under construction. The checker builds every value as `Parts`: text, and
- * wherever an aggregation goes, the aggregation itself (an `Atom`). A finished
- * measure numbers its atoms and keeps the text around them as a `Template`.
+ * wherever an aggregation goes, the aggregation itself (an `Atom`), or a rank
+ * of some parts. A finished measure numbers its atoms and keeps the text
+ * around them as a `Template`.
  */
 
 import type { Atom, Measure, Template } from "./types";
 
-export type Parts = (string | Atom)[];
+export type Part = string | Atom | { rank: Parts };
+export type Parts = Part[];
 
 /** `sql\`(${a} + ${b})\``: text and parts glued into one, neighbouring text joined so the shape is always the same */
 export function sql(strings: TemplateStringsArray, ...holes: (string | Parts)[]): Parts {
   const out: Parts = [];
-  const push = (p: string | Atom) => {
+  const push = (p: Part) => {
     if (p === "") return;
     const last = out[out.length - 1];
     if (typeof p === "string" && typeof last === "string") out[out.length - 1] = last + p;
@@ -35,24 +37,61 @@ export function text(parts: Parts): string {
     .join("");
 }
 
-/** Numbers the atoms in order of first use; the same dataset and SQL is one atom, however often it is written. */
+/** Is there a rank in these parts? (calculate and the windows do not reach through one.) */
+export function hasRank(parts: Parts): boolean {
+  return parts.some((p) => typeof p === "object" && "rank" in p);
+}
+
+/** The same parts with each atom replaced by `f(atom)`; text is kept (ranks are not entered). */
+export function mapAtoms(parts: Parts, f: (atom: Atom) => Atom): Parts {
+  return parts.map((p) => (typeof p === "string" || "rank" in p ? p : f(p)));
+}
+
+const sorted = (xs: readonly object[]) => xs.map((x) => JSON.stringify(x)).sort();
+
+/** What makes two atoms one: the same value, in the same context and window (the order of a context's entries does not matter). */
+function atomKey(a: Atom): string {
+  const c = a.context;
+  return JSON.stringify([a.dataset, a.sql, a.agg, c && [sorted(c.filters), sorted(c.removed)], a.window]);
+}
+
+/** Numbers the atoms in order of first use; the same atom is one, however often it is written. */
 export function numbered(parts: Parts): { atoms: Atom[]; expr: Template } {
   const atoms: Atom[] = [];
-  const expr = parts.map((p) => {
-    if (typeof p === "string") return p;
-    let i = atoms.findIndex((a) => a.dataset === p.dataset && a.sql === p.sql);
-    if (i < 0) i = atoms.push({ dataset: p.dataset, sql: p.sql }) - 1;
-    return { atom: i };
-  });
-  return { atoms, expr };
+  const keys: string[] = [];
+  const walk = (ps: Parts): Template =>
+    ps.map((p) => {
+      if (typeof p === "string") return p;
+      if ("rank" in p) return { rank: walk(p.rank) };
+      const key = atomKey(p);
+      let i = keys.indexOf(key);
+      if (i < 0) {
+        i = atoms.push({ ...p }) - 1;
+        keys.push(key);
+      }
+      return { atom: i };
+    });
+  return { atoms, expr: walk(parts) };
 }
 
 /** A measure back as parts, to be used inside another measure. */
 export function partsOf(m: Pick<Measure, "atoms" | "expr">): Parts {
-  return m.expr.map((p) => (typeof p === "string" ? p : m.atoms[p.atom]));
+  const back = (t: Template): Parts => t.map((p) => (typeof p === "string" ? p : "atom" in p ? m.atoms[p.atom] : { rank: back(p.rank) }));
+  return back(m.expr);
 }
 
-/** A template as SQL text, each atom written by `atomSql(index)`. */
-export function render(t: Template, atomSql: (atom: number) => string): string {
-  return t.map((p) => (typeof p === "string" ? p : atomSql(p.atom))).join("");
+/**
+ * A template as SQL text, each atom written by `atomSql(index)` and each rank
+ * by `rankSql(inner)` over the SQL of what it ranks (a template with a rank
+ * needs one).
+ */
+export function render(t: Template, atomSql: (atom: number) => string, rankSql?: (inner: string) => string): string {
+  return t
+    .map((p) => {
+      if (typeof p === "string") return p;
+      if ("atom" in p) return atomSql(p.atom);
+      if (!rankSql) throw new Error("this template has a rank: render needs rankSql");
+      return rankSql(render(p.rank, atomSql, rankSql));
+    })
+    .join("");
 }

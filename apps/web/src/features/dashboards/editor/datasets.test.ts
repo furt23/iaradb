@@ -42,8 +42,22 @@ describe("params", () => {
   });
 
   it("gives the spec of the first dataset that declares one, or plain text", () => {
-    expect(paramSpecOf(datasets, "since")).toEqual({ type: "date" });
-    expect(paramSpecOf(datasets, "region")).toEqual({ type: "text" });
-    expect(paramSpecOf(datasets, "nope")).toBeUndefined();
+    expect(paramSpecOf(datasets, "since", [])).toEqual({ type: "date" });
+    expect(paramSpecOf(datasets, "region", [])).toEqual({ type: "text" });
+    expect(paramSpecOf(datasets, "nope", [])).toBeUndefined();
+  });
+
+  it("falls back to the model's params: a number when the default is one, else text", () => {
+    const span = { from: 0, to: 0, line: 1, col: 1 };
+    const params = [
+      { name: "discount", default: 0.1, span },
+      { name: "label", default: "all", span },
+      { name: "region", default: 5, span },
+    ];
+    expect(paramSpecOf(datasets, "discount", params)).toEqual({ type: "number", default: 0.1 });
+    expect(paramSpecOf(datasets, "label", params)).toEqual({ type: "text", default: "all" });
+    // a dataset that declares the same name answers first
+    expect(paramSpecOf(datasets, "region", params)).toEqual({ type: "text" });
+    expect(paramSpecOf(datasets, "nope", params)).toBeUndefined();
   });
 });

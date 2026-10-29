@@ -2,16 +2,25 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Dashboard, FilterWidget, PublishedDashboard } from "@/lib/dashboards/types";
+import type { Param } from "@/lib/model/types";
 
 import type { StudioUser } from "../auth/access";
 import { canView, getPublished, listPublished, publishDashboard, publishedAt, unpublish, viewOf } from "./publish";
 
+// the model's checker has tests of its own: here it is stood in for, to see what a viewer is given of its parameters
+const modelMock = vi.hoisted(() => ({ check: vi.fn() }));
+vi.mock("@/lib/model/check", () => ({ checkModel: modelMock.check }));
+const span = { from: 0, to: 0, line: 1, col: 1 };
+/** the checker finds these parameters in any model text */
+const useParams = (params: Param[]) => modelMock.check.mockReset().mockReturnValue({ model: { relationships: [], measures: [], calendars: [], params }, diagnostics: [] });
+
 let dir: string;
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "iara-published-"));
+  useParams([]);
 });
 afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
@@ -94,6 +103,40 @@ describe("publishDashboard", () => {
     expect(publishDashboard(d, { kind: "team" }, "me", dir).datasets).toEqual(d.datasets);
   });
 
+  describe("a dashboard with a model", () => {
+    const model = "revenue = sum(sales.amount)";
+    const bound = (param: string): FilterWidget => ({ id: "param002", kind: "filter", control: "text", param });
+    const onDates: FilterWidget = { id: "field002", kind: "filter", control: "date_range", fields: [{ dataset: "dates", column: "date" }] };
+    const publish = (d: Dashboard) => publishDashboard(d, { kind: "team" }, "me", dir);
+    const withModel = (...widgets: FilterWidget[]) => dashboard({ model, widgets: [...dashboard().widgets, ...widgets] });
+    const named = (calendars: string[], params: string[]) =>
+      modelMock.check.mockReset().mockReturnValue({
+        model: { relationships: [], measures: [], calendars: calendars.map((name) => ({ name, columns: [], span })), params: params.map((name) => ({ name, default: 1, span })) },
+        diagnostics: [],
+      });
+
+    it("publishes a param filter bound to a measure's parameter, and refuses one bound to nothing", () => {
+      named([], ["discount"]);
+      expect(publish(withModel(bound("discount"))).widgets).toContainEqual(bound("discount"));
+      expect(() => publish(withModel(bound("rebate")))).toThrow(/no dataset has the placeholder :rebate/);
+      // the model of another dashboard is not this one's
+      named([], []);
+      expect(() => publish(withModel(bound("discount")))).toThrow(/no dataset has the placeholder :discount/);
+      expect(modelMock.check).toHaveBeenCalledWith(model, { sales: null });
+    });
+
+    it("publishes a filter on a calendar's column, and still refuses a dataset that is not there", () => {
+      named(["dates"], []);
+      expect(publish(withModel(onDates)).widgets).toContainEqual(onDates);
+      expect(() => publish(withModel({ ...onDates, fields: [{ dataset: "ghost", column: "date" }] }))).toThrow(/there is no dataset ghost/);
+      // a calendar is not a dataset a chart or table can draw
+      expect(() => publish(dashboard({ model, widgets: [{ id: "table001", kind: "table", dataset: "dates" }], layout: [] }))).toThrow(/there is no dataset dates/);
+      // without the calendar in the model there is none
+      named([], []);
+      expect(() => publish(withModel(onDates))).toThrow(/there is no dataset dates/);
+    });
+  });
+
   it("refuses a share that is not valid", () => {
     expect(() => publishDashboard(dashboard(), { kind: "emails", emails: ["not an email"] }, "me", dir)).toThrow(/not an email/);
     expect(() => publishDashboard(dashboard(), { kind: "world" } as never, "me", dir)).toThrow(/share is/);
@@ -143,6 +186,51 @@ describe("viewOf", () => {
     const v = viewOf(p);
     expect(v).not.toHaveProperty("model");
     expect(JSON.stringify(v)).not.toContain("revenue");
+  });
+
+  describe("the parameters of the model's measures", () => {
+    const discount: Param = { name: "discount", default: 0.1, span };
+    const label: Param = { name: "label", default: "gross", span };
+    const model = "revenue = sum(sales.amount) * (1 - param('discount', 0.1))";
+    const publishWith = (over: Partial<Dashboard> = {}) => publishDashboard(dashboard({ model, ...over }), { kind: "team" }, "me", dir);
+
+    it("go out with their type and default, next to the datasets' placeholders, and nothing else of the model", () => {
+      useParams([discount, label]);
+      const v = viewOf(publishWith());
+      expect(v.params).toEqual({
+        discount: { type: "number", default: 0.1 },
+        label: { type: "text", default: "gross" },
+        year: { type: "select", options: ["2023", "2024"], default: "2024" },
+      });
+      // the checker reads the model against the datasets, whose columns are not known here
+      expect(modelMock.check).toHaveBeenCalledWith(model, { sales: null });
+      expect(JSON.stringify(v)).not.toMatch(/revenue|span|SELECT|sum\(/);
+    });
+
+    it("let a filter that sets one be drawn like any other", () => {
+      useParams([discount]);
+      const p = publishWith({ widgets: [...dashboard().widgets, { id: "param002", kind: "filter", control: "text", param: "discount" }] });
+      expect(viewOf(p).params.discount).toEqual({ type: "number", default: 0.1 });
+    });
+
+    it("do not override a dataset's placeholder of the same name", () => {
+      useParams([discount]);
+      const same = dashboard({
+        model,
+        datasets: [{ name: "sales", sql: "SELECT * FROM sales WHERE d = :discount", params: { discount: { type: "select", options: ["0.1", "0.2"], default: "0.2" } } }],
+        widgets: [{ id: "param002", kind: "filter", control: "select", param: "discount" }],
+        layout: [],
+      });
+      expect(viewOf(publishDashboard(same, { kind: "team" }, "me", dir)).params).toEqual({ discount: { type: "select", options: ["0.1", "0.2"], default: "0.2" } });
+      // and when no filter uses the dataset's, the model's does not stand in for it
+      expect(viewOf(publishDashboard({ ...same, widgets: [] }, { kind: "team" }, "me", dir)).params).toEqual({});
+    });
+
+    it("are not looked for in an empty model", () => {
+      useParams([discount]);
+      expect(viewOf(publishWith({ model: " \n" })).params).toEqual({ year: { type: "select", options: ["2023", "2024"], default: "2024" } });
+      expect(modelMock.check).not.toHaveBeenCalled();
+    });
   });
 
   it("gives a placeholder without a saved spec the plain text one", () => {

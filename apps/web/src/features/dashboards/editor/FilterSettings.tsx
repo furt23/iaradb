@@ -17,9 +17,11 @@ import { useTranslation } from "react-i18next";
 import { useNotify } from "@/features/shell/notify";
 import type { Dataset, FilterControl, FilterField, FilterWidget } from "@/lib/dashboards/types";
 
+import { CALENDAR_COLUMN_INFO, isCalendar } from "./calendarColumns";
 import { paramNames, withCurrent } from "./datasets";
 import { filterOver, filterValueType } from "./newWidget";
 import { columnsIn, type FoundColumns } from "./useDatasetColumns";
+import { useModel } from "./useModel";
 
 const CONTROLS: { value: FilterControl; label: string }[] = [
   { value: "select", label: "Dropdown" },
@@ -29,8 +31,9 @@ const CONTROLS: { value: FilterControl; label: string }[] = [
 ];
 
 /**
- * How a filter narrows the data: by columns of datasets (no SQL), or by a
- * `:parameter` the datasets' queries declare. Its control and value type follow.
+ * How a filter narrows the data: by columns of datasets or of the model's
+ * calendars (no SQL), or by a parameter, a `:parameter` the datasets' queries
+ * declare or one the model does. Its control and value type follow.
  */
 export function FilterSettings({
   widget,
@@ -47,11 +50,16 @@ export function FilterSettings({
 }) {
   const { t } = useTranslation();
   const notify = useNotify();
-  const params = paramNames(datasets);
+  const model = useModel();
+  const params = [...new Set([...paramNames(datasets), ...model.params.map((p) => p.name)])];
   const byColumns = widget.param === undefined;
   const fields = widget.fields ?? [];
+  // a calendar is a dataset made by the model: its columns are known, none is read
+  const fieldDatasets = [...datasets.map((d) => d.name), ...model.calendars.map((c) => c.name)];
+  const columnsOf = (name: string) => (isCalendar(model.calendars, name) ? CALENDAR_COLUMN_INFO : columnsIn(found, name));
+  const loadColumns = (name: string) => (isCalendar(model.calendars, name) ? Promise.resolve(CALENDAR_COLUMN_INFO) : load(name));
 
-  const typeOf = (f: FilterField) => columnsIn(found, f.dataset).find((c) => c.name === f.column)?.type ?? "";
+  const typeOf = (f: FilterField) => columnsOf(f.dataset).find((c) => c.name === f.column)?.type ?? "";
   /** The filter over other fields: values are typed by the first column, as the control allows. */
   const withFields = (next: FilterField[], control = widget.control, firstType = typeOf(next[0])): FilterWidget => ({
     ...widget,
@@ -75,7 +83,7 @@ export function FilterSettings({
 
   const setFieldDataset = async (i: number, dataset: string) => {
     try {
-      const columns = await load(dataset);
+      const columns = await loadColumns(dataset);
       const column = columns.find((c) => c.name === fields[i].column) ?? columns[0];
       if (!column) throw new Error(t("{{name}} has no columns.", { name: dataset }));
       onChange(withFields(fields.map((f, j) => (j === i ? { dataset, column: column.name } : f)), widget.control, i === 0 ? column.type : undefined));
@@ -86,9 +94,9 @@ export function FilterSettings({
 
   const addField = async () => {
     const last = fields[fields.length - 1];
-    const dataset = datasets.find((d) => d.name !== last.dataset)?.name ?? last.dataset;
+    const dataset = fieldDatasets.find((d) => d !== last.dataset) ?? last.dataset;
     try {
-      const columns = await load(dataset);
+      const columns = await loadColumns(dataset);
       const column = columns.find((c) => c.name === fields[0].column) ?? columns[0];
       if (column) onChange(withFields([...fields, { dataset, column: column.name }]));
     } catch (e) {
@@ -124,7 +132,7 @@ export function FilterSettings({
             <Paper key={i} variant="outlined" sx={{ p: 1.5, display: "flex", gap: 1 }}>
               <Stack spacing={1.5} sx={{ flex: 1, minWidth: 0 }}>
                 <TextField select size="small" label={t("Dataset")} value={f.dataset} onChange={(e) => void setFieldDataset(i, e.target.value)}>
-                  {withCurrent(datasets.map((d) => d.name), f.dataset).map((n) => (
+                  {withCurrent(fieldDatasets, f.dataset).map((n) => (
                     <MenuItem key={n} value={n}>
                       {n}
                     </MenuItem>
@@ -137,7 +145,7 @@ export function FilterSettings({
                   value={f.column}
                   onChange={(e) => onChange(withFields(fields.map((x, j) => (j === i ? { ...x, column: e.target.value } : x))))}
                 >
-                  {withCurrent(columnsIn(found, f.dataset).map((c) => c.name), f.column).map((n) => (
+                  {withCurrent(columnsOf(f.dataset).map((c) => c.name), f.column).map((n) => (
                     <MenuItem key={n} value={n}>
                       {n}
                     </MenuItem>

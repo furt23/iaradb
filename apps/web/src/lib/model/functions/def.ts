@@ -6,7 +6,7 @@
 
 import type { Call, Expr } from "../ast";
 import type { Parts } from "../parts";
-import type { ColumnRef, Relationship, Span } from "../types";
+import type { Calendar, ColumnRef, Param, Relationship, Span } from "../types";
 import type { NumberFormat } from "@/lib/dashboards/types";
 
 /** `a`, `a and b`, `a, b and c` */
@@ -59,6 +59,18 @@ export interface FnCx {
   /** a bare dataset name, e.g. the argument of `count_rows` */
   dataset(node: Expr): string;
   readonly relationships: readonly Relationship[];
+  /** the model's calendars (their datasets are in the schema already) */
+  readonly calendars: readonly Calendar[];
+  /** the params declared so far; `param(...)` adds its own */
+  readonly params: Param[];
+  /** the name of the line this call is the whole value of (`rate = param("rate", 0.1)`), else unset */
+  readonly assigned?: string;
+}
+
+/** What a `name = calendar(...)` line makes: the calendar and the relationships that tie it to its columns. */
+export interface Declared {
+  calendar: Calendar;
+  relationships: Relationship[];
 }
 
 interface Base {
@@ -78,6 +90,11 @@ export type FnDef = Base &
         /** a line of its own */
         kind: "statement";
         check(call: Call, cx: FnCx): Relationship;
+      }
+    | {
+        /** the whole value of `name = ...`, which makes `name` a dataset */
+        kind: "declaration";
+        check(call: Call, cx: FnCx, name: string): Declared;
       }
   );
 
@@ -107,6 +124,21 @@ export function bind(call: Call, p: Params): Record<string, Expr> {
   const missing = p.params.slice(0, p.required).filter((n) => !Object.hasOwn(out, n));
   if (missing.length) fail(call, `${f}() is missing ${missing.map((n) => `\`${n}\``).join(", ")}`);
   return out;
+}
+
+/** For functions that take any number of values: only the keyword arguments in `named` are allowed, and they come back by name. */
+export function variadic(call: Call, named: readonly string[] = []): Record<string, Expr> {
+  for (const k of call.kwargs) if (!named.includes(k.name)) fail(k, `${call.func}() has no argument named ${k.name}`);
+  return Object.fromEntries(call.kwargs.map((k) => [k.name, k.value]));
+}
+
+/** The measure a function reworks (calculate, windows, rank) must be an aggregation or a measure: not a column, not a fixed value. */
+export function needAggregate(fn: string, node: Expr, t: Typed): void {
+  if (t.level === "row") {
+    const text = t.bare?.text ?? "the column";
+    fail(t.bare ?? node, `\`${text}\` must be inside an aggregation, e.g. sum(${text})`);
+  }
+  if (t.level === "scalar") fail(node, `${fn}() needs a measure or an aggregation like sum(orders.total), not a fixed value`);
 }
 
 /** Arithmetic on text is always a mistake, so it is refused where the text is. */

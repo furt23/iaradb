@@ -25,6 +25,7 @@ import { paramSpecOf } from "./datasets";
 import type { NewKind } from "./newWidget";
 import { widgetLabel } from "./newWidget";
 import type { FoundColumns } from "./useDatasetColumns";
+import { useModel } from "./useModel";
 import { WidgetPanel } from "./WidgetPanel";
 
 /**
@@ -55,6 +56,7 @@ export function CanvasTab({
   onRemove(id: string): void;
 }) {
   const { t } = useTranslation();
+  const model = useModel();
   const [deleting, setDeleting] = useState<Widget | null>(null);
   const byId = useMemo(() => new Map(dashboard.widgets.map((w) => [w.id, w])), [dashboard.widgets]);
   const current = selected ? byId.get(selected) : undefined;
@@ -90,7 +92,7 @@ export function CanvasTab({
           loading={data.loading}
           filterValue={data.values[id]}
           onFilterValue={(value) => data.setValue(id, value)}
-          paramSpec={w.kind === "filter" && w.param ? paramSpecOf(dashboard.datasets, w.param) : undefined}
+          paramSpec={w.kind === "filter" && w.param ? paramSpecOf(dashboard.datasets, w.param, model.params) : undefined}
           onPick={w.kind === "chart" && canPick(w.spec) ? (value) => data.setPick(id, value) : undefined}
           picked={data.cross.find((p) => p.widget === id)?.value}
         />
