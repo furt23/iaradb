@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 
 use crate::catalog_names::{DEFAULT_CATALOG, MAIN, Missing, SchemaName, SchemaSpec, TableName, TableRef, parse_catalog, unknown_catalog};
 use crate::error::{Result, WhError};
@@ -176,6 +176,8 @@ pub struct SessionState {
 pub struct ReadPolicy {
     /// `*`, `catalog`, `catalog.schema` or `catalog.schema.table`, lowercase
     pub allow: Vec<String>,
+    /// the covered tables read so far, as `catalog.schema.table` (what `covers` compares)
+    read: Mutex<BTreeSet<String>>,
 }
 
 impl ReadPolicy {
@@ -217,7 +219,7 @@ impl SessionContext {
     /// than queries are refused.
     pub fn restricted(&self, allow: Vec<String>) -> SessionContext {
         let allow = allow.into_iter().map(|a| a.trim().to_ascii_lowercase()).collect();
-        SessionContext { state: self.state.clone(), policy: Some(Arc::new(ReadPolicy { allow })) }
+        SessionContext { state: self.state.clone(), policy: Some(Arc::new(ReadPolicy { allow, read: Mutex::default() })) }
     }
 
     /// The allow list of a restricted context.
@@ -225,11 +227,23 @@ impl SessionContext {
         self.policy.as_deref()
     }
 
-    /// Fail unless a table may be read (always when the context is not restricted).
+    /// The covered tables (and views) read through this context's policy, as
+    /// sorted `catalog.schema.table` names; none when it is not restricted.
+    /// Forks share the policy, so they share the record.
+    pub fn tables_read(&self) -> Vec<String> {
+        self.policy.as_ref().map_or_else(Vec::new, |p| p.read.lock().iter().cloned().collect())
+    }
+
+    /// Fail unless a table may be read (always when the context is not
+    /// restricted); a restricted context records the tables it reads.
     fn check_read(&self, name: &TableName) -> Result<()> {
         match &self.policy {
             Some(p) if !p.covers_table(name) => Err(WhError::Plan(format!("no read grant on table {}", name.key()))),
-            _ => Ok(()),
+            Some(p) => {
+                p.read.lock().insert(name.key());
+                Ok(())
+            }
+            None => Ok(()),
         }
     }
 

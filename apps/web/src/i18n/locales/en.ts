@@ -714,7 +714,15 @@ export const en: TranslationShape = {
   "Unpivot {{columns}} into {{name}}, {{value}}": "Unpivot {{columns}} into {{name}}, {{value}}",
   "From a table, cleaned (no code)": "From a table, cleaned (no code)",
   "New dataset from a cleaned table": "New dataset from a cleaned table",
-  "No code": "No code",
+  // Dataset copies: imported (stored for viewers) or live
+  "Imported": "Imported",
+  "Live": "Live",
+  "Imported · {{rows}} rows · {{size}} · updated {{when}}": "Imported · {{rows}} rows · {{size}} · updated {{when}}",
+  "Imported · updates when you publish": "Imported · updates when you publish",
+  "Imported · first import when you publish": "Imported · first import when you publish",
+  "Live · it has parameters": "Live · it has parameters",
+  "Imported: viewers get a stored copy of the data, updated when you publish and on the refresh schedule. Live: every view runs the query.": "Imported: viewers get a stored copy of the data, updated when you publish and on the refresh schedule. Live: every view runs the query.",
+  "How viewers get the data": "How viewers get the data",
   // Governance, MCP and Ask
   "All editors": "All editors",
   "All viewers": "All viewers",

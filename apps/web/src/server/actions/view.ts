@@ -6,6 +6,7 @@ import type { CrossPicks, FilterValues, PublishedDashboard, RenderResult, ViewDa
 import type { StudioUser } from "../auth/access";
 import { requireViewer } from "../auth/session";
 import { cacheKey, cached } from "../dashboards/cache";
+import { servedExtracts } from "../dashboards/extractRefresh";
 import { canView, getPublished, listPublished, viewOf } from "../dashboards/publish";
 import { renderDashboard } from "../dashboards/run";
 import { isInitialView, readSnapshot } from "../dashboards/snapshots";
@@ -65,7 +66,8 @@ export async function renderShared(id: string, values: FilterValues, cross: Cros
       const stored = readSnapshot(p, allow);
       if (stored) return stored;
     }
-    return cached(cacheKey(p.id, p, values, allow, cross), p.refresh_minutes * 60_000, () =>
+    // the key leaves out the extracts: a refresh that swaps them forgets the renders
+    return cached(cacheKey(p.id, p, values, allow, cross), p.refresh_minutes * 60_000, async () =>
       renderDashboard(
         p,
         values,
@@ -74,6 +76,7 @@ export async function renderShared(id: string, values: FilterValues, cross: Cros
           redact: true,
           source: `dashboard view ${p.title}`,
           allow,
+          extracts: await servedExtracts(p.id),
         },
         cross,
       ),

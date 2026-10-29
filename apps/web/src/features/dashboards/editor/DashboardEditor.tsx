@@ -288,7 +288,7 @@ function Editor({ slug, opened }: { slug: string; opened: OpenedDashboard }) {
           onRemove={(id) => void removeWidget(id)}
         />
       )}
-      <DataTab slug={slug} kernelKey={`dashboard:${dashboard.config.id}`} datasets={dashboard.datasets} shown={tab === "data"} schema={schema} onAdd={addDataset} onSaveRecipe={saveRecipe} onDelete={(name) => void removeDataset(name)} />
+      <DataTab slug={slug} kernelKey={`dashboard:${dashboard.config.id}`} datasets={dashboard.datasets} shown={tab === "data"} schema={schema} onAdd={addDataset} onSaveRecipe={saveRecipe} onDelete={(name) => void removeDataset(name)} onDatasetSaved={putDataset} />
       <AskDialog open={dialog === "ask"} slug={slug} onClose={() => setDialog(null)} onSaved={() => void reload()} />
       <SettingsDialog open={dialog === "settings"} config={dashboard.config} onSave={(config) => void changeConfig(config)} onClose={() => setDialog(null)} />
       <RefreshDialog open={dialog === "schedule"} slug={slug} config={dashboard.config} published={published !== null} onSave={(config) => void changeConfig(config)} onClose={() => setDialog(null)} />

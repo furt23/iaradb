@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { ExtractEntry } from "@/lib/dashboards/extracts";
 import type { ChartWidget, Dataset, FilterWidget, TableWidget, Widget } from "@/lib/dashboards/types";
 
+import { datasetHash } from "./extractStore";
 import { explainDatasets, HIDDEN_ERROR, renderDashboard, withSql, type RunDeps } from "./run";
 
 const columns = [
@@ -262,6 +264,123 @@ describe("renderDashboard", () => {
     const viewer = await render(widgets, {}, deps(request, true), datasets);
     expect(viewer.widgets.table002).toEqual({ kind: "error", message: HIDDEN_ERROR });
     expect(log).toHaveBeenCalledWith("dashboard widget table002: no table nope");
+  });
+});
+
+describe("extracts", () => {
+  /** the manifest entry of a dataset built from its current definition */
+  const entryOf = (d: Dataset, over: Partial<ExtractEntry> = {}): ExtractEntry => ({
+    version: "20261028T231500Z-a1b2",
+    rows: 2,
+    bytes: 100,
+    columns,
+    sources: ["main.public.sales"],
+    hash: datasetHash(d),
+    refreshed_at: 1,
+    ...over,
+  });
+  const withExtracts = (k: ReturnType<typeof fakeKernel>, serving: ReturnType<typeof fakeKernel>, entries: Record<string, ExtractEntry>, allow: string[] | null = null): RunDeps => ({
+    ...deps(k.request),
+    allow,
+    extracts: { manifest: { datasets: entries }, serve: serving.request as never, url: (name, v) => `s3://bucket/_iara/extracts/d1/${name}/${v}.parquet` },
+  });
+  const READ = "SELECT * FROM read_parquet('s3://bucket/_iara/extracts/d1/sales/20261028T231500Z-a1b2.parquet')";
+  const queries = (k: ReturnType<typeof fakeKernel>) => k.calls.filter((c) => c.method === "sql.run").map((c) => c.params.query);
+
+  it("reads a fresh extract on the serving kernel, with no allow list, for the queries, the charts, the table and the filter options; the dashboard's kernel runs nothing", async () => {
+    const live = fakeKernel();
+    const serving = fakeKernel();
+    const r = await render([chart, table, region], { filter01: "EU" }, withExtracts(live, serving, { sales: entryOf(sales) }, ["main"]), [sales]);
+    expect(live.calls).toEqual([]);
+    expect(queries(serving)).toEqual([
+      `SELECT * FROM (\n${READ}\n) AS _d\nWHERE "region" = :_f0`,
+      `SELECT DISTINCT "region" AS value FROM (\n${READ}\n) AS _d WHERE "region" IS NOT NULL ORDER BY 1 LIMIT 500`,
+    ]);
+    // field filters still travel as parameters, and nothing asks the serving kernel to check grants
+    expect(serving.calls[0].params.params).toEqual({ _f0: "EU" });
+    expect(serving.calls.filter((c) => c.method === "sql.run").every((c) => !("allow" in c.params))).toBe(true);
+    expect(serving.calls.map((c) => c.method).sort()).toEqual(["result.chart", "result.page", "result.page", "sql.run", "sql.run"]);
+    expect([r.widgets.chart001.kind, r.widgets.table001.kind, r.widgets.filter01.kind]).toEqual(["chart", "table", "filter"]);
+  });
+
+  it("narrows an extract by chart picks like a live dataset", async () => {
+    const serving = fakeKernel();
+    await renderDashboard({ datasets: [sales], widgets: [chart, table] }, {}, withExtracts(fakeKernel(), serving, { sales: entryOf(sales) }), [{ widget: "chart001", value: "EU" }]);
+    // the picked chart draws the whole extract, the table the narrowed one
+    expect(queries(serving)).toEqual([`SELECT * FROM (\n${READ}\n) AS _d`, `SELECT * FROM (\n${READ}\n) AS _d\nWHERE CAST("region" AS VARCHAR) = :_c0`]);
+  });
+
+  it("doubles the single quotes of the extract's URL", async () => {
+    const serving = fakeKernel();
+    const d = withExtracts(fakeKernel(), serving, { sales: entryOf(sales) });
+    d.extracts!.url = () => "/data/it's/sales.parquet";
+    await render([table], {}, d);
+    expect(queries(serving)).toEqual(["SELECT * FROM (\nSELECT * FROM read_parquet('/data/it''s/sales.parquet')\n) AS _d"]);
+  });
+
+  it("runs live a dataset whose extract was built from another definition, or has none", async () => {
+    const stale = fakeKernel();
+    const serving = fakeKernel();
+    await render([chart], {}, withExtracts(stale, serving, { sales: entryOf(sales, { hash: "old" }) }, ["main"]));
+    expect(queries(stale)).toEqual(["SELECT * FROM (\nSELECT * FROM sales\n) AS _d"]);
+    expect(stale.calls[0].params.allow).toEqual(["main"]);
+    const none = fakeKernel();
+    await render([chart], {}, { ...deps(none.request), extracts: { manifest: null, serve: serving.request as never, url: () => "" } });
+    expect(queries(none)).toHaveLength(1);
+    expect(serving.calls).toEqual([]);
+  });
+
+  it("runs live a dataset set to live and one with params, even with a fresh extract", async () => {
+    const pinned: Dataset = { ...sales, mode: "live" };
+    const withParam: Dataset = { name: "sales", sql: "SELECT * FROM sales WHERE year = :year", params: { year: { type: "number", default: 2024 } } };
+    for (const d of [pinned, withParam]) {
+      const live = fakeKernel();
+      const serving = fakeKernel();
+      await render([chart], {}, withExtracts(live, serving, { sales: entryOf(d) }), [d]);
+      expect(live.calls.map((c) => c.method)).toEqual(["sql.run", "result.chart"]);
+      expect(serving.calls).toEqual([]);
+    }
+  });
+
+  it("reads a fresh extract of a recipe without compiling it, and compiles it on the dashboard's kernel when it goes live", async () => {
+    const recipe = recipeOf("sales", "main.sales");
+    const live = fakeKernel();
+    const serving = fakeKernel();
+    await render([chart], {}, withExtracts(live, serving, { sales: entryOf(recipe) }), [recipe]);
+    expect(live.calls).toEqual([]);
+    expect(queries(serving)).toEqual([`SELECT * FROM (\n${READ}\n) AS _d`]);
+    const stale = fakeKernel();
+    await render([chart], {}, withExtracts(stale, fakeKernel(), {}), [recipe]);
+    expect(stale.calls.map((c) => c.method)).toEqual(["wrangle.sql", "sql.run", "result.chart"]);
+  });
+
+  it("fails the widgets of a dataset whose extract read a table the viewer may not, and not the others", async () => {
+    const other: Dataset = { name: "stores", sql: "SELECT * FROM stores", params: {} };
+    const live = fakeKernel();
+    const serving = fakeKernel();
+    const entries = { sales: entryOf(sales, { sources: ["main.public.sales", "main.secret.pay"] }), stores: entryOf(other, { sources: ["main.public.stores"] }) };
+    const r = await render([chart, table, region, { ...table, id: "table002", dataset: "stores" }], {}, withExtracts(live, serving, entries, ["main.public"]), [sales, other]);
+    const lost = { kind: "error", message: "no read grant on table main.secret.pay" };
+    expect(r.widgets.chart001).toEqual(lost);
+    expect(r.widgets.table001).toEqual(lost);
+    expect(r.widgets.filter01).toEqual(lost);
+    expect(r.widgets.table002.kind).toBe("table");
+    expect(serving.calls.filter((c) => c.method === "sql.run")).toHaveLength(1);
+    // unchecked reads everything
+    const all = await render([chart], {}, withExtracts(live, fakeKernel(), entries, null));
+    expect(all.widgets.chart001.kind).toBe("chart");
+    // a viewer sees the plain error and the log has the real one
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const viewer = await render([chart], {}, { ...withExtracts(live, serving, entries, ["main.public"]), redact: true });
+    expect(viewer.widgets.chart001).toEqual({ kind: "error", message: HIDDEN_ERROR });
+    expect(log).toHaveBeenCalledWith("dashboard widget chart001: no read grant on table main.secret.pay");
+  });
+
+  it("runs everything live without an extracts dependency", async () => {
+    const live = fakeKernel();
+    await render([chart, region], {}, deps(live.request));
+    expect(queries(live)).toHaveLength(2);
+    expect(live.calls.map((c) => c.method)).toEqual(["sql.run", "result.chart", "sql.run", "result.page"]);
   });
 });
 

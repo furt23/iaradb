@@ -8,12 +8,18 @@ import type { Dashboard, RenderResult } from "@/lib/dashboards/types";
 
 import type { StudioUser } from "../auth/access";
 import { forget } from "../dashboards/cache";
+import { datasetHash } from "../dashboards/extractStore";
 import { publishDashboard } from "../dashboards/publish";
+import { HIDDEN_ERROR } from "../dashboards/run";
 import { saveSnapshot } from "../dashboards/snapshots";
 import { renderShared } from "./view";
 
-const fake = vi.hoisted(() => ({ request: vi.fn(), user: null as unknown, allow: null as unknown }));
+const fake = vi.hoisted(() => ({ request: vi.fn(), serve: vi.fn(), manifest: null as unknown, user: null as unknown, allow: null as unknown }));
 vi.mock("../auth/session", () => ({ requireViewer: async () => fake.user }));
+// the real one reads the manifest from the workspace's folder: the test chooses what the dashboard has extracted
+vi.mock("../dashboards/extractRefresh", () => ({
+  servedExtracts: async () => ({ manifest: fake.manifest, serve: fake.serve, url: (dataset: string, version: string) => `s3://bucket/${dataset}/${version}.parquet` }),
+}));
 vi.mock("../governance/store", () => ({ userAllow: () => fake.allow }));
 vi.mock("../kernel/manager", () => ({ kernels: { forDashboard: () => ({ request: fake.request }) } }));
 
@@ -48,7 +54,9 @@ beforeEach(() => {
   vi.stubEnv("IARA_STUDIO_DATA", dataDir);
   fake.user = editor;
   fake.allow = ["main.sales"];
+  fake.manifest = null;
   fake.request.mockReset();
+  fake.serve.mockReset();
   liveKernel();
 });
 afterEach(() => {
@@ -93,6 +101,30 @@ describe("renderShared", () => {
     expect(picked.ok).toBe(true);
     expect(picked.ok && picked.data.at).not.toBe(123);
     expect(fake.request).toHaveBeenCalled();
+  });
+
+  it("reads a fresh extract on the serving kernel when the viewer's grants cover its sources, and gives a plain error when they do not", async () => {
+    publishDashboard(dashboard, { kind: "team" }, "me");
+    fake.manifest = {
+      datasets: { sales: { version: "20261028T231500Z-a1b2", rows: 1, bytes: 1, columns, sources: ["main.sales.orders"], hash: datasetHash(dashboard.datasets[0]), refreshed_at: 1 } },
+    };
+    fake.serve.mockImplementation(async (method: string) => {
+      if (method === "sql.run") return { type: "table", result: { id: "s1", columns, num_rows: 1 } };
+      if (method === "result.chart") return { columns: ["region"], rows: [["served"]], truncated: false };
+      return { offset: 0, total: 1, rows: [["served"]] };
+    });
+    const r = await renderShared("abcd1234", { filter01: "EU" }, []);
+    expect(r.ok && r.data.widgets.chart001).toMatchObject({ kind: "chart", data: { rows: [["served"]] } });
+    expect(fake.request).not.toHaveBeenCalled();
+    expect(fake.serve.mock.calls[0][1]).toMatchObject({ query: expect.stringContaining("read_parquet('s3://bucket/sales/20261028T231500Z-a1b2.parquet')") });
+    expect(fake.serve.mock.calls[0][1]).not.toHaveProperty("allow");
+
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    fake.allow = ["main.hr"];
+    const hidden = await renderShared("abcd1234", { filter01: "EU" }, []);
+    expect(hidden.ok && hidden.data.widgets.chart001).toEqual({ kind: "error", message: HIDDEN_ERROR });
+    expect(fake.request).not.toHaveBeenCalled();
+    log.mockRestore();
   });
 
   it("still refuses what a browser sends wrong, before the stored render", async () => {

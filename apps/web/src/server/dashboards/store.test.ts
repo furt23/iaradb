@@ -95,6 +95,28 @@ describe("readDashboard", () => {
     ]);
   });
 
+  it("reads the mode of a SQL dataset from its header and of a recipe from its JSON, and reports any mode but live", async () => {
+    const { slug } = await store.createDashboard("Sales");
+    fs.mkdirSync(file(slug, "datasets"), { recursive: true });
+    fs.writeFileSync(file(slug, "datasets", "a_live.sql"), "-- iara:mode live\nSELECT 1");
+    fs.writeFileSync(file(slug, "datasets", "b_extract.sql"), "-- iara:mode extract\nSELECT 2");
+    fs.writeFileSync(file(slug, "datasets", "c_none.sql"), "SELECT 3");
+    fs.writeFileSync(file(slug, "datasets", "d_live.recipe.json"), JSON.stringify({ ...recipe, mode: "live" }));
+    fs.writeFileSync(file(slug, "datasets", "e_bad.recipe.json"), JSON.stringify({ ...recipe, mode: "extract" }));
+    fs.writeFileSync(file(slug, "datasets", "f_none.recipe.json"), JSON.stringify(recipe));
+    const d = await store.readDashboard(slug);
+    expect(d.datasets).toEqual([
+      { name: "a_live", sql: "SELECT 1", params: {}, mode: "live" },
+      { name: "c_none", sql: "SELECT 3", params: {} },
+      { name: "d_live", sql: "", params: {}, recipe, mode: "live" },
+      { name: "f_none", sql: "", params: {}, recipe },
+    ]);
+    expect(d.problems).toEqual([
+      { file: "datasets/b_extract.sql", error: 'invalid mode "extract": only "live" can be set' },
+      { file: "datasets/e_bad.recipe.json", error: 'invalid mode "extract": only "live" can be set' },
+    ]);
+  });
+
   it("reports a broken layout.json and loads the rest", async () => {
     const { slug } = await store.createDashboard("Sales");
     fs.writeFileSync(file(slug, "layout.json"), "[1]");
@@ -152,6 +174,69 @@ describe("saving", () => {
     await store.deleteDataset(slug, "eu");
     expect(fs.existsSync(file(slug, "datasets", "eu.recipe.json"))).toBe(false);
     expect((await store.readDashboard(slug)).datasets.map((d) => d.name)).toEqual(["plain"]);
+  });
+
+  it("keeps a dataset's mode when it is saved without one, and takes the one the text sets", async () => {
+    const { slug } = await store.createDashboard("Sales");
+    await store.saveDataset(slug, "sales", "-- iara:mode live\nSELECT 1");
+    // what the editor sends has no mode line: the file's stays
+    expect(await store.saveDataset(slug, "sales", "SELECT 2")).toEqual({ name: "sales", sql: "SELECT 2", params: {}, mode: "live" });
+    expect(fs.readFileSync(file(slug, "datasets", "sales.sql"), "utf8")).toBe("-- iara:mode live\nSELECT 2");
+    // a text with the line sets the mode as it says
+    const text = "-- iara:mode live\nSELECT 3";
+    expect(await store.saveDataset(slug, "sales", text)).toMatchObject({ mode: "live" });
+    // other header lines stay as they were around it
+    const header = joinQuery({ chart: null, params: { y: { type: "number" } }, body: "SELECT :y", extra: [{ at: 0, line: "-- iara:note hi" }] });
+    await store.saveDataset(slug, "sales", header);
+    expect(fs.readFileSync(file(slug, "datasets", "sales.sql"), "utf8")).toBe(`-- iara:mode live\n${header}`);
+    // a dataset that was not live stays so
+    expect(await store.saveDataset(slug, "other", "SELECT 1")).toEqual({ name: "other", sql: "SELECT 1", params: {} });
+    expect(await store.saveDataset(slug, "other", "SELECT 2")).not.toHaveProperty("mode");
+    await expect(store.saveDataset(slug, "bad", "-- iara:mode extract\nSELECT 1")).rejects.toThrow(/invalid mode/);
+    expect(fs.existsSync(file(slug, "datasets", "bad.sql"))).toBe(false);
+  });
+
+  it("keeps a recipe's mode when its steps are saved", async () => {
+    const { slug } = await store.createDashboard("Sales");
+    await store.saveRecipe(slug, "eu", recipe);
+    await store.saveDatasetMode(slug, "eu", "live");
+    const saved = await store.saveRecipe(slug, "eu", { ...recipe, steps: [] });
+    expect(saved).toEqual({ name: "eu", sql: "", params: {}, recipe: { ...recipe, steps: [] }, mode: "live" });
+    expect(JSON.parse(fs.readFileSync(file(slug, "datasets", "eu.recipe.json"), "utf8"))).toEqual({ source: recipe.source, steps: [], mode: "live" });
+  });
+
+  describe("saveDatasetMode", () => {
+    it("adds and removes the header line of a SQL dataset, leaving the rest of the file as it is", async () => {
+      const { slug } = await store.createDashboard("Sales");
+      const chartLine = `-- iara:chart ${JSON.stringify({ kind: "bar", x: "a", y: ["b"] })}`;
+      const original = `${chartLine}\n-- iara:note hi\nSELECT a, b FROM t\n`;
+      fs.mkdirSync(file(slug, "datasets"), { recursive: true });
+      fs.writeFileSync(file(slug, "datasets", "sales.sql"), original);
+      const live = await store.saveDatasetMode(slug, "sales", "live");
+      expect(live).toEqual({ name: "sales", sql: "SELECT a, b FROM t\n", params: {}, mode: "live" });
+      expect(fs.readFileSync(file(slug, "datasets", "sales.sql"), "utf8")).toBe(`-- iara:mode live\n${original}`);
+      // twice is once
+      await store.saveDatasetMode(slug, "sales", "live");
+      expect(fs.readFileSync(file(slug, "datasets", "sales.sql"), "utf8")).toBe(`-- iara:mode live\n${original}`);
+      const extract = await store.saveDatasetMode(slug, "sales", "extract");
+      expect(extract).toEqual({ name: "sales", sql: "SELECT a, b FROM t\n", params: {} });
+      expect(fs.readFileSync(file(slug, "datasets", "sales.sql"), "utf8")).toBe(original);
+      expect((await store.readDashboard(slug)).datasets).toEqual([extract]);
+    });
+
+    it("sets and removes the mode of a recipe dataset, and refuses a dataset or a name that is not there", async () => {
+      const { slug } = await store.createDashboard("Sales");
+      await store.saveRecipe(slug, "eu", recipe);
+      const live = await store.saveDatasetMode(slug, "eu", "live");
+      expect(live).toEqual({ name: "eu", sql: "", params: {}, recipe, mode: "live" });
+      expect(JSON.parse(fs.readFileSync(file(slug, "datasets", "eu.recipe.json"), "utf8"))).toEqual({ ...recipe, mode: "live" });
+      expect((await store.readDashboard(slug)).datasets).toEqual([live]);
+      expect(await store.saveDatasetMode(slug, "eu", "extract")).toEqual({ name: "eu", sql: "", params: {}, recipe });
+      expect(JSON.parse(fs.readFileSync(file(slug, "datasets", "eu.recipe.json"), "utf8"))).toEqual(recipe);
+      await expect(store.saveDatasetMode(slug, "ghost", "live")).rejects.toThrow(/no dataset ghost/);
+      await expect(store.saveDatasetMode(slug, "../eu", "live")).rejects.toThrow(/invalid dataset name/);
+      await expect(store.saveDatasetMode("nope", "eu", "live")).rejects.toMatchObject({ type: "NotFound" });
+    });
   });
 
   it("writes a text widget as .md and the others as .json, never both", async () => {

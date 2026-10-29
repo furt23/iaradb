@@ -1,5 +1,7 @@
 import "server-only";
 
+import path from "node:path";
+
 import type { NotebookView, ParamsOf, ResultOf, WidgetValue } from "@iara/protocol";
 
 import { isWithin, movedPath } from "@/lib/paths";
@@ -7,6 +9,7 @@ import { isWithin, movedPath } from "@/lib/paths";
 import type { Activity } from "../compute/clusters";
 import { instanceType, memoryLimitBytes } from "../compute/instanceTypes";
 import { cloudRegion, clusters } from "../compute/service";
+import { dataDir } from "../compute/store";
 import { LOCAL_CLUSTER } from "../compute/types";
 import { diskCacheEnv, KERNEL_HOME, KERNEL_USER, SPILL_DIR, VENV, WORKSPACE_DIR } from "../compute/userData";
 import { config, type StudioConfig } from "../config";
@@ -25,6 +28,13 @@ import type { Launcher } from "./launchers/types";
 /** What the metadata kernel answers: catalog reads that touch table logs, footers and schemas (never the rows), and notebook sources parsed or written, never run. */
 export const METADATA_METHODS = ["catalog.list", "catalog.table", "catalog.history", "catalog.schema", "sql.explain", "notebook.parse", "notebook.render", "notebook.template"] as const;
 export type MetadataMethod = (typeof METADATA_METHODS)[number];
+
+/** What the serving kernel answers: queries over the stored extracts of dashboards, which the Studio builds itself (never a user's SQL beside the bucket keys it is given). */
+export const SERVING_METHODS = ["sql.run", "result.page", "result.chart"] as const;
+export type ServingMethod = (typeof SERVING_METHODS)[number];
+
+/** The kernels the Studio runs itself, apart from the cluster kernels. */
+type OwnKernel = "metadata" | "serving";
 
 /** how long saves to a renamed notebook's old path follow it to the new one */
 const RENAME_GRACE_MS = 60_000;
@@ -57,8 +67,8 @@ export class KernelManager {
   /** widget values by notebook: a restarted kernel opens its notebook with them (kernels forget values) */
   private readonly widgetValues = new Map<string, Record<string, WidgetValue>>();
   private chain: Promise<unknown> = Promise.resolve();
-  /** the metadata kernel, kept apart from the cluster kernels (no cluster, no status row), and the catalog it was last given */
-  private meta: { kernel: KernelClient; toml: string | null } | null = null;
+  /** the metadata and serving kernels, kept apart from the cluster kernels (no cluster, no status row), each with the catalog it was last given */
+  private readonly own = new Map<OwnKernel, { kernel: KernelClient; toml: string | null }>();
   /** puts the team bucket's keys in the proxy of a cluster's machine (see storage/bucketProxy) */
   private readonly ensureProxy = bucketProxy({
     exec: (clusterId, command, stdin) => sshExec(clusters.endpoint(clusterId), command, 30_000, stdin),
@@ -138,6 +148,22 @@ export class KernelManager {
     return this.get(ASSISTANT_KERNEL);
   }
 
+  /** A kernel the Studio runs itself, started on first use and again when it died, given the catalog whenever the Studio's copy changed. */
+  private async ownKernel(name: OwnKernel, env?: Record<string, string>): Promise<KernelClient> {
+    let own = this.own.get(name);
+    if (!own?.kernel.alive) {
+      const launcher = localLauncher(this.cfg, env);
+      own = { kernel: new KernelClient({ transport: launcher.start(name), label: name, localRoot: launcher.localRoot, bootstrap }), toml: null };
+      this.own.set(name, own);
+    }
+    const toml = await kernelConfigText("local");
+    if (toml !== own.toml) {
+      await own.kernel.request("workspace.configure", { toml });
+      own.toml = toml;
+    }
+    return own.kernel;
+  }
+
   /**
    * Catalog reads (tables, a table's details and history, the columns, query
    * plans) in a kernel the Studio runs itself, so they need no cluster. Only
@@ -146,17 +172,27 @@ export class KernelManager {
    */
   async metadata<M extends MetadataMethod>(method: M, params: ParamsOf<M>): Promise<ResultOf<M>> {
     if (!METADATA_METHODS.includes(method)) throw new KernelError("NotMetadata", `${method} is not a catalog read`);
-    if (!this.meta?.kernel.alive) {
-      const launcher = localLauncher(this.cfg);
-      this.meta = { kernel: new KernelClient({ transport: launcher.start("metadata"), label: "metadata", localRoot: launcher.localRoot, bootstrap }), toml: null };
-    }
-    const meta = this.meta;
-    const toml = await kernelConfigText("local");
-    if (toml !== meta.toml) {
-      await meta.kernel.request("workspace.configure", { toml });
-      meta.toml = toml;
-    }
-    return meta.kernel.request(method, params);
+    return (await this.ownKernel("metadata")).request(method, params);
+  }
+
+  /**
+   * Queries over the stored extracts of dashboards (and the pages and charts
+   * of their results) in a kernel the Studio runs itself, so a viewer waits
+   * for no cluster. Only SERVING_METHODS ever reach it, and never an `allow`:
+   * a restricted context refuses to read files, and the SQL sent here is built
+   * by the Studio (a read of an extract, narrowed by the viewer's filters), never
+   * a user's. No user code runs beside the bucket keys it is given, so it
+   * starts in Docker without IARA_LOCAL_COMPUTE as the metadata kernel does.
+   * Its engine keeps what it reads from the bucket on local disk
+   * (IARA_DISK_CACHE_DIR): a version of an extract is never rewritten, so that
+   * cache is never stale.
+   */
+  async serving<M extends ServingMethod>(method: M, params: ParamsOf<M>): Promise<ResultOf<M>> {
+    if (!SERVING_METHODS.includes(method)) throw new KernelError("NotServing", `${method} cannot be served from an extract`);
+    if ((params as { allow?: unknown }).allow !== undefined) throw new KernelError("NotServing", "the serving kernel takes no read grants: it only runs the Studio's own SQL");
+    // 2 GB, not the engine's 10 GB default: it shares the Studio's disk
+    const env = { IARA_DISK_CACHE_DIR: path.join(dataDir(), "cache", "extracts"), IARA_DISK_CACHE_MB: "2048" };
+    return (await this.ownKernel("serving", env)).request(method, params);
   }
 
   /** A kernel of its own for a task of a job run (`id`: `<run>:<task>`), on the run's cluster (its activity keeps the cluster up). */
@@ -349,18 +385,19 @@ export class KernelManager {
         this.kernels.delete(key);
       }
     }
-    const meta = this.meta?.kernel;
-    if (meta && (!meta.alive || (!meta.busy && Date.now() - meta.lastUsed > limit))) {
-      meta.shutdown();
-      this.meta = null;
+    for (const [name, { kernel }] of this.own) {
+      if (!kernel.alive || (!kernel.busy && Date.now() - kernel.lastUsed > limit)) {
+        kernel.shutdown();
+        this.own.delete(name);
+      }
     }
   }
 
   shutdownAll(): void {
     for (const k of this.kernels.values()) k.shutdown(200);
     this.kernels.clear();
-    this.meta?.kernel.shutdown(200);
-    this.meta = null;
+    for (const { kernel } of this.own.values()) kernel.shutdown(200);
+    this.own.clear();
   }
 }
 

@@ -15,13 +15,19 @@ import Typography from "@mui/material/Typography";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { drafts } from "@/features/queries/drafts";
 import { SqlFileTab } from "@/features/queries/SqlFileTab";
+import { useNotify } from "@/features/shell/notify";
 import { type WranglerStep, WranglerView } from "@/features/wrangler";
 import type { Dataset, Recipe } from "@/lib/dashboards/types";
+import { setDatasetMode } from "@/server/actions/extracts";
+import { saveQuery } from "@/server/actions/queries";
 
 import { AddDatasetMenu } from "./AddDatasetMenu";
+import { DatasetModeButton, DatasetModeLine } from "./DatasetModeLine";
 import { tableNames } from "./datasets";
 import { useDebouncedSave } from "./useDebouncedSave";
+import { useExtractStatus } from "./useExtractStatus";
 
 const NO_SCHEMA: Record<string, { name: string; type: string }[]> = {};
 const RECIPE_SAVE_MS = 800;
@@ -40,6 +46,7 @@ export function DataTab({
   onAdd,
   onSaveRecipe,
   onDelete,
+  onDatasetSaved,
 }: {
   slug: string;
   /** the kernel the wrangler runs its recipes on */
@@ -52,15 +59,40 @@ export function DataTab({
   onAdd(name: string, content: string | Recipe): Promise<boolean>;
   onSaveRecipe(name: string, recipe: Recipe): Promise<void>;
   onDelete(name: string): void;
+  /** a dataset saved with a new mode: the editor's copy of it is replaced */
+  onDatasetSaved?(dataset: Dataset): void;
 }) {
   const { t } = useTranslation();
+  const notify = useNotify();
   const [picked, setPicked] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  // bumped on a mode change: the SQL editor then reads its file again (its copy has the old mode line)
+  const [reopened, setReopened] = useState(0);
   const current = datasets.find((d) => d.name === picked)?.name ?? datasets[0]?.name;
   const recipe = datasets.find((d) => d.name === current)?.recipe;
   const tables = schema && tableNames(schema);
   // per dataset: a recipe still waiting to be saved goes on while another is picked
   const recipeSaver = useDebouncedSave<Recipe>(onSaveRecipe, RECIPE_SAVE_MS);
+  const { statuses, refresh: refreshStatuses } = useExtractStatus(slug, datasets, shown);
+
+  /** Imported or live: saved to the dataset's file, then the statuses are read again. */
+  const changeMode = async (name: string, mode: "extract" | "live") => {
+    const path = `dashboards/${slug}/datasets/${name}.sql`;
+    // a save still waiting would write the old mode back
+    await recipeSaver.flush();
+    const draft = drafts.get(path);
+    if (draft && draft.text !== draft.saved) {
+      const saved = await saveQuery(path, draft.text);
+      if (!saved.ok) return notify(saved.error.message, "error");
+      draft.saved = draft.text;
+    }
+    const r = await setDatasetMode(slug, name, mode);
+    if (!r.ok) return notify(r.error.message, "error");
+    drafts.delete(path);
+    setReopened((n) => n + 1);
+    onDatasetSaved?.(r.data);
+    void refreshStatuses();
+  };
 
   return (
     <Box sx={{ display: shown ? "flex" : "none", flex: 1, minHeight: 0 }}>
@@ -81,16 +113,21 @@ export function DataTab({
             <ListItem
               key={d.name}
               disablePadding
+              // room for two icons: the list item only leaves 48px for one
+              sx={{ "& > .MuiListItemButton-root": { pr: 9 } }}
               secondaryAction={
-                <IconButton edge="end" size="small" aria-label={`${t("Delete dataset")} ${d.name}`} onClick={() => setDeleting(d.name)}>
-                  <DeleteOutline fontSize="small" />
-                </IconButton>
+                <Box sx={{ display: "flex", alignItems: "center" }}>
+                  {statuses[d.name] && <DatasetModeButton name={d.name} status={statuses[d.name]} onChange={(mode) => void changeMode(d.name, mode)} />}
+                  <IconButton edge="end" size="small" aria-label={`${t("Delete dataset")} ${d.name}`} onClick={() => setDeleting(d.name)}>
+                    <DeleteOutline fontSize="small" />
+                  </IconButton>
+                </Box>
               }
             >
               <ListItemButton selected={d.name === current} onClick={() => setPicked(d.name)}>
                 <ListItemText
                   primary={d.name}
-                  secondary={d.recipe ? t("No code") : null}
+                  secondary={<DatasetModeLine status={statuses[d.name]} />}
                   slotProps={{ primary: { noWrap: true, sx: { fontFamily: "var(--font-mono, monospace)", fontSize: 13 } }, secondary: { sx: { fontSize: 11 } } }}
                 />
               </ListItemButton>
@@ -111,7 +148,7 @@ export function DataTab({
             onSteps={(steps) => recipeSaver.schedule(current, { source: recipe.source, steps })}
           />
         ) : current ? (
-          <SqlFileTab key={current} path={`dashboards/${slug}/datasets/${current}.sql`} shown={shown} schema={schema ?? NO_SCHEMA} />
+          <SqlFileTab key={`${current}:${reopened}`} path={`dashboards/${slug}/datasets/${current}.sql`} shown={shown} schema={schema ?? NO_SCHEMA} />
         ) : (
           <Box sx={{ textAlign: "center", py: 8, px: 3, color: "text.secondary" }}>
             <Typography variant="h4" sx={{ color: "text.primary" }}>

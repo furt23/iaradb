@@ -6,7 +6,7 @@
 import type { Completions, Diagnostic, SignatureHelp } from "./assist";
 import type { Cell, CellKind, CellOutput, CellState, NotebookView, RunResult, Variable, WidgetValue, WidgetsState } from "./notebook";
 import type { ExplainResult, QueryAnalysis, QueryParams, QueryProfile } from "./query";
-import type { ChartData, ChartSpec, ResultPage, SortKey } from "./results";
+import type { ChartData, ChartSpec, ColumnInfo, ResultPage, SortKey } from "./results";
 import type { DeltaCommit, HistoryEntry, KernelInfo, TableInfo, TableRef } from "./workspace";
 import type { WranglePreview, WrangleProfile, WrangleSource, WrangleStep } from "./wrangle";
 
@@ -72,6 +72,15 @@ export interface KernelMethods {
   /** `allow`: the tables the query may read (`*`, `c`, `c.s` or `c.s.t`); absent: unchecked. Under it, files and writes are refused. */
   "sql.run": [{ query: string; source?: string; allow?: string[] } & QueryParams, CellOutput];
   "sql.explain": [{ query: string; allow?: string[] } & QueryParams, ExplainResult];
+  /**
+   * A dashboard dataset's result written as one zstd Parquet file at `path` (a
+   * folder path or `s3://` URL), read under `allow`. `sources`: the catalog tables
+   * it read (`catalog.schema.table`). Over `max_bytes` it fails and leaves no file.
+   */
+  "extract.write": [
+    { query: string; path: string; allow: string[]; max_bytes: number; source?: string },
+    { rows: number; bytes: number; columns: ColumnInfo[]; sources: string[] },
+  ];
   /** runs the query with profiling; the rows are counted, not returned */
   "sql.analyze": [{ query: string } & QueryParams, QueryAnalysis];
   "history.list": [{ limit?: number }, HistoryEntry[]];

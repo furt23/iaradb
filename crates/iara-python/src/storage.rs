@@ -46,6 +46,14 @@ fn list_files(py: Python<'_>, pattern: &str, extension: &str, storage_options: O
     .py()
 }
 
+/// Copy a local file to a path or object store URL as one write (it appears
+/// whole or not at all); returns its size in bytes.
+#[pyfunction]
+fn copy_file(py: Python<'_>, src: &str, dest: &str) -> PyResult<u64> {
+    let (src, dest) = (src.to_string(), dest.to_string());
+    py.detach(move || iara_core::io::output::copy_file(&src, &dest, &StorageOptions::default())).py()
+}
+
 /// `{list, head, get, bytes}`: requests made to object stores (GET `bytes`
 /// are the bytes asked for).
 pub fn requests_dict<'py>(py: Python<'py>, r: &StorageRequests) -> PyResult<Bound<'py, PyDict>> {
@@ -72,6 +80,7 @@ fn clear_object_stores() {
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(set_storage_options, m)?)?;
     m.add_function(wrap_pyfunction!(list_files, m)?)?;
+    m.add_function(wrap_pyfunction!(copy_file, m)?)?;
     m.add_function(wrap_pyfunction!(clear_object_stores, m)?)?;
     m.add_function(wrap_pyfunction!(storage_requests, m)?)?;
     Ok(())

@@ -2,12 +2,15 @@
 
 import type { ColumnInfo } from "@iara/protocol";
 
+import { freshEntry, wantsExtract } from "@/lib/dashboards/extracts";
 import { datasetQuery } from "@/lib/dashboards/query";
-import type { CrossPicks, Dashboard, DashboardConfig, DashboardSummary, Dataset, FilterValues, LayoutItem, Recipe, RenderResult, Share, Widget } from "@/lib/dashboards/types";
+import type { CrossPicks, Dashboard, DashboardConfig, DashboardSummary, Dataset, FilterValues, LayoutItem, PublishedDashboard, Recipe, RenderResult, Share, Widget } from "@/lib/dashboards/types";
 import { nextScheduled, type JobRun } from "@/lib/jobs";
 
 import { requireUser } from "../auth/session";
 import { forget } from "../dashboards/cache";
+import { servedExtracts } from "../dashboards/extractRefresh";
+import { datasetHash, deleteExtracts, readManifest } from "../dashboards/extractStore";
 import { getPublished, publishDashboard, unpublish } from "../dashboards/publish";
 import { refreshJob, refreshJobId } from "../dashboards/refresh";
 import { allowParam, explainDatasets, renderDashboard, withSql, type RunDeps } from "../dashboards/run";
@@ -45,6 +48,8 @@ export interface PublishedInfo {
   share: Share;
   publishedAt: number;
   publishedBy: string;
+  /** a refresh is building the extracts (started by the publish, or already going on) */
+  refreshing: boolean;
 }
 
 export interface OpenedDashboard {
@@ -69,7 +74,7 @@ export async function openDashboard(slug: string): Promise<ActionResult<OpenedDa
     await requireUser();
     const dashboard = await readDashboard(slug);
     const p = getPublished(dashboard.config.id);
-    return { dashboard, published: p && { share: p.share, publishedAt: p.publishedAt, publishedBy: p.publishedBy } };
+    return { dashboard, published: p && { share: p.share, publishedAt: p.publishedAt, publishedBy: p.publishedBy, refreshing: activeRun(refreshJobId(p.id)) !== undefined } };
   });
 }
 
@@ -140,6 +145,8 @@ export async function deleteDashboardAction(slug: string): Promise<ActionResult<
     if (id) {
       forgetAll(id);
       forgetJob(refreshJobId(id));
+      // the files are only space: a failure here must not undo the delete
+      await deleteExtracts(id).catch((e: Error) => console.error(`dashboard ${id}: extracts not deleted: ${e.message}`));
     }
     return null;
   });
@@ -150,7 +157,9 @@ export async function runDraft(slug: string, values: FilterValues, cross: CrossP
   return attempt(async () => {
     const user = await requireUser();
     const d = await readDashboard(slug);
-    return renderDashboard(d, values, { request: requestOn(d.config), redact: false, source: `dashboard ${d.config.title}`, allow: userAllow(user) }, cross);
+    // an extract built from the draft's definition is read, so the editor is fast; any other dataset runs live on the cluster
+    const extracts = await servedExtracts(d.config.id);
+    return renderDashboard(d, values, { request: requestOn(d.config), redact: false, source: `dashboard ${d.config.title}`, allow: userAllow(user), extracts }, cross);
   });
 }
 
@@ -191,8 +200,27 @@ export async function publishAction(slug: string, share: Share): Promise<ActionR
     if (problems.length) throw new Error(`cannot publish: ${problems.join("; ")}`);
     const p = publishDashboard({ ...d, datasets }, share, user.email);
     forgetAll(p.id);
-    return { share: p.share, publishedAt: p.publishedAt, publishedBy: p.publishedBy };
+    return { share: p.share, publishedAt: p.publishedAt, publishedBy: p.publishedBy, refreshing: await refreshStale(d.slug, d.config, p) };
   });
+}
+
+/**
+ * Starts the dashboard's refresh when a dataset of the published copy wants an
+ * extract and has none built from its current definition. A refresh already
+ * going on is left alone. Never throws: the publish is done.
+ */
+async function refreshStale(slug: string, config: DashboardConfig, p: PublishedDashboard): Promise<boolean> {
+  try {
+    const manifest = await readManifest(p.id);
+    if (!p.datasets.some((d) => wantsExtract(d) && !freshEntry(manifest, d.name, datasetHash(d)))) return false;
+    const spec = refreshJob(slug, config);
+    if (activeRun(spec.id)) return false;
+    startRun(spec, "manual");
+    return true;
+  } catch (e) {
+    console.error(`dashboard ${p.title}: the refresh after publishing did not start: ${(e as Error).message}`);
+    return false;
+  }
 }
 
 export async function unpublishAction(slug: string): Promise<ActionResult<null>> {

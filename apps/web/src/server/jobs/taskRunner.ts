@@ -4,15 +4,18 @@ import type { CatalogChange, CellOutput, RunResult } from "@iara/protocol";
 
 import { splitQuery } from "@/features/queries/queryHeader";
 import { detectParams, mergeSpecs, type ParamRaw, resolveParams } from "@/features/queries/queryParams";
-import type { RenderResult } from "@/lib/dashboards/types";
+import { wantsExtract } from "@/lib/dashboards/extracts";
+import type { PublishedDashboard, RenderResult } from "@/lib/dashboards/types";
 import { splitStatements } from "@/lib/sqlStatements";
 
+import { authMode, LOCAL_USER, studioUser } from "../auth/access";
+import { refreshExtracts, servedExtracts } from "../dashboards/extractRefresh";
 import { getPublished } from "../dashboards/publish";
 import { dashboardSlug } from "../dashboards/refresh";
-import { renderDashboard } from "../dashboards/run";
+import { renderDashboard, type RunDeps } from "../dashboards/run";
 import { audienceAllows, forgetSnapshots, saveSnapshot } from "../dashboards/snapshots";
 import { readConfig } from "../dashboards/store";
-import { readGrants } from "../governance/store";
+import { readGrants, userAllow } from "../governance/store";
 import type { KernelClient } from "../kernel/client";
 import { kernels } from "../kernel/manager";
 import { applyCatalogChanges } from "../workspace/catalogChanges";
@@ -84,48 +87,63 @@ async function runQueries(kernel: KernelClient, input: TaskInput, changes: Catal
 }
 
 /**
- * Render the published dashboard `dashboards/<slug>` for every user who can
- * open it and store the renders, which its viewers get at once from then on.
- * `stopped` says the task was cancelled or timed out: nothing is stored then.
+ * What the publisher may read now (null: everything): the identity of the
+ * extracts' queries. A publisher who can no longer sign in reads nothing.
+ */
+function publisherAllow(p: PublishedDashboard): string[] | null {
+  const user = authMode() === "off" ? LOCAL_USER : studioUser({ email: p.publishedBy, email_verified: true });
+  return user ? userAllow(user) : [];
+}
+
+const counted = (n: number, what: string) => `${n} ${what}${n === 1 ? "" : "s"}`;
+
+/**
+ * Refresh the published dashboard `dashboards/<slug>`: build the extracts of
+ * its datasets with the publisher's grants, then, only when a dataset runs
+ * live, render it for every user who can open it and store the renders, which
+ * its viewers get at once from then on (extracts are read in milliseconds, so
+ * a dashboard of extracts needs no stored render). `stopped` says the task was
+ * cancelled or timed out: nothing is stored then.
  */
 export async function refreshDashboard(kernel: Pick<KernelClient, "request">, input: TaskInput, stopped: () => boolean = () => false): Promise<string> {
   const { target } = input.task;
   const p = getPublished((await readConfig(dashboardSlug(target) ?? "")).id);
   if (!p) throw new Error(`${target} is not published`);
-  const audiences = audienceAllows(p, readGrants());
-  if (!audiences.length) throw new Error(`${p.title} has no one to render for (IARA_ALLOWED_EMAILS and IARA_VIEWER_EMAILS name nobody who can open it)`);
+  // once stopped, the queries still to run fail at once
+  const request: RunDeps["request"] = (method, params) => (stopped() ? Promise.reject(new Interrupted("interrupted")) : kernel.request(method, params));
+  const source = `job ${input.jobId}`;
+  const extracts = await refreshExtracts(p, { request, log: input.log, stopped, allow: publisherAllow(p), source });
+  if (stopped()) throw new Interrupted("interrupted");
+  const live = p.datasets.some((d) => !wantsExtract(d));
+  if (!live && extracts.failed > 0 && extracts.built === 0) throw new Error("every extract failed");
+  const parts = p.datasets.some(wantsExtract) ? [counted(extracts.built, "extract"), ...(extracts.failed ? [`${extracts.failed} failed`] : [])] : [];
   const renders: { allow: string[] | null; result: RenderResult }[] = [];
-  let widgets = 0;
-  let failed = 0;
-  let firstError = "";
-  for (const allow of audiences) {
-    const result = await renderDashboard(
-      p,
-      {},
-      {
-        // once stopped, the queries still to run fail at once
-        request: (method, params) => (stopped() ? Promise.reject(new Interrupted("interrupted")) : kernel.request(method, params)),
-        redact: false,
-        source: `job ${input.jobId}`,
-        allow,
-      },
-      [],
-    );
-    if (stopped()) throw new Interrupted("interrupted");
-    const data = Object.entries(result.widgets);
-    const errors = data.flatMap(([id, w]) => (w.kind === "error" ? [`widget ${id} failed: ${w.message}`] : []));
-    widgets += data.length;
-    failed += errors.length;
-    firstError ||= errors[0] ?? "";
-    input.log(`rendered for ${allow ? `${allow.length} granted ${allow.length === 1 ? "scope" : "scopes"}` : "everything"} · ${errors.length} of ${data.length} widgets failed`);
-    for (const e of errors) input.log(e);
-    renders.push({ allow, result });
+  if (live) {
+    const audiences = audienceAllows(p, readGrants());
+    if (!audiences.length) throw new Error(`${p.title} has no one to render for (IARA_ALLOWED_EMAILS and IARA_VIEWER_EMAILS name nobody who can open it)`);
+    const served = await servedExtracts(p.id);
+    let widgets = 0;
+    let failed = 0;
+    let firstError = "";
+    for (const allow of audiences) {
+      const result = await renderDashboard(p, {}, { request, redact: false, source, allow, extracts: served }, []);
+      if (stopped()) throw new Interrupted("interrupted");
+      const data = Object.entries(result.widgets);
+      const errors = data.flatMap(([id, w]) => (w.kind === "error" ? [`widget ${id} failed: ${w.message}`] : []));
+      widgets += data.length;
+      failed += errors.length;
+      firstError ||= errors[0] ?? "";
+      input.log(`rendered for ${allow ? `${allow.length} granted ${allow.length === 1 ? "scope" : "scopes"}` : "everything"} · ${errors.length} of ${data.length} widgets failed`);
+      for (const e of errors) input.log(e);
+      renders.push({ allow, result });
+    }
+    if (failed > 0 && failed === widgets) throw new Error(`every widget failed (${firstError})`);
+    parts.push(counted(renders.length, "render"));
   }
-  if (failed > 0 && failed === widgets) throw new Error(`every widget failed (${firstError})`);
   // the renders of the audiences now, not of a past publish or a past set of users
   forgetSnapshots(p.id);
   for (const { allow, result } of renders) saveSnapshot(p, allow, result);
-  return `dashboard ${p.title} refreshed (${renders.length} ${renders.length === 1 ? "render" : "renders"})`;
+  return `dashboard ${p.title} refreshed (${parts.join(", ") || "no datasets"})`;
 }
 
 function cancelReason(signal: AbortSignal): string {

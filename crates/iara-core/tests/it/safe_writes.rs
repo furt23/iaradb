@@ -10,6 +10,7 @@ use arrow::record_batch::RecordBatch;
 use iara_core::SessionContext;
 use iara_core::io::csv::CsvSink;
 use iara_core::io::dataset;
+use iara_core::io::output::copy_file;
 use iara_core::io::parquet::{DatasetSink, ParquetOptions, write_parquet};
 
 use crate::support::dir::{TempDir, dirs_under, files_under};
@@ -338,4 +339,24 @@ fn object_store_overwrite_that_fails_keeps_the_old_objects() {
     run(&ctx, &format!("copy ({GOOD}) to '{file}'"));
     fails(&ctx, &format!("copy ({FAILING}) to '{file}'"));
     assert_eq!(read_back(file), OLD);
+}
+
+#[test]
+fn copy_file_writes_the_same_bytes_to_a_path_or_an_object() {
+    let dir = TempDir::new("copy-file");
+    let ctx = SessionContext::new();
+    source(&ctx);
+    let src = dir.join("src.parquet");
+    run(&ctx, &format!("copy ({GOOD}) to '{src}'"));
+    let bytes = std::fs::read(&src).unwrap();
+
+    for dest in [dir.join("nested/out.parquet"), "memory://safe-writes/copied.parquet".to_string()] {
+        assert_eq!(copy_file(&src, &dest, &Default::default()).unwrap(), bytes.len() as u64);
+        assert_eq!(read_back(&dest), OLD);
+    }
+    assert_eq!(std::fs::read(dir.join("nested/out.parquet")).unwrap(), bytes);
+    no_leftovers(&dir.join("nested"));
+    // a missing source writes nothing
+    assert!(copy_file(&dir.join("nope.parquet"), &dir.join("never.parquet"), &Default::default()).is_err());
+    assert!(!std::path::Path::new(&dir.join("never.parquet")).exists());
 }

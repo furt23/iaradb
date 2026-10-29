@@ -236,6 +236,8 @@ Tokens are kept as SHA-256 hashes in `tokens.json` in Studio's data folder, and 
 
 A dashboard is a canvas of datasets (one SQL query each) and widgets (charts or tables). The editor runs its queries with the signed-in user's grants. Publishing makes it available to viewers; a viewer opens it at `/view`, on the `IARA_VIEW_HOST` host when that is set, and that host serves nothing else. Two viewers with different grants never share cached results. "Schedule refresh" in the editor sets a cron schedule (UTC), stored as `[schedule]` (`cron`, `enabled`) in the dashboard's `dashboard.toml`. Each run renders the published dashboard's initial view (no filter values, no chart picks) on the dashboard's cluster, once for each set of read grants among the people who can open it. A viewer who opens the dashboard with no filters and no chart picks gets the stored render at once, with the time it was made, even when the cluster is stopped; filtered views still run live. Republishing or changing the grants ignores the stored renders until the next run. A run fails when the dashboard is not published or every widget failed, and keeps the previous renders. Refresh runs are not listed in Jobs. Publishing is refused when a dataset reads a table its publisher has no grant on.
 
+Datasets are imported by default. Publishing, each scheduled run and "Refresh now" run the dataset once, with the publisher's grants, and store the result as a Parquet file under `_iara/extracts/<dashboard id>/` in the bucket (`.iara/extracts/` in the workspace without one). Renders read that copy in a kernel Studio runs itself, so filters and chart picks need no cluster. A viewer must have grants on every table the dataset read. A dataset with parameters of its own (`:name`), or with `-- iara:mode live` in its header (`"mode": "live"` in a recipe), runs on every render instead; the switch is in the editor's Data tab. While a dataset has no copy built from its current query, it runs live. A copy over `IARA_EXTRACT_MAX_MB` fails that dataset's refresh. With every dataset imported, runs store no initial-view render.
+
 ## Sign-in
 
 Sign-in is off unless `IARA_AUTH=auth0` (or `AUTH0_DOMAIN` is set). With sign-in off, every visitor is an admin. With it on, the verified email decides the role: `IARA_ALLOWED_EMAILS` are editors, `IARA_VIEWER_EMAILS` are viewers (dashboards only), and `IARA_ADMIN_EMAILS` (among the editors) can manage data permissions. Unverified emails are refused. Auth0 needs `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET`, `AUTH0_SECRET` and `APP_BASE_URL`.
@@ -263,6 +265,7 @@ Sign-in is off unless `IARA_AUTH=auth0` (or `AUTH0_DOMAIN` is set). With sign-in
 | `IARA_VIEWER_EMAILS` | | Viewers, comma-separated: dashboards only. |
 | `IARA_ADMIN_EMAILS` | | Admins, comma-separated: data permissions. |
 | `IARA_VIEW_HOST` | | Bare hostname that serves only `/view`. |
+| `IARA_EXTRACT_MAX_MB` | `100` | Largest imported dashboard dataset (Parquet size). |
 | `IARA_STUDIO_DATA` | | Studio's data folder: grants, tokens, job runs and dashboard renders (`/data` in Docker). |
 | `IARA_BUCKET` | | Team mode: the catalog and warehouse live in this bucket. |
 | `IARA_STORAGE_ENDPOINT` | | S3 endpoint of the team bucket (empty for AWS S3). |

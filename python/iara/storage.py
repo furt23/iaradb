@@ -26,6 +26,7 @@ from typing import Any, Mapping
 
 from iara._iara import StorageError
 from iara._iara import clear_object_stores as _clear
+from iara._iara import copy_file as _copy_file
 from iara._iara import delta_history as _delta_history
 from iara._iara import delta_info as _delta_info
 from iara._iara import list_files as _list_files
@@ -36,6 +37,7 @@ __all__ = [
     "StorageError",
     "set_storage_options",
     "list_files",
+    "copy_file",
     "delta_info",
     "delta_history",
     "clear_object_stores",
@@ -96,6 +98,12 @@ def set_storage_options(prefix: str, options: StorageOptions | None = None) -> N
 def list_files(pattern: str, extension: str = "parquet", storage_options: StorageOptions | None = None) -> list[tuple[str, int]]:
     """``[(path_or_url, size), ...]`` for a path, directory, glob or URL."""
     return _list_files(str(pattern), extension, normalize(storage_options))
+
+
+def copy_file(src: str, dest: str) -> int:
+    """Copy the local file ``src`` to ``dest`` (a path or ``s3://`` URL) as one write:
+    ``dest`` appears whole or not at all. Returns the bytes copied."""
+    return _copy_file(str(src), str(dest))
 
 
 def clear_object_stores() -> None:

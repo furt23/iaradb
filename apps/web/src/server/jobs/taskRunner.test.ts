@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Dashboard, PublishedDashboard } from "@/lib/dashboards/types";
 import { taskOf } from "@/lib/jobs";
@@ -13,8 +13,17 @@ import { readSnapshot } from "../dashboards/snapshots";
 import type { TaskInput } from "./orchestrator";
 import { refreshDashboard, runTask } from "./taskRunner";
 
-const fake = vi.hoisted(() => ({ request: vi.fn(), endJob: vi.fn() }));
-vi.mock("../kernel/manager", () => ({ kernels: { forJob: () => ({ request: fake.request }), endJob: fake.endJob } }));
+const fake = vi.hoisted(() => {
+  // the config reads the workspace when it loads, and extracts are written under it: a folder of this test, on disk, not a bucket
+  const fs = require("node:fs") as typeof import("node:fs");
+  const os = require("node:os") as typeof import("node:os");
+  const path = require("node:path") as typeof import("node:path");
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "iara-ws-"));
+  process.env.IARA_WORKSPACE = workspace;
+  delete process.env.IARA_BUCKET;
+  return { request: vi.fn(), serving: vi.fn(), endJob: vi.fn(), workspace };
+});
+vi.mock("../kernel/manager", () => ({ kernels: { forJob: () => ({ request: fake.request }), serving: fake.serving, endJob: fake.endJob } }));
 vi.mock("../workspace/catalogChanges", () => ({ applyCatalogChanges: async () => {} }));
 vi.mock("../dashboards/store", () => ({
   readConfig: async (slug: string) => {
@@ -24,12 +33,13 @@ vi.mock("../dashboards/store", () => ({
 }));
 
 const columns = [{ name: "region", type: "string_view" }];
+/** both datasets run live: the renders and the stored initial view are of the dashboard's own kernel */
 const dashboard: Dashboard = {
   slug: "sales",
   config: { id: "abcd1234", title: "Sales", refresh_minutes: 5 },
   datasets: [
-    { name: "sales", sql: "SELECT * FROM sales", params: {} },
-    { name: "costs", sql: "SELECT * FROM costs", params: {} },
+    { name: "sales", sql: "SELECT * FROM sales", params: {}, mode: "live" },
+    { name: "costs", sql: "SELECT * FROM costs", params: {}, mode: "live" },
   ],
   widgets: [
     { id: "chart001", kind: "chart", dataset: "sales", spec: { kind: "bar", x: "region", y: ["amount"], agg: "sum" } },
@@ -40,8 +50,13 @@ const dashboard: Dashboard = {
   problems: [],
 };
 
-/** `sql.run` answers a table, or an error for a query that reads `costs` when `costsFail` */
-function kernel(costsFail = false) {
+/** both datasets are extracts, as a new dataset is */
+const extracted: Dashboard = { ...dashboard, datasets: dashboard.datasets.map(({ name, sql, params }) => ({ name, sql, params })) };
+/** `sales` is an extract, `costs` runs live */
+const mixed: Dashboard = { ...dashboard, datasets: [extracted.datasets[0], dashboard.datasets[1]] };
+
+/** `sql.run` answers a table, or an error for a query that reads `costs` when `costsFail`; `extract.write` writes, or fails when `extractsFail` */
+function kernel(costsFail = false, extractsFail = false) {
   let n = 0;
   fake.request.mockImplementation(async (method: string, params: Record<string, unknown>) => {
     switch (method) {
@@ -52,9 +67,18 @@ function kernel(costsFail = false) {
         return { columns: ["region", "amount"], rows: [["EU", 3]], truncated: false };
       case "result.page":
         return { offset: 0, total: 1, rows: [["EU"]] };
+      case "extract.write":
+        if (extractsFail) throw new Error("boom");
+        return { rows: 5, bytes: 100, columns, sources: ["main.public.sales"] };
       default:
         throw new Error(`unexpected ${method}`);
     }
+  });
+  // the serving kernel reads the extracts: its answers have `served` in the data
+  fake.serving.mockImplementation(async (method: string) => {
+    if (method === "sql.run") return { type: "table", result: { id: "s1", columns, num_rows: 1 } };
+    if (method === "result.chart") return { columns: ["region"], rows: [["served"]], truncated: false };
+    return { offset: 0, total: 1, rows: [["served"]] };
   });
 }
 
@@ -83,12 +107,15 @@ beforeEach(() => {
   vi.stubEnv("IARA_VIEWER_EMAILS", "");
   logs = [];
   fake.request.mockReset();
+  fake.serving.mockReset();
   fake.endJob.mockReset();
 });
 afterEach(() => {
   vi.unstubAllEnvs();
   fs.rmSync(dataDir, { recursive: true, force: true });
+  fs.rmSync(path.join(fake.workspace, ".iara"), { recursive: true, force: true });
 });
+afterAll(() => fs.rmSync(fake.workspace, { recursive: true, force: true }));
 
 describe("refreshDashboard", () => {
   it("fails for a dashboard that is not published", async () => {
@@ -170,6 +197,61 @@ describe("refreshDashboard", () => {
     vi.stubEnv("IARA_AUTH", "auth0");
     publish();
     await expect(refreshDashboard({ request: fake.request }, input())).rejects.toThrow(/no one to render for/);
+  });
+});
+
+describe("refreshDashboard with extracts", () => {
+  it("builds the extracts and stores no render when every dataset is an extract", async () => {
+    kernel();
+    const p = publishDashboard(extracted, { kind: "team" }, "admin@x.com");
+    expect(await refreshDashboard({ request: fake.request }, input())).toBe("dashboard Sales refreshed (2 extracts)");
+    expect(fake.request.mock.calls.map((c) => c[0])).toEqual(["extract.write", "extract.write"]);
+    expect(fake.request.mock.calls[0][1]).toMatchObject({ allow: ["*"], source: "job nightly" });
+    expect(readSnapshot(p, null)).toBeNull();
+    const manifest = JSON.parse(fs.readFileSync(path.join(fake.workspace, ".iara", "extracts", "abcd1234", "manifest.json"), "utf8"));
+    expect(Object.keys(manifest.datasets).sort()).toEqual(["costs", "sales"]);
+    expect(logs).toEqual(["sales: 5 rows, 100 B", "costs: 5 rows, 100 B"]);
+  });
+
+  it("renders the live datasets and reads the extracts of the others from the serving kernel", async () => {
+    kernel();
+    const p = publishDashboard(mixed, { kind: "team" }, "admin@x.com");
+    expect(await refreshDashboard({ request: fake.request }, input())).toBe("dashboard Sales refreshed (1 extract, 1 render)");
+    expect(fake.request.mock.calls.map((c) => c[0])).toEqual(["extract.write", "sql.run", "result.page"]);
+    expect(fake.serving.mock.calls.map((c) => c[0])).toEqual(["sql.run", "result.chart"]);
+    expect((fake.serving.mock.calls[0][1] as { query: string }).query).toContain("read_parquet('");
+    const stored = readSnapshot(p, null)!;
+    expect(stored.widgets.chart001).toMatchObject({ kind: "chart", data: { rows: [["served"]] } });
+    expect(stored.widgets.table001.kind).toBe("table");
+  });
+
+  it("fails when every extract failed and nothing is live, and goes on to render when something is", async () => {
+    kernel(false, true);
+    publishDashboard(extracted, { kind: "team" }, "admin@x.com");
+    await expect(refreshDashboard({ request: fake.request }, input())).rejects.toThrow("every extract failed");
+    expect(logs).toEqual(["sales failed: boom", "costs failed: boom"]);
+    publishDashboard(mixed, { kind: "team" }, "admin@x.com");
+    logs.length = 0;
+    // no extract of `sales` was built, so it runs live with `costs`
+    expect(await refreshDashboard({ request: fake.request }, input())).toBe("dashboard Sales refreshed (0 extracts, 1 failed, 1 render)");
+    expect(fake.serving).not.toHaveBeenCalled();
+  });
+
+  it("builds the extracts with the publisher's grants: an editor's, everything for an admin, nothing for one who can no longer sign in", async () => {
+    kernel();
+    vi.stubEnv("IARA_AUTH", "auth0");
+    vi.stubEnv("IARA_ALLOWED_EMAILS", "ed@x.com,admin@x.com");
+    vi.stubEnv("IARA_ADMIN_EMAILS", "admin@x.com");
+    fs.writeFileSync(path.join(dataDir, "grants.json"), JSON.stringify({ grants: [{ to: "ed@x.com", on: "main.public" }, { to: "editors", on: "main.other" }] }));
+    const refreshedBy = async (email: string) => {
+      publishDashboard(extracted, { kind: "team" }, email);
+      fake.request.mockClear();
+      await refreshDashboard({ request: fake.request }, input());
+      return fake.request.mock.calls[0][1];
+    };
+    expect(await refreshedBy("ed@x.com")).toMatchObject({ allow: ["main.other", "main.public"] });
+    expect(await refreshedBy("admin@x.com")).toMatchObject({ allow: ["*"] });
+    expect(await refreshedBy("gone@x.com")).toMatchObject({ allow: [] });
   });
 });
 

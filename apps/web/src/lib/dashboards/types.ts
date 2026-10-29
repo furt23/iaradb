@@ -52,6 +52,13 @@ export interface Dataset {
   /** its `:name` placeholders (header `-- iara:params`) */
   params: ParamSpecs;
   recipe?: Recipe;
+  /**
+   * "live": every render runs the query. Absent: the published dashboard reads
+   * a stored copy of the result (an extract) that refreshes rebuild; a dataset
+   * with params of its own is always live (a param changes the query).
+   * Stored as the header line `-- iara:mode live`, or `"mode": "live"` in a recipe.
+   */
+  mode?: "live";
 }
 
 /** how numbers are written (Intl.NumberFormat in the viewer's language); a percent of 0.25 is 25% */

@@ -25,6 +25,7 @@ export const DASHBOARDS_DIR = "dashboards";
 const RECIPE_EXT = ".recipe.json";
 const SLUG = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const MAX_FILE_BYTES = 1 << 20;
+const MODE_LINE = /^-- iara:mode (.*)$/;
 
 export interface DashboardProblem {
   slug: string;
@@ -128,17 +129,52 @@ export async function listConfigs(): Promise<{ slug: string; config: DashboardCo
   return out;
 }
 
-/** A dataset from its file: the query without its header, and the header's placeholders. */
+/** The values of the `-- iara:mode` header lines of a dataset's file. */
+function modeLines(text: string): string[] {
+  return splitQuery(text).extra.flatMap(({ line }) => {
+    const m = MODE_LINE.exec(line);
+    return m ? [m[1].trim()] : [];
+  });
+}
+
+/** The mode a dataset's file sets: "live", or none (any other value is an error). */
+function checkedMode(values: unknown[]): "live" | undefined {
+  for (const v of values) if (v !== "live") throw new Error(`invalid mode ${JSON.stringify(v)}: only "live" can be set`);
+  return values.length ? "live" : undefined;
+}
+
+/** A dataset from its file: the query without its header, and the header's placeholders and mode. */
 function datasetOf(name: string, text: string): Dataset {
   if (!DATASET_NAME.test(name)) throw new Error(`invalid dataset name ${name}`);
   const { body, params } = splitQuery(text);
-  return { name, sql: body, params: params ?? {} };
+  const mode = checkedMode(modeLines(text));
+  return { name, sql: body, params: params ?? {}, ...(mode && { mode }) };
 }
 
 /** A recipe dataset: its SQL is what the kernel compiles the recipe to, when it runs. */
-function recipeDatasetOf(name: string, recipe: Recipe): Dataset {
+function recipeDatasetOf(name: string, recipe: Recipe, mode?: "live"): Dataset {
   if (!DATASET_NAME.test(name)) throw new Error(`invalid dataset name ${name}`);
-  return { name, sql: "", params: {}, recipe };
+  return { name, sql: "", params: {}, recipe, ...(mode && { mode }) };
+}
+
+/** The `"mode"` of a recipe file, which checkRecipe leaves out. */
+function recipeMode(text: string): "live" | undefined {
+  const { mode } = JSON.parse(text) as { mode?: unknown };
+  return checkedMode(mode === undefined ? [] : [mode]);
+}
+
+/** A recipe file's text; the mode sits beside source and steps. */
+function recipeText(r: Recipe, mode?: "live"): string {
+  return mode ? `${JSON.stringify({ source: r.source, steps: r.steps, mode }, null, 2)}\n` : recipeJson(r);
+}
+
+/** The file text with its `-- iara:mode live` line set or removed, the rest as it was. */
+function withMode(text: string, mode: "extract" | "live"): string {
+  const parts = splitQuery(text);
+  const rest = parts.extra.filter((e) => !MODE_LINE.test(e.line));
+  // the others move down one, so the known lines keep their places among them
+  const extra = mode === "live" ? [{ at: 0, line: "-- iara:mode live" }, ...rest.map((e) => ({ ...e, at: e.at + 1 }))] : rest;
+  return joinQuery({ ...parts, extra });
 }
 
 /** The dashboard in `dashboards/<slug>/`; a file that cannot be read is in `problems`, the rest loads. */
@@ -164,7 +200,8 @@ export async function readDashboard(slug: string): Promise<Dashboard> {
     const name = n.slice(0, -RECIPE_EXT.length);
     const d = await attempt(`datasets/${n}`, async () => {
       if (datasets.some((x) => x.name === name)) throw new Error(`there are two dataset files for ${name}`);
-      return recipeDatasetOf(name, parseRecipe(await read(`datasets/${n}`)));
+      const text = await read(`datasets/${n}`);
+      return recipeDatasetOf(name, parseRecipe(text), recipeMode(text));
     });
     if (d) datasets.push(d);
   }
@@ -218,23 +255,60 @@ export async function saveConfig(slug: string, config: DashboardConfig): Promise
   return next;
 }
 
-/** Write a dataset's file (`text`: the whole file, with its header). */
+/**
+ * Write a dataset's file (`text`: the whole file, with its header). A text with
+ * no `-- iara:mode` line keeps the mode the file has: callers that edit the
+ * query know nothing of it.
+ */
 export async function saveDataset(slug: string, name: string, text: string): Promise<Dataset> {
-  const dataset = datasetOf(name, text);
+  datasetOf(name, text);
   await readConfig(slug);
   if (await exists(`${DASHBOARDS_DIR}/${slug}/datasets/${name}${RECIPE_EXT}`)) throw new Error(`there is already a recipe dataset ${name}`);
-  await writeAtomic(pathIn(slug, `datasets/${name}.sql`), text);
-  return dataset;
+  const file = pathIn(slug, `datasets/${name}.sql`);
+  const keep = !modeLines(text).length && modeLines((await readOptional(file)) ?? "").includes("live");
+  const full = keep ? withMode(text, "live") : text;
+  await writeAtomic(file, full);
+  return datasetOf(name, full);
 }
 
-/** Write a recipe dataset's file (the SQL is compiled by the kernel when the dataset runs). */
+/** Write a recipe dataset's file (the SQL is compiled by the kernel when the dataset runs); the file's mode stays. */
 export async function saveRecipe(slug: string, name: string, recipe: Recipe): Promise<Dataset> {
   const r = checkRecipe(recipe);
   const dataset = recipeDatasetOf(name, r);
   await readConfig(slug);
   if (await exists(`${DASHBOARDS_DIR}/${slug}/datasets/${name}.sql`)) throw new Error(`there is already a SQL dataset ${name}`);
-  await writeAtomic(pathIn(slug, `datasets/${name}${RECIPE_EXT}`), recipeJson(r));
-  return dataset;
+  const file = pathIn(slug, `datasets/${name}${RECIPE_EXT}`);
+  const current = await readOptional(file);
+  let mode: "live" | undefined;
+  try {
+    mode = current === null ? undefined : recipeMode(current);
+  } catch {
+    // a file that cannot be read has no mode to keep
+  }
+  await writeAtomic(file, recipeText(r, mode));
+  return { ...dataset, ...(mode && { mode }) };
+}
+
+/** Set a dataset's mode in its file: "live" writes the header line (or the recipe's `"mode"`), "extract" removes it. */
+export async function saveDatasetMode(slug: string, name: string, mode: "extract" | "live"): Promise<Dataset> {
+  if (!DATASET_NAME.test(name)) throw new Error(`invalid dataset name ${name}`);
+  await readConfig(slug);
+  const sqlFile = pathIn(slug, `datasets/${name}.sql`);
+  const sql = await readOptional(sqlFile);
+  if (sql !== null) {
+    const text = withMode(sql, mode);
+    await writeAtomic(sqlFile, text);
+    return datasetOf(name, text);
+  }
+  const recipeFile = pathIn(slug, `datasets/${name}${RECIPE_EXT}`);
+  const json = await readOptional(recipeFile);
+  if (json === null) throw new Error(`there is no dataset ${name}`);
+  const recipe = parseRecipe(json);
+  const file = JSON.parse(json) as Record<string, unknown>;
+  delete file.mode;
+  if (mode === "live") file.mode = "live";
+  await writeAtomic(recipeFile, `${JSON.stringify(file, null, 2)}\n`);
+  return recipeDatasetOf(name, recipe, mode === "live" ? "live" : undefined);
 }
 
 export async function deleteDataset(slug: string, name: string): Promise<void> {

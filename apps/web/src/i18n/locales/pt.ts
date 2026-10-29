@@ -710,7 +710,15 @@ export const pt = {
   "Unpivot {{columns}} into {{name}}, {{value}}": "Despivotar {{columns}} em {{name}}, {{value}}",
   "From a table, cleaned (no code)": "A partir de uma tabela, limpa (sem código)",
   "New dataset from a cleaned table": "Novo dataset a partir de uma tabela limpa",
-  "No code": "Sem código",
+  // Dataset copies: imported (stored for viewers) or live
+  "Imported": "Importado",
+  "Live": "Ao vivo",
+  "Imported · {{rows}} rows · {{size}} · updated {{when}}": "Importado · {{rows}} linhas · {{size}} · atualizado {{when}}",
+  "Imported · updates when you publish": "Importado · atualiza quando você publicar",
+  "Imported · first import when you publish": "Importado · importado na primeira publicação",
+  "Live · it has parameters": "Ao vivo · tem parâmetros",
+  "Imported: viewers get a stored copy of the data, updated when you publish and on the refresh schedule. Live: every view runs the query.": "Importado: os visualizadores recebem uma cópia guardada dos dados, atualizada quando você publica e no agendamento de atualização. Ao vivo: cada visualização executa a consulta.",
+  "How viewers get the data": "Como os visualizadores recebem os dados",
   // Governance, MCP and Ask
   "All editors": "Todos os editores",
   "All viewers": "Todos os visualizadores",

@@ -954,6 +954,11 @@ impl PySessionContext {
         Self { inner: self.inner.restricted(allow) }
     }
 
+    /// The tables a restricted session has read so far (`catalog.schema.table`, sorted); none when it is not restricted.
+    fn tables_read(&self) -> Vec<String> {
+        self.inner.tables_read()
+    }
+
     /// Where `CREATE TABLE ... AS` writes tables (None: in memory).
     #[pyo3(signature = (path, storage_options=None))]
     fn set_warehouse(&self, path: Option<&str>, storage_options: Option<&Bound<'_, PyDict>>) -> PyResult<()> {

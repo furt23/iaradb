@@ -7,7 +7,7 @@
 //! so a failed write leaves nothing behind and keeps what was there before.
 
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -136,5 +136,20 @@ impl Write for Output {
             Target::File(f) => f.file.as_mut().map_or(Ok(()), |w| w.flush()),
             Target::Object(o) => o.flush(),
         }
+    }
+}
+
+/// Copy the local file `src` to `path` (a local path or an object store URL)
+/// as one all-or-nothing write; returns the bytes copied.
+pub fn copy_file(src: &str, path: &str, storage: &StorageOptions) -> Result<u64> {
+    let mut input = File::open(src)?;
+    let mut out = Output::create(path, storage)?;
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = input.read(&mut buf)?;
+        if n == 0 {
+            return out.finish();
+        }
+        out.write_all(&buf[..n])?;
     }
 }

@@ -1561,6 +1561,11 @@ class SessionContext:
         child._ctx = self._ctx.restricted([str(a).lower() for a in allow])
         return child
 
+    def tables_read(self) -> list[str]:
+        """The tables and views a restricted session has read so far, as sorted
+        ``catalog.schema.table`` names; empty for a session that is not restricted."""
+        return self._ctx.tables_read()
+
     def set_warehouse(self, path: str | os.PathLike[str] | None, storage_options: StorageOptions | None = None) -> SessionContext:
         """Where ``CREATE TABLE name AS ...`` writes the table: Delta in
         ``<path>/name/`` (a folder or ``s3://`` prefix), ``<path>/schema/name/``

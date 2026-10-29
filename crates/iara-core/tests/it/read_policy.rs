@@ -158,6 +158,33 @@ fn subqueries_are_checked() {
 }
 
 #[test]
+fn tables_read_lists_the_covered_tables_a_query_read() {
+    let r = restricted(&["main.main.open", "lake"]);
+    assert!(r.tables_read().is_empty());
+    count(&r, "select 1");
+    assert!(r.tables_read().is_empty());
+    count(&r, "select count(*) from LAKE.Raw.Logs l join open o on l.v = o.v");
+    count(&r, "select count(*) from open");
+    assert_eq!(r.tables_read(), vec!["lake.raw.logs", "main.main.open"]);
+    // a refused table is not a table read
+    no_grant(&r, "select * from hidden", "main.main.hidden");
+    assert_eq!(r.tables_read(), vec!["lake.raw.logs", "main.main.open"]);
+    // nothing is recorded for an unrestricted context
+    let base = ctx();
+    count(&base, "select count(*) from open");
+    assert!(base.tables_read().is_empty());
+}
+
+#[test]
+fn a_view_is_the_table_read_not_what_it_reads() {
+    let base = ctx();
+    base.sql("create view v as select * from hidden").unwrap();
+    let r = base.restricted(vec!["main.main.v".into()]);
+    count(&r, "select count(*) from v");
+    assert_eq!(r.tables_read(), vec!["main.main.v"]);
+}
+
+#[test]
 fn explain_is_a_query_like_any_other() {
     let ctx = restricted(&["main.main.open"]);
     count(&ctx, "explain select * from open");

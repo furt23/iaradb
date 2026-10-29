@@ -16,6 +16,7 @@ from iara.kernel import PROTOCOL_VERSION, catalog
 from iara.kernel.analyze import analyze_query
 from iara.kernel.assist.service import AssistService
 from iara.kernel.cell_runner import CellRunner, Emit
+from iara.kernel.extract import write_extract
 from iara.kernel.history import History
 from iara.kernel.notebook import marimo_io
 from iara.kernel.notebook.model import Cell
@@ -31,7 +32,7 @@ Handler = Callable[[dict[str, Any], Emit], Any]
 #: methods that run user code or mutate the notebook: executed one at a time
 #: on the worker thread (everything else answers immediately)
 QUEUED = frozenset(
-    {"workspace.configure", "notebook.open", "notebook.create", "notebook.run", "widgets.set", "sql.run", "sql.analyze", "catalog.preview", "catalog.add"}
+    {"workspace.configure", "notebook.open", "notebook.create", "notebook.run", "widgets.set", "sql.run", "extract.write", "sql.analyze", "catalog.preview", "catalog.add"}
 )
 #: code assistance: answered on their own thread, newest request per
 #: (method, cell) first (an older pending one is answered with null)
@@ -234,6 +235,7 @@ class KernelSession:
             "catalog.preview": lambda p, e: self.preview(p["name"], int(p.get("limit", 100))),
             "catalog.add": lambda p, e: self.add_table(p),
             "sql.run": self.sql_run,
+            "extract.write": lambda p, e: write_extract(self.ws, self.history, self.interruptor, p, e),
             "sql.explain": lambda p, e: self.sql_explain(p),
             "sql.analyze": lambda p, e: analyze_query(self.ws, p["query"], self.history, self.interruptor, bind_params(p)),
             "history.list": lambda p, e: self.history.recent(int(p.get("limit", 200))),
