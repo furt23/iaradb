@@ -123,6 +123,12 @@ export interface ChartWidget {
   dataset: string;
   spec: ChartSpec;
   style?: ChartStyle;
+  /**
+   * Measures of the model (`model.py`) over `dataset`, drawn by `spec.x` and
+   * `spec.group` (a counter: one measure, no x); when set, `spec.y` and
+   * `spec.agg` are not used.
+   */
+  measures?: string[];
 }
 
 /** the first rows of a dataset */
@@ -185,6 +191,8 @@ export interface Dashboard {
   datasets: Dataset[];
   widgets: Widget[];
   layout: LayoutItem[];
+  /** `model.py`: the semantic model's source ("" when the dashboard has none) */
+  model: string;
   /** files of the folder that could not be read, with why (the rest still loads) */
   problems: { file: string; error: string }[];
 }
@@ -223,7 +231,8 @@ export type CrossPicks = CrossPick[];
 
 /** what a widget draws, from the kernel; errors are per widget */
 export type WidgetData =
-  | { kind: "chart"; data: ChartData; columns: ColumnInfo[] }
+  /** `formats`: the number formats of the measures drawn, by column */
+  | { kind: "chart"; data: ChartData; columns: ColumnInfo[]; formats?: Record<string, NumberFormat> }
   | { kind: "table"; columns: ColumnInfo[]; rows: CellValue[][]; total: number }
   | { kind: "filter"; options: CellValue[] }
   | { kind: "error"; message: string };
@@ -248,6 +257,8 @@ export interface PublishedDashboard {
   datasets: Dataset[];
   widgets: Widget[];
   layout: LayoutItem[];
+  /** the model's source, as published (never sent to viewers' browsers) */
+  model: string;
   share: Share;
   publishedBy: string;
   publishedAt: number;

@@ -14,6 +14,7 @@ import { useNotify } from "@/features/shell/notify";
 import { pickableIds } from "@/lib/dashboards/query";
 import type { CrossPicks, DashboardConfig, Dataset, FilterValues, LayoutItem, Recipe, Widget } from "@/lib/dashboards/types";
 import { newWidgetId } from "@/lib/dashboards/widgets";
+import { checkModel } from "@/lib/model/check";
 import { catalogSchema } from "@/server/actions/catalog";
 import {
   deleteDatasetAction,
@@ -23,6 +24,7 @@ import {
   saveConfigAction,
   saveDatasetAction,
   saveLayoutAction,
+  saveModelAction,
   saveRecipeAction,
   saveWidgetAction,
   type OpenedDashboard,
@@ -33,19 +35,24 @@ import { AskDialog } from "./AskDialog";
 import { CanvasTab } from "./CanvasTab";
 import { DataTab } from "./DataTab";
 import { EditorHeader } from "./EditorHeader";
+import { ModelTab } from "./ModelTab";
 import { newLayoutItem, newWidget, sameLayout, type NewKind } from "./newWidget";
 import { PublishDialog } from "./PublishDialog";
 import { RefreshDialog } from "./RefreshDialog";
 import { SettingsDialog } from "./SettingsDialog";
 import { useDatasetColumns } from "./useDatasetColumns";
 import { useDebouncedSave } from "./useDebouncedSave";
+import { ModelContext, modelSchema } from "./useModel";
 
-type Tab = "canvas" | "data";
+type Tab = "canvas" | "data" | "model";
 type Schema = Record<string, { name: string; type: string }[]>;
 
 const WIDGET_SAVE_MS = 400;
 const LAYOUT_SAVE_MS = 500;
 const LAYOUT = "layout";
+const MODEL = "model";
+/** the Model tab's editor saves 800 ms after the last keystroke, as the Data tab's does */
+const MODEL_SAVE_MS = 800;
 /** the Data tab's editor saves 800 ms after the last keystroke: datasets are read back once it has */
 const DATASET_SAVE_SETTLE_MS = 1000;
 
@@ -55,6 +62,8 @@ function Editor({ slug, opened }: { slug: string; opened: OpenedDashboard }) {
   // the dashboard as the editor shows it: edits land here first, then on disk
   const [dashboard, setDashboard] = useState(opened.dashboard);
   const [published, setPublished] = useState(opened.published);
+  // the model's source: saved as it is typed (see modelSaver)
+  const [model, setModel] = useState(opened.dashboard.model);
   const [tab, setTab] = useState<Tab>("canvas");
   const [selected, setSelected] = useState<string | null>(null);
   const [dialog, setDialog] = useState<"settings" | "schedule" | "publish" | "ask" | null>(null);
@@ -72,6 +81,9 @@ function Editor({ slug, opened }: { slug: string; opened: OpenedDashboard }) {
   const pickable = useMemo(() => pickableIds(dashboard.widgets), [dashboard.widgets]);
   const data = useDashboardData(load, reloadKey, pickable);
   const columns = useDatasetColumns(slug, dashboard.datasets);
+  // the model as checked against the columns read so far (a dataset not read yet takes any column name)
+  const modelColumns = useMemo(() => modelSchema(dashboard.datasets, columns.found), [dashboard.datasets, columns.found]);
+  const checked = useMemo(() => checkModel(model, modelColumns), [model, modelColumns]);
   const toast = (message: string) => notify(message, "error");
   const rerun = () => setReloadKey((k) => k + 1);
 
@@ -87,7 +99,16 @@ function Editor({ slug, opened }: { slug: string; opened: OpenedDashboard }) {
     const r = await saveLayoutAction(slug, items);
     if (!r.ok) toast(r.error.message);
   }, LAYOUT_SAVE_MS);
-  const flushSaves = () => Promise.all([widgetSaver.flush(), layoutSaver.flush()]);
+  const modelSaver = useDebouncedSave<string>(async (_key, source) => {
+    const r = await saveModelAction(slug, source);
+    if (!r.ok) return toast(r.error.message);
+    // the widgets with measures draw them again from the saved model
+    if (staleData.current) {
+      staleData.current = false;
+      rerun();
+    }
+  }, MODEL_SAVE_MS);
+  const flushSaves = () => Promise.all([widgetSaver.flush(), layoutSaver.flush(), modelSaver.flush()]);
 
   // the catalog's tables, for the SQL editor and "From a table", the first time the Data tab is shown
   useEffect(() => {
@@ -101,6 +122,7 @@ function Editor({ slug, opened }: { slug: string; opened: OpenedDashboard }) {
     if (!r.ok) return toast(r.error.message);
     setDashboard(r.data.dashboard);
     setPublished(r.data.published);
+    setModel(r.data.dashboard.model);
     rerun();
   };
 
@@ -166,6 +188,12 @@ function Editor({ slug, opened }: { slug: string; opened: OpenedDashboard }) {
     if (sameLayout(items, latest.current.layout)) return;
     setDashboard((d) => ({ ...d, layout: items }));
     layoutSaver.schedule(LAYOUT, items);
+  };
+
+  const changeModel = (source: string) => {
+    setModel(source);
+    staleData.current = true;
+    modelSaver.schedule(MODEL, source);
   };
 
   const addWidget = async (kind: NewKind) => {
@@ -263,6 +291,7 @@ function Editor({ slug, opened }: { slug: string; opened: OpenedDashboard }) {
         <Tabs value={tab} onChange={(_, next: Tab) => changeTab(next)} aria-label={t("Dashboard sections")}>
           <Tab value="canvas" label={t("Canvas")} />
           <Tab value="data" label={t("Data")} />
+          <Tab value="model" label={t("Model")} />
         </Tabs>
       </Box>
       {problems.length > 0 && (
@@ -275,19 +304,22 @@ function Editor({ slug, opened }: { slug: string; opened: OpenedDashboard }) {
         </Alert>
       )}
       {tab === "canvas" && (
-        <CanvasTab
-          dashboard={dashboard}
-          data={data}
-          selected={selected}
-          found={columns.found}
-          load={columns.load}
-          onSelect={setSelected}
-          onAdd={(kind) => void addWidget(kind)}
-          onChange={changeWidget}
-          onLayout={changeLayout}
-          onRemove={(id) => void removeWidget(id)}
-        />
+        <ModelContext.Provider value={checked.model}>
+          <CanvasTab
+            dashboard={dashboard}
+            data={data}
+            selected={selected}
+            found={columns.found}
+            load={columns.load}
+            onSelect={setSelected}
+            onAdd={(kind) => void addWidget(kind)}
+            onChange={changeWidget}
+            onLayout={changeLayout}
+            onRemove={(id) => void removeWidget(id)}
+          />
+        </ModelContext.Provider>
       )}
+      {tab === "model" && <ModelTab source={model} checked={checked} datasets={dashboard.datasets} found={columns.found} load={columns.load} onChange={changeModel} />}
       <DataTab slug={slug} kernelKey={`dashboard:${dashboard.config.id}`} datasets={dashboard.datasets} shown={tab === "data"} schema={schema} onAdd={addDataset} onSaveRecipe={saveRecipe} onDelete={(name) => void removeDataset(name)} onDatasetSaved={putDataset} />
       <AskDialog open={dialog === "ask"} slug={slug} onClose={() => setDialog(null)} onSaved={() => void reload()} />
       <SettingsDialog open={dialog === "settings"} config={dashboard.config} onSave={(config) => void changeConfig(config)} onClose={() => setDialog(null)} />

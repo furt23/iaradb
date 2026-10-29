@@ -26,6 +26,7 @@ import {
   saveConfig,
   saveDataset,
   saveLayout,
+  saveModel,
   saveRecipe,
   saveWidget,
   type DashboardProblem,
@@ -135,6 +136,14 @@ export async function saveLayoutAction(slug: string, items: LayoutItem[]): Promi
   return attempt(async () => {
     await requireUser();
     return saveLayout(slug, items);
+  });
+}
+
+/** `source`: the whole `model.py` (empty removes it). It is checked where it is used: the editor shows the diagnostics. */
+export async function saveModelAction(slug: string, source: string): Promise<ActionResult<string>> {
+  return attempt(async () => {
+    await requireUser();
+    return saveModel(slug, source);
   });
 }
 

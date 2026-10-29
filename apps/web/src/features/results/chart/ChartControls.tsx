@@ -50,8 +50,8 @@ function withKind(spec: ChartSpec, kind: ChartKind, columns: ColumnInfo[]): Char
   return { ...spec, kind, agg, x: spec.x || (columns[0]?.name ?? ""), group: kind === "pie" ? null : spec.group };
 }
 
-/** What to draw: chart kind, axes, aggregation, series split. */
-export function ChartControls({ spec, columns, onChange }: { spec: ChartSpec; columns: ColumnInfo[]; onChange(spec: ChartSpec): void }) {
+/** What to draw: chart kind, axes, aggregation, series split. `hideValues`: the values come from elsewhere (a widget's measures), so no value columns or aggregation are picked here. */
+export function ChartControls({ spec, columns, onChange, hideValues }: { spec: ChartSpec; columns: ColumnInfo[]; onChange(spec: ChartSpec): void; hideValues?: boolean }) {
   const { t } = useTranslation();
   const set = (patch: Partial<ChartSpec>) => onChange({ ...spec, ...patch });
   const numeric = columns.filter((c) => isNumericType(c.type));
@@ -89,7 +89,7 @@ export function ChartControls({ spec, columns, onChange }: { spec: ChartSpec; co
           onChange={(e) => set({ bins: Math.max(1, Math.min(200, Number(e.target.value) || 30)) })}
           sx={{ width: 100 }}
         />
-      ) : (
+      ) : hideValues ? null : (
         <>
           <TextField {...FIELD} select label={t("Aggregation")} value={spec.agg} onChange={(e) => set({ agg: e.target.value as ChartAgg })}>
             {aggs.map((a) => (

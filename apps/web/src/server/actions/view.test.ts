@@ -32,6 +32,7 @@ const dashboard: Dashboard = {
     { id: "chart001", kind: "chart", dataset: "sales", spec: { kind: "bar", x: "region", y: ["amount"], agg: "sum" } },
     { id: "filter01", kind: "filter", control: "select", fields: [{ dataset: "sales", column: "region" }], value_type: "text" },
   ],
+  model: "",
   layout: [],
   problems: [],
 };

@@ -14,6 +14,7 @@ const CHART_AGGS: readonly string[] = ["sum", "avg", "count", "min", "max", "non
 export const FILTER_CONTROLS: readonly FilterControl[] = ["select", "multi", "date_range", "text"];
 const VALUE_TYPES: readonly string[] = ["text", "number", "date"];
 const PLACEHOLDER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const MAX_MEASURES = 10;
 
 type Obj = Record<string, unknown>;
 
@@ -55,6 +56,16 @@ function chartSpec(v: unknown): ChartSpec {
   };
 }
 
+/** The measures a chart draws: 1 to 10 different names of the model (whether the model has them is checked when it runs). */
+function measureNames(v: unknown): string[] {
+  const names = strings(v, "measures");
+  if (!names.length || names.length > MAX_MEASURES) throw new Error(`measures is a list of 1 to ${MAX_MEASURES} names`);
+  const bad = names.find((n) => !PLACEHOLDER.test(n));
+  if (bad !== undefined) throw new Error(`${JSON.stringify(bad)} is not a measure name`);
+  if (new Set(names).size !== names.length) throw new Error("measures has a name twice");
+  return names;
+}
+
 function field(v: unknown): FilterField {
   const f = object(v, "a field");
   return { dataset: text(f.dataset, "field dataset"), column: text(f.column, "field column") };
@@ -90,6 +101,7 @@ export function checkWidget(id: string, value: unknown): Widget {
         ...optionalTitle(c.title),
         dataset: text(c.dataset, "dataset"),
         spec: chartSpec(c.spec),
+        ...(c.measures !== undefined && { measures: measureNames(c.measures) }),
         ...(c.style !== undefined && { style: checkChartStyle(c.style) }),
       };
     case "table":
@@ -127,7 +139,7 @@ export function parseWidget(id: string, json: string): Widget {
 export function widgetJson(w: ChartWidget | TableWidget | FilterWidget): string {
   const fields =
     w.kind === "chart"
-      ? { kind: w.kind, title: w.title, dataset: w.dataset, spec: w.spec, style: w.style }
+      ? { kind: w.kind, title: w.title, dataset: w.dataset, spec: w.spec, measures: w.measures, style: w.style }
       : w.kind === "table"
         ? { kind: w.kind, title: w.title, dataset: w.dataset, columns: w.columns, formats: w.formats }
         : { kind: w.kind, title: w.title, control: w.control, fields: w.fields, value_type: w.value_type, param: w.param };

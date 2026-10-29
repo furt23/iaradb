@@ -41,10 +41,12 @@ export function ChartStyleSettings({ widget, onChange }: { widget: ChartWidget; 
   const { spec } = widget;
   const style = widget.style ?? {};
   const series = style.series ?? {};
-  const perSeries = SERIES_KINDS.includes(spec.kind) && !spec.group && spec.y.length >= 2;
-  const rightAxis = spec.y.some((y) => series[y]?.axis === "right");
+  // the value columns drawn: the widget's measures when it has them
+  const drawn = widget.measures?.length ? widget.measures : spec.y;
+  const perSeries = SERIES_KINDS.includes(spec.kind) && !spec.group && drawn.length >= 2;
+  const rightAxis = drawn.some((y) => series[y]?.axis === "right");
 
-  const set = (next: ChartStyle) => onChange({ ...widget, style: tidy(next, spec.y) });
+  const set = (next: ChartStyle) => onChange({ ...widget, style: tidy(next, drawn) });
   const setSeries = (y: string, change: SeriesStyle) => set({ ...style, series: { ...series, [y]: { ...series[y], ...change } } });
 
   return (
@@ -55,7 +57,7 @@ export function ChartStyleSettings({ widget, onChange }: { widget: ChartWidget; 
       />
       {spec.kind !== "scatter" && <NumberFormatFields label={t("Values")} value={style.format} onChange={(format) => set({ ...style, format })} />}
       {perSeries &&
-        spec.y.map((y) => (
+        drawn.map((y) => (
           <Stack key={y} spacing={1}>
             <Typography sx={{ fontSize: 12, overflowWrap: "anywhere" }}>{y}</Typography>
             <Stack direction="row" spacing={1}>

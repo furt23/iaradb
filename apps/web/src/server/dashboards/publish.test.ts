@@ -30,6 +30,7 @@ function dashboard(over: Partial<Dashboard> = {}): Dashboard {
       { id: "field001", kind: "filter", control: "multi", fields: [{ dataset: "sales", column: "region" }], value_type: "text" },
     ],
     layout: [{ widget: "chart001", x: 0, y: 0, w: 12, h: 8 }],
+    model: "",
     problems: [],
     ...over,
   };
@@ -55,6 +56,16 @@ describe("publishDashboard", () => {
     expect(getPublished("abcd1234", dir)).toBeNull();
     expect(publishedAt("abcd1234", dir)).toBeNull();
     expect(listPublished(dir)).toEqual([]);
+  });
+
+  it("publishes the model, and reads a copy from before models as an empty one", () => {
+    const p = publishDashboard(dashboard({ model: "revenue = sum(sales.amount)" }), { kind: "team" }, "me", dir);
+    expect(p.model).toBe("revenue = sum(sales.amount)");
+    expect(getPublished("abcd1234", dir)?.model).toBe("revenue = sum(sales.amount)");
+    const { model: _, ...old } = p;
+    fs.writeFileSync(path.join(dir, "abcd1234.json"), JSON.stringify(old));
+    expect(getPublished("abcd1234", dir)?.model).toBe("");
+    expect(listPublished(dir).map((x) => x.model)).toEqual([""]);
   });
 
   it("replaces the last copy when published again", () => {
@@ -125,6 +136,13 @@ describe("viewOf", () => {
       publishedAt: p.publishedAt,
     });
     expect(JSON.stringify(v)).not.toMatch(/SELECT|datasets|cluster/);
+  });
+
+  it("never carries the model", () => {
+    const p = publishDashboard(dashboard({ model: "revenue = sum(sales.amount)" }), { kind: "team" }, "me", dir);
+    const v = viewOf(p);
+    expect(v).not.toHaveProperty("model");
+    expect(JSON.stringify(v)).not.toContain("revenue");
   });
 
   it("gives a placeholder without a saved spec the plain text one", () => {

@@ -30,6 +30,7 @@ const dashboard = (over: Partial<Dashboard> = {}): Dashboard => ({
   config: { id: "abcd1234", title: "Sales", refresh_minutes: 10 },
   datasets: [],
   widgets: [],
+  model: "",
   layout: [],
   problems: [],
   ...over,

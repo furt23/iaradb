@@ -46,6 +46,7 @@ const dashboard: Dashboard = {
     { id: "table001", kind: "table", dataset: "costs" },
     { id: "text0001", kind: "text", markdown: "hi" },
   ],
+  model: "",
   layout: [],
   problems: [],
 };

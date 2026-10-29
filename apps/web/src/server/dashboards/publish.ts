@@ -75,6 +75,7 @@ export function publishDashboard(d: Dashboard, share: Share, by: string, dir = p
     datasets: d.datasets,
     widgets: d.widgets,
     layout: d.layout,
+    model: d.model,
     share: checkedShare(share),
     publishedBy: by,
     publishedAt: Date.now(),
@@ -86,11 +87,12 @@ export function publishDashboard(d: Dashboard, share: Share, by: string, dir = p
   return published;
 }
 
-/** The published dashboard under `id` (null: none, or not an id). */
+/** The published dashboard under `id` (null: none, or not an id). A copy from before models has no `model`: it reads as "". */
 export function getPublished(id: string, dir = publishedDir()): PublishedDashboard | null {
   if (!ID.test(id)) return null;
   try {
-    return JSON.parse(fs.readFileSync(fileOf(dir, id), "utf8")) as PublishedDashboard;
+    const p = JSON.parse(fs.readFileSync(fileOf(dir, id), "utf8")) as PublishedDashboard;
+    return { ...p, model: p.model ?? "" };
   } catch {
     return null;
   }
@@ -121,7 +123,7 @@ export function canView(p: PublishedDashboard, user: StudioUser): boolean {
   return !user.viewer || p.share.kind === "team" || p.share.emails.includes(user.email.trim().toLowerCase());
 }
 
-/** What a viewer's browser receives: no datasets, so no SQL. */
+/** What a viewer's browser receives: no datasets, so no SQL, and no model. */
 export function viewOf(p: PublishedDashboard): ViewDashboard {
   const params: ParamSpecs = {};
   const specs = p.datasets.map((d) => mergeSpecs(detectParams(d.sql), d.params));

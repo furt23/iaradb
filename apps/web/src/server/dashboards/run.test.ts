@@ -1,10 +1,16 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ExtractEntry } from "@/lib/dashboards/extracts";
-import type { ChartWidget, Dataset, FilterWidget, TableWidget, Widget } from "@/lib/dashboards/types";
+import type { ChartWidget, Dataset, FilterWidget, NumberFormat, TableWidget, Widget } from "@/lib/dashboards/types";
+import type { Measure, Model } from "@/lib/model/types";
 
 import { datasetHash } from "./extractStore";
 import { explainDatasets, HIDDEN_ERROR, renderDashboard, withSql, type RunDeps } from "./run";
+
+// the model's parser and compiler have tests of their own: here they are stood in for, to see what a render asks of them
+const modelMock = vi.hoisted(() => ({ check: vi.fn(), query: vi.fn() }));
+vi.mock("@/lib/model/check", () => ({ checkModel: modelMock.check }));
+vi.mock("@/lib/model/compile", () => ({ measureQuery: modelMock.query }));
 
 const columns = [
   { name: "region", type: "string_view" },
@@ -381,6 +387,258 @@ describe("extracts", () => {
     await render([chart, region], {}, deps(live.request));
     expect(queries(live)).toHaveLength(2);
     expect(live.calls.map((c) => c.method)).toEqual(["sql.run", "result.chart", "sql.run", "result.page"]);
+  });
+});
+
+describe("measure charts", () => {
+  const span = { from: 0, to: 0, line: 1, col: 1 };
+  const money: NumberFormat = { style: "currency", currency: "BRL", decimals: 2 };
+  const percent: NumberFormat = { style: "percent", decimals: 1 };
+  const measure = (name: string, over: Partial<Measure> = {}): Measure => ({ name, dataset: "sales", sql: `SUM("${name}")`, span, ...over });
+  const model: Model = {
+    relationships: [],
+    measures: [measure("revenue", { format: money }), measure("margin", { format: percent }), measure("units"), measure("stores_count", { dataset: "stores" })],
+  };
+  const stores: Dataset = { name: "stores", sql: "SELECT * FROM stores", params: {} };
+  const MODEL = "revenue = sum(sales.amount)";
+  const BASE = "SELECT * FROM (\nSELECT * FROM sales\n) AS _d";
+  const byRegion: ChartWidget = { ...chart, id: "measure1", measures: ["revenue"], spec: { kind: "bar", x: "region", y: [], agg: "sum" } };
+  const resultColumns = [
+    { name: "region", type: "string_view" },
+    { name: "revenue", type: "double" },
+    { name: "margin", type: "double" },
+  ];
+  const rowsOf = (n: number) => Array.from({ length: n }, (_, i) => [`r${i}`, i, 0.5]);
+
+  /** a kernel where the compiler's queries (they start with MEASURES) answer `rows` under `cols`, and the others answer as `fakeKernel` does */
+  function measureKernel(rows: unknown[][] = rowsOf(2), cols = resultColumns, onRun?: (query: string) => unknown) {
+    const k = fakeKernel((q) => {
+      if (!q.startsWith("MEASURES")) return undefined;
+      return onRun?.(q) ?? { type: "table", result: { id: "m1", columns: cols, num_rows: rows.length, page: { offset: 0, total: rows.length, rows: [] } } };
+    });
+    const request = (async (method: string, params: Record<string, unknown>) => {
+      if (method !== "result.page" || params.result_id !== "m1") return (k.request as (m: string, p: unknown) => Promise<unknown>)(method, params);
+      k.calls.push({ method, params });
+      return { offset: 0, total: rows.length, rows: rows.slice(0, params.limit as number) };
+    }) as RunDeps["request"];
+    return { calls: k.calls, request };
+  }
+  const renderModel = (widgets: Widget[], d: RunDeps, datasets = [sales], cross: { widget: string; value: string | number | boolean | null }[] = []) =>
+    renderDashboard({ datasets, widgets, model: MODEL }, {}, d, cross);
+  const runs = (k: { calls: Call[] }) => k.calls.filter((c) => c.method === "sql.run");
+  const drawn = (r: { widgets: Record<string, unknown> }, id: string) => r.widgets[id] as { kind: string; data: { columns: string[]; rows: unknown[]; truncated: boolean } };
+
+  beforeEach(() => {
+    modelMock.check.mockReset().mockReturnValue({ model, diagnostics: [] });
+    modelMock.query.mockReset().mockImplementation((m: Model, q: { source: string; x: string | null; group: string | null; measures: string[]; order: string; limit: number }) => {
+      const unknown = q.measures.find((n) => !m.measures.some((x) => x.name === n));
+      if (unknown) throw new Error(`there is no measure ${unknown}`);
+      return `MEASURES ${q.measures.join(",")} BY ${q.x}/${q.group} ${q.order} ${q.limit} FROM ${q.source}`;
+    });
+  });
+
+  it("sends the compiled query over the dataset's query, with its parameters, allow list and history note, and reads the points with result.page", async () => {
+    const k = measureKernel();
+    const year: FilterWidget = { id: "param001", kind: "filter", control: "text", param: "year" };
+    const needs: Dataset = { name: "sales", sql: "SELECT * FROM sales WHERE year = :year", params: {} };
+    const r = await renderDashboard({ datasets: [needs], widgets: [byRegion, year], model: MODEL }, { param001: "2024" }, { ...deps(k.request), allow: ["main"] });
+    const base = "SELECT * FROM (\nSELECT * FROM sales WHERE year = :year\n) AS _d";
+    expect(modelMock.query).toHaveBeenCalledWith(model, { source: base, x: "region", group: null, measures: ["revenue"], order: "value", limit: 101 });
+    expect(runs(k).map((c) => c.params)).toEqual([
+      { query: `MEASURES revenue BY region/null value 101 FROM ${base}`, source: "dashboard Sales", params: { year: "2024" }, param_types: { year: "text" }, allow: ["main"] },
+    ]);
+    expect(k.calls.map((c) => c.method)).toEqual(["sql.run", "result.page"]);
+    expect(k.calls[1].params).toEqual({ result_id: "m1", offset: 0, limit: 101 });
+    expect(r.widgets.measure1.kind).toBe("chart");
+  });
+
+  it("asks for the points a chart of that kind shows, plus one: ordered by x for lines and areas, by value for bars, pies and counters, with no x for a counter", async () => {
+    const asked = async (spec: ChartWidget["spec"], measures = ["revenue"]) => {
+      modelMock.query.mockClear();
+      await renderModel([{ ...byRegion, spec, measures }], deps(measureKernel().request));
+      return modelMock.query.mock.calls[0][1];
+    };
+    const base: Pick<ChartWidget["spec"], "y" | "agg"> = { y: [], agg: "sum" };
+    expect(await asked({ ...base, kind: "line", x: "day", group: "region" })).toMatchObject({ x: "day", group: "region", order: "x", limit: 5001 });
+    expect(await asked({ ...base, kind: "area", x: "day" })).toMatchObject({ x: "day", group: null, order: "x", limit: 5001 });
+    expect(await asked({ ...base, kind: "pie", x: "region" })).toMatchObject({ x: "region", order: "value", limit: 101 });
+    expect(await asked({ ...base, kind: "counter", x: "" }, ["revenue", "margin"])).toMatchObject({ x: null, measures: ["revenue", "margin"], order: "value", limit: 101 });
+  });
+
+  it("answers with the compiled result's columns and rows, and never asks the kernel to chart", async () => {
+    const k = measureKernel(rowsOf(2));
+    const r = await renderModel([byRegion], deps(k.request));
+    expect(r.widgets.measure1).toEqual({
+      kind: "chart",
+      data: { columns: ["region", "revenue", "margin"], rows: rowsOf(2), truncated: false },
+      columns: resultColumns,
+      formats: { revenue: money },
+    });
+    expect(k.calls.some((c) => c.method === "result.chart")).toBe(false);
+  });
+
+  it("cuts the points at the kernel's limit for the kind and says it did, and not before", async () => {
+    const exact = drawn(await renderModel([byRegion], deps(measureKernel(rowsOf(100)).request)), "measure1");
+    expect(exact.data).toMatchObject({ rows: rowsOf(100), truncated: false });
+    const bars = drawn(await renderModel([byRegion], deps(measureKernel(rowsOf(101)).request)), "measure1");
+    expect(bars.data).toMatchObject({ rows: rowsOf(100), truncated: true });
+    const line: ChartWidget = { ...byRegion, spec: { kind: "line", x: "day", y: [], agg: "sum" } };
+    const k = measureKernel(rowsOf(5001));
+    const lines = drawn(await renderModel([line], deps(k.request)), "measure1");
+    expect(lines.data.truncated).toBe(true);
+    expect(lines.data.rows).toHaveLength(5000);
+    expect(k.calls.find((c) => c.method === "result.page")?.params).toMatchObject({ limit: 5001 });
+  });
+
+  it("gives the number formats of the measures drawn that have one, and none when none has", async () => {
+    const both = await renderModel([{ ...byRegion, measures: ["revenue", "margin", "units"] }], deps(measureKernel().request));
+    expect(both.widgets.measure1).toMatchObject({ formats: { revenue: money, margin: percent } });
+    expect((both.widgets.measure1 as { formats: object }).formats).not.toHaveProperty("units");
+    const plain = await renderModel([{ ...byRegion, measures: ["units"] }], deps(measureKernel().request));
+    expect(plain.widgets.measure1).not.toHaveProperty("formats");
+  });
+
+  it.each([["inf"], ["-inf"], ["nan"], [Number.POSITIVE_INFINITY], [Number.NaN]])("fails the chart that draws a measure holding %s, as a division by zero", async (bad) => {
+    const k = measureKernel([["EU", 1, 0.5], ["US", 2, bad]]);
+    const r = await renderModel([{ ...byRegion, measures: ["revenue", "margin"] }, { ...byRegion, id: "measure2" }], deps(k.request));
+    expect(r.widgets.measure1).toEqual({ kind: "error", message: "division by zero in margin" });
+    // a chart of the same result that does not draw margin is not bothered by it
+    expect(r.widgets.measure2.kind).toBe("chart");
+  });
+
+  it("takes nulls, finite numbers and decimals as written as text, and an 'inf' in a column that is not a float as a value", async () => {
+    const decimal = { name: "revenue", type: "decimal128(15, 2)" };
+    const ok = await renderModel([{ ...byRegion, measures: ["revenue", "margin"] }], deps(measureKernel([["EU", 1, null], ["US", "1.50", 0]], [resultColumns[0], decimal, resultColumns[2]]).request));
+    expect(ok.widgets.measure1.kind).toBe("chart");
+    const text = await renderModel([byRegion], deps(measureKernel([["inf", "nan", 1]], [resultColumns[0], { name: "revenue", type: "string_view" }, resultColumns[2]]).request));
+    expect(text.widgets.measure1.kind).toBe("chart");
+  });
+
+  it("makes a compile error the widget's error and runs nothing for it, leaving the other widgets alone", async () => {
+    const k = measureKernel();
+    const ghost: ChartWidget = { ...byRegion, id: "measure2", measures: ["ghost"] };
+    const r = await renderModel([ghost, byRegion, chart], deps(k.request));
+    expect(r.widgets.measure2).toEqual({ kind: "error", message: "there is no measure ghost" });
+    expect(r.widgets.measure1.kind).toBe("chart");
+    expect(r.widgets.chart001.kind).toBe("chart");
+    expect(runs(k).map((c) => String(c.params.query).split(" ")[0])).toEqual(["SELECT", "MEASURES"]);
+    // a viewer reads the plain error
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const viewer = await renderModel([ghost], deps(measureKernel().request, true));
+    expect(viewer.widgets.measure2).toEqual({ kind: "error", message: HIDDEN_ERROR });
+    expect(log).toHaveBeenCalledWith("dashboard widget measure2: there is no measure ghost");
+  });
+
+  it("refuses a measure over another dataset than the chart's, before running", async () => {
+    const k = measureKernel();
+    const r = await renderModel([{ ...byRegion, measures: ["stores_count"] }], deps(k.request), [sales, stores]);
+    expect(r.widgets.measure1).toEqual({ kind: "error", message: "measure stores_count is over stores, not sales" });
+    expect(k.calls).toEqual([]);
+  });
+
+  it.each(["scatter", "histogram"] as const)("refuses a %s chart, without running anything", async (kind) => {
+    const k = measureKernel();
+    const r = await renderModel([{ ...byRegion, spec: { kind, x: "amount", y: [], agg: "count" } }], deps(k.request));
+    expect(r.widgets.measure1).toEqual({ kind: "error", message: "measures work with bar, line, area, pie and counter charts" });
+    expect(k.calls).toEqual([]);
+    expect(modelMock.query).not.toHaveBeenCalled();
+  });
+
+  it("fails the chart with what the kernel says when its query fails, and with the placeholders that need a value without running anything", async () => {
+    const error = { type: "error", ename: "SqlError", evalue: "no column amount", traceback: "" };
+    const bad = measureKernel(rowsOf(1), resultColumns, () => error);
+    expect((await renderModel([byRegion], deps(bad.request))).widgets.measure1).toEqual({ kind: "error", message: "SqlError: no column amount" });
+    const needs: Dataset = { name: "sales", sql: "SELECT * FROM sales WHERE year = :year", params: {} };
+    const k = measureKernel();
+    const r = await renderModel([byRegion], deps(k.request), [needs]);
+    expect(r.widgets.measure1).toEqual({ kind: "error", message: "needs a value for :year" });
+    expect(k.calls).toEqual([]);
+  });
+
+  it("skips the dataset's own run when only measure charts use it, and shares one among the widgets that draw its rows", async () => {
+    const only = measureKernel();
+    await renderModel([byRegion, { ...byRegion, id: "measure2", measures: ["margin"] }], deps(only.request));
+    expect(runs(only).map((c) => c.params.query)).toEqual([
+      `MEASURES revenue BY region/null value 101 FROM ${BASE}`,
+      `MEASURES margin BY region/null value 101 FROM ${BASE}`,
+    ]);
+    const mixed = measureKernel();
+    const r = await renderModel([byRegion, chart, table, { ...table, id: "table002", dataset: "stores" }], deps(mixed.request), [sales, stores]);
+    // the chart and the table share one run of sales, the measure chart queries over it, stores has its own
+    expect(runs(mixed).map((c) => c.params.query)).toEqual([BASE, `MEASURES revenue BY region/null value 101 FROM ${BASE}`, "SELECT * FROM (\nSELECT * FROM stores\n) AS _d"]);
+    expect([r.widgets.measure1.kind, r.widgets.chart001.kind, r.widgets.table001.kind, r.widgets.table002.kind]).toEqual(["chart", "chart", "table", "table"]);
+    // a base run that fails does not take the measure charts with it
+    const failing = measureKernel(rowsOf(2), resultColumns, undefined);
+    const request = (async (method: string, params: { query?: string }) =>
+      method === "sql.run" && !params.query?.startsWith("MEASURES")
+        ? { type: "error", ename: "SqlError", evalue: "no table sales", traceback: "" }
+        : (failing.request as (m: string, p: unknown) => Promise<unknown>)(method, params)) as unknown as RunDeps["request"];
+    const partial = await renderModel([byRegion, chart], deps(request));
+    expect(partial.widgets.chart001).toEqual({ kind: "error", message: "SqlError: no table sales" });
+    expect(partial.widgets.measure1.kind).toBe("chart");
+  });
+
+  it("narrows other charts by its x and is narrowed by their picks, like any chart", async () => {
+    const picked = measureKernel();
+    await renderModel([chart, byRegion], deps(picked.request), [sales], [{ widget: "measure1", value: "EU" }]);
+    // the picked measure chart narrows the other chart and draws the whole dataset itself
+    expect(runs(picked).map((c) => [c.params.query, c.params.params])).toEqual([
+      [`${BASE}\nWHERE CAST("region" AS VARCHAR) = :_c0`, { _c0: "EU" }],
+      [`MEASURES revenue BY region/null value 101 FROM ${BASE}`, undefined],
+    ]);
+    const narrowed = measureKernel();
+    await renderModel([chart, byRegion], deps(narrowed.request), [sales], [{ widget: "chart001", value: "EU" }]);
+    expect(runs(narrowed).map((c) => [c.params.query, c.params.params])).toEqual([
+      [BASE, undefined],
+      [`MEASURES revenue BY region/null value 101 FROM ${BASE}\nWHERE CAST("region" AS VARCHAR) = :_c0`, { _c0: "EU" }],
+    ]);
+  });
+
+  describe("on an extract", () => {
+    const entry: ExtractEntry = { version: "20261028T231500Z-a1b2", rows: 2, bytes: 100, columns, sources: ["main.public.sales"], hash: datasetHash(sales), refreshed_at: 1 };
+    const withExtract = (live: { request: RunDeps["request"] }, serving: { request: RunDeps["request"] }, allow: string[] | null): RunDeps => ({
+      ...deps(live.request),
+      allow,
+      extracts: { manifest: { datasets: { sales: entry } }, serve: serving.request as never, url: (name, v) => `s3://bucket/${name}/${v}.parquet` },
+    });
+    const READ = "SELECT * FROM (\nSELECT * FROM read_parquet('s3://bucket/sales/20261028T231500Z-a1b2.parquet')\n) AS _d";
+
+    it("sends the compiled query to the serving kernel, over the extract, with no allow list, and leaves the dashboard's kernel alone", async () => {
+      const live = fakeKernel();
+      const serving = measureKernel();
+      const r = await renderModel([byRegion], withExtract(live, serving, ["main"]));
+      expect(live.calls).toEqual([]);
+      expect(runs(serving).map((c) => c.params.query)).toEqual([`MEASURES revenue BY region/null value 101 FROM ${READ}`]);
+      expect(runs(serving)[0].params).not.toHaveProperty("allow");
+      expect(serving.calls.map((c) => c.method)).toEqual(["sql.run", "result.page"]);
+      expect(r.widgets.measure1.kind).toBe("chart");
+    });
+
+    it("fails the chart when the viewer may not read what the extract was built from", async () => {
+      const serving = measureKernel();
+      const r = await renderModel([byRegion], withExtract(fakeKernel(), serving, ["main.secret"]));
+      expect(r.widgets.measure1).toEqual({ kind: "error", message: "no read grant on table main.public.sales" });
+      expect(serving.calls).toEqual([]);
+    });
+  });
+
+  it("checks the model once per render, with the columns of the datasets unknown, and only when a chart draws measures", async () => {
+    await renderModel([byRegion, { ...byRegion, id: "measure2", measures: ["margin"] }], deps(measureKernel().request), [sales, stores]);
+    expect(modelMock.check.mock.calls).toEqual([[MODEL, { sales: null, stores: null }]]);
+    modelMock.check.mockClear();
+    await renderModel([chart, table], deps(fakeKernel().request));
+    expect(modelMock.check).not.toHaveBeenCalled();
+    // a dashboard without a model checks an empty one
+    await renderDashboard({ datasets: [sales], widgets: [byRegion] }, {}, deps(measureKernel().request));
+    expect(modelMock.check.mock.calls).toEqual([["", { sales: null }]]);
+  });
+
+  it("leaves a chart with an empty list of measures to the kernel", async () => {
+    const k = measureKernel();
+    const r = await renderModel([{ ...byRegion, measures: [] }], deps(k.request));
+    expect(k.calls.some((c) => c.method === "result.chart")).toBe(true);
+    expect(r.widgets.measure1.kind).toBe("chart");
+    expect(modelMock.query).not.toHaveBeenCalled();
   });
 });
 

@@ -37,6 +37,7 @@ function counterText(v: CellValue): string {
  * category of a bar, line, area or pie chart calls it with the category's x
  * value (undefined when the click is on the one that is `picked`: it clears);
  * `picked` (undefined: none) marks that category when the chart has one series.
+ * `caption` (a counter's): replaces the line under its number.
  */
 export function ChartCanvas({
   data,
@@ -46,6 +47,7 @@ export function ChartCanvas({
   style,
   onPick,
   picked,
+  caption,
 }: {
   data: ChartData;
   spec: ChartSpec;
@@ -54,6 +56,7 @@ export function ChartCanvas({
   style?: ChartStyle;
   onPick?(value: PickValue | undefined): void;
   picked?: PickValue;
+  caption?: string;
 }) {
   const { t, i18n } = useTranslation();
   const locale = numberLocale(i18n.language);
@@ -75,7 +78,7 @@ export function ChartCanvas({
         <Typography sx={{ fontSize: 48, fontWeight: 600, lineHeight: 1.1, fontVariantNumeric: "tabular-nums" }}>
           {typeof value === "number" && style?.format ? formatNumber(value, style.format, locale) : counterText(value)}
         </Typography>
-        <Typography sx={{ fontSize: 12, color: "text.secondary" }}>{t(COUNTER_CAPTIONS[spec.agg], { column: spec.y[0] })}</Typography>
+        <Typography sx={{ fontSize: 12, color: "text.secondary" }}>{caption ?? t(COUNTER_CAPTIONS[spec.agg], { column: spec.y[0] })}</Typography>
       </Box>
     );
   }

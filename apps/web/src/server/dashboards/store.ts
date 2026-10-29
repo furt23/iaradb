@@ -25,6 +25,7 @@ export const DASHBOARDS_DIR = "dashboards";
 const RECIPE_EXT = ".recipe.json";
 const SLUG = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const MAX_FILE_BYTES = 1 << 20;
+const MAX_MODEL_BYTES = 200 * 1024;
 const MODE_LINE = /^-- iara:mode (.*)$/;
 
 export interface DashboardProblem {
@@ -219,7 +220,8 @@ export async function readDashboard(slug: string): Promise<Dashboard> {
   }
 
   const layout = (await attempt("layout.json", async () => parseLayout((await readOptional(pathIn(slug, "layout.json"))) ?? "[]"))) ?? [];
-  return { slug, config, datasets, widgets, layout, problems };
+  const model = (await attempt("model.py", async () => (await readOptional(pathIn(slug, "model.py"))) ?? "")) ?? "";
+  return { slug, config, datasets, widgets, layout, model, problems };
 }
 
 /** A widget id that names a file (throws when it is not an id). */
@@ -343,6 +345,16 @@ export async function saveLayout(slug: string, items: LayoutItem[]): Promise<Lay
   await readConfig(slug);
   await writeAtomic(pathIn(slug, "layout.json"), layoutJson(layout));
   return layout;
+}
+
+/** Write the semantic model's file (`model.py`); an empty source removes it. It is only text here: it is checked where it is used. */
+export async function saveModel(slug: string, source: string): Promise<string> {
+  if (typeof source !== "string") throw new Error("the model is text");
+  if (Buffer.byteLength(source, "utf8") > MAX_MODEL_BYTES) throw new Error("model.py is limited to 200 KB");
+  await readConfig(slug);
+  if (source === "") await fs.rm(pathIn(slug, "model.py"), { force: true });
+  else await writeAtomic(pathIn(slug, "model.py"), source);
+  return source;
 }
 
 /** Remove a dashboard's folder and its published copy. Returns its id (null: its config could not be read). */

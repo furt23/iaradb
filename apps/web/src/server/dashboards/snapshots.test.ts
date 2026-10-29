@@ -23,6 +23,7 @@ const published: PublishedDashboard = {
   refresh_minutes: 5,
   datasets: [{ name: "sales", sql: "SELECT * FROM sales", params: {} }],
   widgets: [{ id: "chart001", kind: "chart", dataset: "sales", spec: { kind: "bar", x: "region", y: ["amount"], agg: "sum" } }],
+  model: "",
   layout: [{ widget: "chart001", x: 0, y: 0, w: 12, h: 8 }],
   share: { kind: "team" },
   publishedBy: "admin@x.com",

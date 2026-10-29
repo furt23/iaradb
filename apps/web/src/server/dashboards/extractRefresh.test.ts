@@ -43,6 +43,7 @@ const published = (...datasets: Dataset[]): PublishedDashboard => ({
   refresh_minutes: 5,
   datasets,
   widgets: [],
+  model: "",
   layout: [],
   share: { kind: "team" },
   publishedBy: "ed@x.com",

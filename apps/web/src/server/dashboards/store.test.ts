@@ -39,7 +39,7 @@ describe("createDashboard", () => {
     expect(d.slug).toBe("sales_overview");
     expect(d.config).toMatchObject({ title: "Sales Overview!", refresh_minutes: 10 });
     expect(d.config.id).toMatch(/^[a-z0-9]{8}$/);
-    expect(d).toMatchObject({ datasets: [], widgets: [], layout: [], problems: [] });
+    expect(d).toMatchObject({ datasets: [], widgets: [], layout: [], model: "", problems: [] });
     expect(fs.readFileSync(file("sales_overview", "layout.json"), "utf8")).toBe("[]\n");
     expect((await store.createDashboard("Sales Overview")).slug).toBe("sales_overview_2");
     expect((await store.createDashboard("Sales Overview")).slug).toBe("sales_overview_3");
@@ -123,6 +123,13 @@ describe("readDashboard", () => {
     const d = await store.readDashboard(slug);
     expect(d.layout).toEqual([]);
     expect(d.problems).toEqual([{ file: "layout.json", error: expect.stringContaining("layout item 1") }]);
+  });
+
+  it("reads model.py into model, and \"\" when there is none", async () => {
+    const { slug } = await store.createDashboard("Sales");
+    expect((await store.readDashboard(slug)).model).toBe("");
+    fs.writeFileSync(file(slug, "model.py"), "revenue = sum(sales.amount)");
+    expect((await store.readDashboard(slug)).model).toBe("revenue = sum(sales.amount)");
   });
 
   it("takes a dashboard without a layout.json", async () => {
@@ -265,6 +272,23 @@ describe("saving", () => {
     expect(fs.existsSync(file(slug, "widgets", "chart001.json"))).toBe(false);
     expect((await store.readDashboard(slug)).layout).toEqual([item("text0001", 8)]);
     await expect(store.deleteWidget(slug, "../layout")).rejects.toThrow(/invalid widget id/);
+  });
+
+  it("writes model.py atomically, removes it when the source is empty, and refuses a big file or a dashboard that is not there", async () => {
+    const { slug } = await store.createDashboard("Sales");
+    expect(await store.saveModel(slug, "revenue = sum(sales.amount)")).toBe("revenue = sum(sales.amount)");
+    expect(fs.readFileSync(file(slug, "model.py"), "utf8")).toBe("revenue = sum(sales.amount)");
+    expect(fs.readdirSync(file(slug)).some((n) => n.endsWith(".tmp"))).toBe(false);
+    expect((await store.readDashboard(slug)).model).toBe("revenue = sum(sales.amount)");
+    await expect(store.saveModel(slug, "x".repeat(200 * 1024 + 1))).rejects.toThrow(/200 KB/);
+    expect(fs.readFileSync(file(slug, "model.py"), "utf8")).toBe("revenue = sum(sales.amount)");
+    await store.saveModel(slug, "x".repeat(200 * 1024));
+    expect(await store.saveModel(slug, "")).toBe("");
+    expect(fs.existsSync(file(slug, "model.py"))).toBe(false);
+    expect(await store.saveModel(slug, "")).toBe("");
+    await expect(store.saveModel("ghost", "x = 1")).rejects.toMatchObject({ type: "NotFound" });
+    await expect(store.saveModel("../x", "x = 1")).rejects.toThrow(/invalid dashboard name/);
+    expect(fs.existsSync(file("ghost"))).toBe(false);
   });
 
   it("checks a layout before writing it", async () => {

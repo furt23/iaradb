@@ -22,7 +22,7 @@ import type { ParamSpec } from "@/features/queries/queryHeader";
 import { formatCount, isNumericType } from "@/lib/format";
 import { cellTint, columnRange, tintBackground } from "@/lib/dashboards/conditional";
 import { formatNumber, numberLocale } from "@/lib/dashboards/numberFormat";
-import type { ChartWidget, FilterValue, FilterWidget, NumberFormat, PickValue, TableWidget, TextWidget, Widget, WidgetData } from "@/lib/dashboards/types";
+import type { ChartStyle, ChartWidget, FilterValue, FilterWidget, NumberFormat, PickValue, TableWidget, TextWidget, Widget, WidgetData } from "@/lib/dashboards/types";
 import { useElementHeight } from "@/lib/useElementHeight";
 
 import { FilterControl } from "./FilterControl";
@@ -96,6 +96,21 @@ function TableView({ widget, data }: { widget: TableWidget; data: Extract<Widget
   );
 }
 
+/**
+ * The chart's style, with the formats of its measures where the style sets none: the first measure
+ * on the left axis gives the left format, the first on the right axis the right one.
+ */
+function styleWithFormats(widget: ChartWidget, formats: Record<string, NumberFormat> | undefined): ChartStyle | undefined {
+  const style = widget.style;
+  const measures = widget.measures ?? [];
+  const left = measures.find((m) => style?.series?.[m]?.axis !== "right");
+  const right = measures.find((m) => style?.series?.[m]?.axis === "right");
+  const format = style?.format ?? (left === undefined ? undefined : formats?.[left]);
+  const rightFormat = style?.right_format ?? (right === undefined ? undefined : formats?.[right]);
+  if (format === style?.format && rightFormat === style?.right_format) return style;
+  return { ...style, format, right_format: rightFormat };
+}
+
 function ChartView({
   widget,
   data,
@@ -111,9 +126,12 @@ function ChartView({
   const ref = useRef<HTMLDivElement>(null);
   const height = useElementHeight(ref);
   const xType = data.columns.find((c) => c.name === widget.spec.x)?.type ?? "";
+  const style = useMemo(() => styleWithFormats(widget, data.formats), [widget, data.formats]);
+  // a counter over a measure is captioned with the measure's name
+  const caption = widget.spec.kind === "counter" ? widget.measures?.[0] : undefined;
   return (
     <Box ref={ref} role="figure" aria-label={widget.title ?? t("Chart")} sx={{ flex: 1, minHeight: 0, overflow: "hidden", px: 1 }}>
-      {height > 0 && <ChartCanvas data={data.data} spec={widget.spec} height={height} xType={xType} onPick={onPick} picked={picked} style={widget.style} />}
+      {height > 0 && <ChartCanvas data={data.data} spec={widget.spec} height={height} xType={xType} onPick={onPick} picked={picked} style={style} caption={caption} />}
     </Box>
   );
 }
