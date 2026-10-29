@@ -63,9 +63,11 @@ export function CanvasTab({
     const w = byId.get(id);
     if (!w) return null;
     const title = w.kind === "text" ? undefined : w.title;
+    const shown = data.result?.widgets[id];
     return (
       <WidgetFrame
         title={title}
+        notes={shown?.kind === "chart" ? shown.notes : undefined}
         selected={id === selected}
         draggable
         onClick={() => onSelect(id)}
@@ -84,7 +86,7 @@ export function CanvasTab({
       >
         <WidgetBody
           widget={w}
-          data={data.result?.widgets[id]}
+          data={shown}
           loading={data.loading}
           filterValue={data.values[id]}
           onFilterValue={(value) => data.setValue(id, value)}

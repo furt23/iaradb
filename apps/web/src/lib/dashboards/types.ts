@@ -124,9 +124,10 @@ export interface ChartWidget {
   spec: ChartSpec;
   style?: ChartStyle;
   /**
-   * Measures of the model (`model.py`) over `dataset`, drawn by `spec.x` and
-   * `spec.group` (a counter: one measure, no x); when set, `spec.y` and
-   * `spec.agg` are not used.
+   * Measures of the model (`model.py`), drawn by `spec.x` and `spec.group` (a
+   * counter: one measure, no x); when set, `spec.y` and `spec.agg` are not
+   * used, and `spec.x` / `spec.group` may name a related dataset's column as
+   * `dataset.column` (a bare name is a column of `dataset`).
    */
   measures?: string[];
 }
@@ -231,8 +232,8 @@ export type CrossPicks = CrossPick[];
 
 /** what a widget draws, from the kernel; errors are per widget */
 export type WidgetData =
-  /** `formats`: the number formats of the measures drawn, by column */
-  | { kind: "chart"; data: ChartData; columns: ColumnInfo[]; formats?: Record<string, NumberFormat> }
+  /** `formats`: the number formats of the measures drawn, by column; `notes`: what the author should know (a measure whose total repeats), never sent to viewers */
+  | { kind: "chart"; data: ChartData; columns: ColumnInfo[]; formats?: Record<string, NumberFormat>; notes?: string[] }
   | { kind: "table"; columns: ColumnInfo[]; rows: CellValue[][]; total: number }
   | { kind: "filter"; options: CellValue[] }
   | { kind: "error"; message: string };

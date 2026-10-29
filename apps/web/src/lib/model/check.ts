@@ -9,14 +9,10 @@ import { checkExpr, exprContext, type Entry, type Env } from "./expr";
 import { fail, ModelError } from "./functions/def";
 import { FUNCTIONS, PLANNED } from "./functions/registry";
 import { ALLOWED, parse } from "./parse";
+import { numbered, text } from "./parts";
 import type { Checked, Diagnostic, Measure, Relationship, Schema } from "./types";
 
 const MODULE = "iara.model";
-
-/** `a`, `a and b`, `a, b and c` */
-function list(items: readonly string[]): string {
-  return items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
-}
 
 /** Checks the model source against `schema` (column names by dataset). Never throws. */
 export function checkModel(source: string, schema: Schema): Checked {
@@ -61,15 +57,15 @@ export function checkModel(source: string, schema: Schema): Checked {
       if (t.level === "row") fail(value, `\`${name}\` is a value per row: wrap it in an aggregation, e.g. sum(...)`);
       if (t.level === "scalar") {
         // a constant: used by name, it is written out where it is used
-        names.set(name, { kind: "const", sql: t.sql, text: t.text });
+        names.set(name, { kind: "const", sql: text(t.sql), text: t.text });
         return;
       }
-      if (t.datasets.length === 0) fail(value, `\`${name}\` does not read any dataset: aggregate a column, e.g. sum(orders.total)`);
-      if (t.datasets.length > 1) fail(value, `\`${name}\` reads ${list(t.datasets)}: a measure reads one dataset for now`);
+      const { atoms, expr } = numbered(t.sql);
       const measure: Measure = {
         name,
-        dataset: t.datasets[0],
-        sql: t.sql,
+        datasets: [...new Set(atoms.map((a) => a.dataset))],
+        atoms,
+        expr,
         ...(t.format && { format: t.format }),
         ...(t.label !== undefined && { label: t.label }),
         span: stmt.span,

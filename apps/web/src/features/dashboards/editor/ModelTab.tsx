@@ -100,7 +100,7 @@ export function ModelTab({
               ? measures.map((m) => (
                   <Box key={m.span.from}>
                     <Typography sx={MONO}>{m.name}</Typography>
-                    <Typography sx={{ fontSize: 12, color: "text.secondary" }}>{[m.dataset, m.format && formatText(m.format)].filter(Boolean).join(" · ")}</Typography>
+                    <Typography sx={{ fontSize: 12, color: "text.secondary" }}>{[m.datasets.join(", "), m.format && formatText(m.format)].filter(Boolean).join(" · ")}</Typography>
                   </Box>
                 ))
               : none}

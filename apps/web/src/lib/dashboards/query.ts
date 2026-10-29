@@ -159,44 +159,64 @@ function spellings(text: string): string[] {
   return [...new Set([text, ...zones.map((z) => `${head}${digits && `.${digits}`}${z}`)])];
 }
 
+/** A chart's pick as a condition on a column; `id` names its parameters (absent: its position among the picks). */
+export interface PickBy {
+  column: string;
+  value: PickValue;
+  id?: number;
+}
+
+/** A dataset narrowed by the rows of another (a dimension's, reached by a relationship): `column IN (SELECT key FROM (query) AS alias)`. */
+export interface Semi {
+  column: string;
+  key: string;
+  query: { query: string; params: QueryParams };
+  alias: string;
+}
+
+/** The parameters of two queries in one. Throws when a name is bound to two values or types: the placeholders of one query share their names. */
+export function mergeParams(a: QueryParams, b: QueryParams): QueryParams {
+  const params: Record<string, ParamValue> = { ...a.params };
+  const param_types: Record<string, ParamType> = { ...a.param_types };
+  for (const [name, v] of Object.entries(b.params ?? {})) {
+    const type = b.param_types?.[name];
+    if (Object.hasOwn(params, name) && (params[name] !== v || param_types[name] !== type)) throw new Error(`:${name} is bound to two different values in one query`);
+    params[name] = v;
+    if (type) param_types[name] = type;
+  }
+  return Object.keys(params).length ? { params, param_types } : {};
+}
+
 /**
- * The query of a dataset for the viewer's values: its own placeholders from
- * `paramValues` (or their defaults), the field filters that include it as
- * conditions, and the `picks` (a column and the value a chart's category holds)
- * as conditions too. `missing`: placeholders without a value. Throws when the
- * dataset is not one query or a filter value is not valid for its filter.
+ * The `WHERE` conditions the filters (by their position in `filters`, so a
+ * filter's parameters have the same names on every dataset) and the picks put on
+ * a dataset's columns; their values are bound in `params`.
  */
-export function datasetQuery(
-  dataset: Dataset,
+function conditionsOf(
+  dataset: string,
   filters: FilterWidget[],
   values: FilterValues,
-  paramValues: Record<string, ParamRaw>,
-  picks: { column: string; value: PickValue }[] = [],
-): DatasetQuery {
-  const own = datasetParams(dataset, paramValues);
-  if (own.missing.length) return { missing: own.missing };
+  picks: PickBy[],
+  params: Record<string, ParamValue>,
+  param_types: Record<string, ParamType>,
+): string[] {
   const where: string[] = [];
-  const params: Record<string, ParamValue> = { ...own.query.params };
-  const param_types: Record<string, ParamType> = { ...own.query.param_types };
-  let i = 0;
-  for (const f of filters) {
-    const columns = (f.fields ?? []).filter((x) => x.dataset === dataset.name).map((x) => x.column);
-    if (!columns.length) continue;
+  filters.forEach((f, i) => {
+    const columns = (f.fields ?? []).filter((x) => x.dataset === dataset).map((x) => x.column);
     const value = values[f.id];
-    if (value !== undefined) {
-      const problem = filterValueProblem(f, value);
-      if (problem) throw new Error(`${f.title ?? "a filter"}: expected ${problem}`);
-      const bind: Bind = (name, raw) => {
-        params[name] = coerce({ type: typeOf(f) }, raw) as ParamValue;
-        param_types[name] = typeOf(f);
-        return `:${name}`;
-      };
-      for (const column of columns) where.push(...conditions(f, i, column, value, bind));
-    }
-    i++;
-  }
-  picks.forEach(({ column, value }, n) => {
+    if (!columns.length || value === undefined) return;
+    const problem = filterValueProblem(f, value);
+    if (problem) throw new Error(`${f.title ?? "a filter"}: expected ${problem}`);
+    const bind: Bind = (name, raw) => {
+      params[name] = coerce({ type: typeOf(f) }, raw) as ParamValue;
+      param_types[name] = typeOf(f);
+      return `:${name}`;
+    };
+    for (const column of columns) where.push(...conditions(f, i, column, value, bind));
+  });
+  picks.forEach(({ column, value, id }, n) => {
     const c = quoteIdent(column);
+    const k = id ?? n;
     const bind = (name: string, v: string | number | boolean, type: ParamType) => {
       params[name] = v;
       param_types[name] = type;
@@ -205,12 +225,49 @@ export function datasetQuery(
     if (value === null) where.push(`${c} IS NULL`);
     // text, date, timestamp and decimal x values reach the browser as text (kernel `json_value`): they match as the column's text
     else if (typeof value === "string") {
-      const names = spellings(value).map((s, j) => bind(j ? `_c${n}_${j}` : `_c${n}`, s, "text"));
+      const names = spellings(value).map((s, j) => bind(j ? `_c${k}_${j}` : `_c${k}`, s, "text"));
       where.push(`CAST(${c} AS VARCHAR) ${names.length > 1 ? `IN (${names.join(", ")})` : `= ${names[0]}`}`);
-    } else where.push(`${c} = ${bind(`_c${n}`, value, typeof value === "number" ? "number" : "boolean")}`);
+    } else where.push(`${c} = ${bind(`_c${k}`, value, typeof value === "number" ? "number" : "boolean")}`);
   });
+  return where;
+}
+
+/** Whether the filters' values and the picks put any condition on the dataset's own columns. */
+export function narrows(dataset: string, filters: FilterWidget[], values: FilterValues, picks: PickBy[]): boolean {
+  return conditionsOf(dataset, filters, values, picks, {}, {}).length > 0;
+}
+
+/**
+ * The query of a dataset for the viewer's values: its own placeholders from
+ * `paramValues` (or their defaults), the field filters that include it as
+ * conditions, the `picks` (a column and the value a chart's category holds) as
+ * conditions too, and the `semis` that narrow it through a relationship, whose
+ * parameters join its own. A filter's parameters are named by its position in
+ * `filters` (`_f2`, `_f2_from`), a pick's by its `id` (`_c1`, `_c1_1`), so one
+ * name is one value in every dataset of a query. `missing`: placeholders without
+ * a value. Throws when the dataset is not one query or a filter value is not
+ * valid for its filter.
+ */
+export function datasetQuery(
+  dataset: Dataset,
+  filters: FilterWidget[],
+  values: FilterValues,
+  paramValues: Record<string, ParamRaw>,
+  picks: PickBy[] = [],
+  semis: Semi[] = [],
+): DatasetQuery {
+  const own = datasetParams(dataset, paramValues);
+  if (own.missing.length) return { missing: own.missing };
+  const params: Record<string, ParamValue> = { ...own.query.params };
+  const param_types: Record<string, ParamType> = { ...own.query.param_types };
+  const where = conditionsOf(dataset.name, filters, values, picks, params, param_types);
+  let merged: QueryParams = Object.keys(params).length ? { params, param_types } : {};
+  for (const s of semis) {
+    where.push(`${quoteIdent(s.column)} IN (SELECT ${quoteIdent(s.key)} FROM (\n${s.query.query}\n) AS ${s.alias})`);
+    merged = mergeParams(merged, s.query.params);
+  }
   const query = `SELECT * FROM ${source(dataset.sql)}${where.length ? `\nWHERE ${where.join("\n  AND ")}` : ""}`;
-  return { query, params: Object.keys(params).length ? { params, param_types } : {} };
+  return { query, params: merged };
 }
 
 /** The distinct values of a column of a dataset (what a filter offers). */

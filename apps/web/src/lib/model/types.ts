@@ -1,7 +1,9 @@
 /**
  * The semantic model of a dashboard: `dashboards/<slug>/model.py`, Python
- * syntax that is parsed and checked here, never run. Phase 1: relationships
- * between datasets (checked, not used yet) and measures over one dataset.
+ * syntax that is parsed and checked here, never run. Relationships between
+ * datasets carry filters from the "one" side to the "many" side and let a
+ * chart group by a related dataset's column; measures are expressions over
+ * aggregations, each aggregation reading one dataset.
  */
 
 import type { NumberFormat } from "@/lib/dashboards/types";
@@ -31,18 +33,29 @@ export interface Relationship {
   span: Span;
 }
 
+/** One aggregation over one dataset's rows (`SUM("valor")`, `COUNT(*)`), its columns quoted and unqualified. */
+export interface Atom {
+  dataset: string;
+  sql: string;
+}
+
+/** SQL text with holes for atoms: `{ atom: i }` is `atoms[i]`'s value once computed. */
+export type Template = (string | { atom: number })[];
+
 export interface Measure {
   name: string;
-  /** the one dataset it aggregates */
-  dataset: string;
-  /** its value as one SELECT expression over the dataset's columns, quoted (`SUM("valor")`) */
-  sql: string;
+  /** the datasets its atoms read, in first-use order */
+  datasets: string[];
+  atoms: Atom[];
+  /** its value over the atoms' values (a plain aggregation is `[{ atom: 0 }]`) */
+  expr: Template;
   format?: NumberFormat;
   label?: string;
   span: Span;
 }
 
 export interface Model {
+  /** the relationships that checked (the graph has no cycle and one path at most between two datasets) */
   relationships: Relationship[];
   /** the measures that checked, in file order (one with an error is left out, the rest stay) */
   measures: Measure[];

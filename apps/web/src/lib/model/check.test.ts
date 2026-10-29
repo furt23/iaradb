@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { checkModel } from "./check";
 import { ALLOWED } from "./parse";
-import type { Checked, Schema } from "./types";
+import { render } from "./parts";
+import type { Checked, Measure, Schema } from "./types";
 
 const SCHEMA: Schema = {
   orders: ["a", "b", "status", "day"],
@@ -13,7 +14,12 @@ const SCHEMA: Schema = {
 
 const check = (source: string, schema: Schema = SCHEMA): Checked => checkModel(source, schema);
 const messages = (source: string, schema?: Schema) => check(source, schema).diagnostics.map((d) => d.message);
-const sqlOf = (source: string, name = "m") => check(source).model.measures.find((m) => m.name === name)?.sql;
+const measureOf = (source: string, name = "m"): Measure | undefined => check(source).model.measures.find((m) => m.name === name);
+/** the SQL of a measure with its atoms written in place of the holes */
+const sqlOf = (source: string, name = "m") => {
+  const m = measureOf(source, name);
+  return m && render(m.expr, (i) => m.atoms[i].sql);
+};
 
 describe("imports", () => {
   it("are optional, and every function and dataset works without them", () => {
@@ -53,7 +59,7 @@ describe("names", () => {
   });
 
   it("points the unknown-function error at the function name", () => {
-    expect(check("m = sum(1) + nope(2)").diagnostics[0]).toMatchObject({ from: 13, to: 17, col: 14 });
+    expect(check("m = sum(orders.a) + nope(2)").diagnostics[0]).toMatchObject({ from: 20, to: 24, col: 21 });
   });
 
   it("does not take a bare dataset or a function name as a value", () => {
@@ -85,7 +91,13 @@ describe("levels", () => {
     const { model, diagnostics } = check("revenue = sum(orders.a)");
     expect(diagnostics).toEqual([]);
     expect(model.measures).toEqual([
-      { name: "revenue", dataset: "orders", sql: 'SUM("a")', span: { from: 0, to: 23, line: 1, col: 1 } },
+      {
+        name: "revenue",
+        datasets: ["orders"],
+        atoms: [{ dataset: "orders", sql: 'SUM("a")' }],
+        expr: [{ atom: 0 }],
+        span: { from: 0, to: 23, line: 1, col: 1 },
+      },
     ]);
   });
 
@@ -101,12 +113,11 @@ describe("levels", () => {
   });
 
   it("makes a constant of a scalar, written out where it is used", () => {
-    const { model, diagnostics } = check("rate = 0.1\nk = 2 * 3\nm = sum(orders.a) * rate + k\nn = sum(orders.a * rate)");
-    expect(diagnostics).toEqual([]);
-    expect(model.measures.map((m) => [m.name, m.sql])).toEqual([
-      ["m", '((SUM("a") * 0.1) + (2 * 3))'],
-      ["n", 'SUM(("a" * 0.1))'],
-    ]);
+    const source = "rate = 0.1\nk = 2 * 3\nm = sum(orders.a) * rate + k\nn = sum(orders.a * rate)";
+    expect(check(source).diagnostics).toEqual([]);
+    expect(check(source).model.measures.map((m) => m.name)).toEqual(["m", "n"]);
+    expect(sqlOf(source, "m")).toBe('((SUM("a") * 0.1) + (2 * 3))');
+    expect(sqlOf(source, "n")).toBe('SUM(("a" * 0.1))');
   });
 
   it("refuses an aggregation inside another, also through a measure", () => {
@@ -140,7 +151,7 @@ describe("levels", () => {
 
   it("has count_rows(dataset) as an aggregate, and nothing else takes a dataset", () => {
     expect(sqlOf("m = count_rows(orders)")).toBe("COUNT(*)");
-    expect(check("m = count_rows(orders)").model.measures[0].dataset).toBe("orders");
+    expect(measureOf("m = count_rows(orders)")).toMatchObject({ datasets: ["orders"], atoms: [{ dataset: "orders", sql: "COUNT(*)" }] });
     expect(messages("m = count_rows(orders.a)")[0]).toContain("expected a dataset name");
     expect(messages("m = count_rows(1)")[0]).toContain("expected a dataset name");
     expect(messages("m = count_rows(nope)")).toEqual(["unknown name nope"]);
@@ -247,32 +258,104 @@ describe("the schema", () => {
   });
 });
 
-describe("one dataset per measure", () => {
-  it("refuses a measure that reads two datasets, naming them in order", () => {
-    expect(messages("m = sum(orders.a) / sum(customers.id)")).toEqual(["`m` reads orders and customers: a measure reads one dataset for now"]);
-    expect(messages("m = sum(orders.a * customers.id)")).toEqual(["`m` reads orders and customers: a measure reads one dataset for now"]);
+describe("atoms and templates", () => {
+  it("makes an atom of each aggregation and leaves the text around it in the template", () => {
+    const m = measureOf("m = (sum(orders.a) - sum(orders.b)) / sum(orders.a)")!;
+    expect(m.atoms).toEqual([
+      { dataset: "orders", sql: 'SUM("a")' },
+      { dataset: "orders", sql: 'SUM("b")' },
+    ]);
+    expect(m.expr).toEqual(["(CAST(((", { atom: 0 }, " - ", { atom: 1 }, ")) AS DOUBLE) / (", { atom: 0 }, "))"]);
   });
 
-  it("counts the measures it references", () => {
-    expect(messages("x = sum(orders.a)\ny = sum(customers.id)\nm = x + y")).toEqual(["`m` reads orders and customers: a measure reads one dataset for now"]);
-    expect(messages("x = sum(orders.a)\nm = x + sum(orders.b)")).toEqual([]);
+  it("writes the same aggregation once, however often it is used", () => {
+    const m = measureOf("m = sum(orders.a) + sum(orders.a) * 2 + avg(orders.a)")!;
+    expect(m.atoms.map((a) => a.sql)).toEqual(['SUM("a")', 'AVG("a")']);
+    expect(m.expr.filter((p) => typeof p !== "string")).toEqual([{ atom: 0 }, { atom: 0 }, { atom: 1 }]);
+    expect(measureOf("m = divide(sum(orders.a), sum(orders.b))")!.atoms).toHaveLength(2);
   });
 
-  it("lists three datasets with commas and an and", () => {
-    expect(messages("m = sum(orders.a) + sum(customers.id) + sum(items.qty)")).toEqual([
-      "`m` reads orders, customers and items: a measure reads one dataset for now",
+  it("does not mix the same SQL over two datasets", () => {
+    const m = measureOf("m = count_rows(orders) + count_rows(customers)")!;
+    expect(m.atoms).toEqual([
+      { dataset: "orders", sql: "COUNT(*)" },
+      { dataset: "customers", sql: "COUNT(*)" },
     ]);
   });
 
+  it("keeps constants and the operators in the template, not in the atoms", () => {
+    expect(measureOf("m = sum(orders.a) * 2 + 1")).toMatchObject({ atoms: [{ sql: 'SUM("a")' }], expr: ["((", { atom: 0 }, " * 2) + 1)"] });
+  });
+});
+
+describe("one dataset per aggregation", () => {
+  it("refuses an aggregation that reads two datasets, naming them in order", () => {
+    expect(messages("m = sum(orders.a * customers.id)")).toEqual(["an aggregation reads one dataset: sum(...) reads orders and customers"]);
+    expect(messages("m = count_distinct(orders.a + customers.id)")).toEqual(["an aggregation reads one dataset: count_distinct(...) reads orders and customers"]);
+    expect(messages("m = sum(orders.a + customers.id + items.qty)")).toEqual([
+      "an aggregation reads one dataset: sum(...) reads orders, customers and items",
+    ]);
+  });
+
+  it("points the error at the aggregation", () => {
+    expect(check("m = 1 + sum(orders.a * customers.id)").diagnostics[0]).toMatchObject({ from: 8, to: 36, col: 9 });
+  });
+
   it("needs a dataset: an aggregate of constants reads none", () => {
-    expect(messages("m = sum(1)")).toEqual(["`m` does not read any dataset: aggregate a column, e.g. sum(orders.total)"]);
+    expect(messages("m = sum(1)")).toEqual(["sum() does not read any dataset: aggregate a column, e.g. sum(orders.total)"]);
+  });
+});
+
+describe("measures over several datasets", () => {
+  it("lets a measure combine aggregations of different datasets", () => {
+    const { model, diagnostics } = check("ratio = sum(orders.a) / sum(customers.id)");
+    expect(diagnostics).toEqual([]);
+    expect(model.measures[0]).toMatchObject({
+      datasets: ["orders", "customers"],
+      atoms: [
+        { dataset: "orders", sql: 'SUM("a")' },
+        { dataset: "customers", sql: 'SUM("id")' },
+      ],
+    });
+  });
+
+  it("lists the datasets in order of first use", () => {
+    expect(measureOf("m = sum(customers.id) + sum(orders.a) + sum(customers.id) + sum(items.qty)")!.datasets).toEqual(["customers", "orders", "items"]);
+    expect(measureOf("m = sum(orders.a) + sum(orders.b)")!.datasets).toEqual(["orders"]);
+  });
+});
+
+describe("measures that use measures", () => {
+  it("brings the atoms and the template of the measure used, in parentheses", () => {
+    const m = measureOf("revenue = sum(orders.a)\norders_n = count_rows(orders)\nm = revenue / orders_n")!;
+    expect(m.atoms).toEqual([
+      { dataset: "orders", sql: 'SUM("a")' },
+      { dataset: "orders", sql: "COUNT(*)" },
+    ]);
+    expect(m.expr).toEqual(["(CAST(((", { atom: 0 }, ")) AS DOUBLE) / ((", { atom: 1 }, ")))"]);
+  });
+
+  it("numbers the atoms again in the new measure and does not repeat one already there", () => {
+    const m = measureOf("a = sum(orders.a)\nb = sum(orders.b) + sum(orders.a)\nm = b - a")!;
+    expect(m.atoms.map((x) => x.sql)).toEqual(['SUM("b")', 'SUM("a")']);
+    expect(m.expr).toEqual(["(((", { atom: 0 }, " + ", { atom: 1 }, ")) - (", { atom: 1 }, "))"]);
+  });
+
+  it("combines measures of different datasets", () => {
+    const m = measureOf("sales = sum(orders.a)\npeople = count_distinct(customers.id)\nm = sales / people")!;
+    expect(m.datasets).toEqual(["orders", "customers"]);
+  });
+
+  it("does not change the measure it uses", () => {
+    const { model } = check("a = sum(orders.a)\nm = a * 2");
+    expect(model.measures[0]).toMatchObject({ atoms: [{ sql: 'SUM("a")' }], expr: [{ atom: 0 }] });
   });
 });
 
 describe("measure()", () => {
   it("is a plain measure without options, with no format or label keys", () => {
     const [m] = check("m = measure(sum(orders.a))").model.measures;
-    expect(m).toEqual({ name: "m", dataset: "orders", sql: 'SUM("a")', span: expect.anything() });
+    expect(m).toEqual({ name: "m", datasets: ["orders"], atoms: [{ dataset: "orders", sql: 'SUM("a")' }], expr: [{ atom: 0 }], span: expect.anything() });
     expect("format" in m).toBe(false);
     expect("label" in m).toBe(false);
   });
@@ -402,8 +485,12 @@ describe("relate", () => {
     expect(rev.model.relationships).toHaveLength(1);
   });
 
-  it("accepts a different column pair of the same two datasets", () => {
-    expect(messages("relate(orders.b, customers.id)\nrelate(orders.a, customers.name)")).toEqual([]);
+  it("refuses a different column pair of the same two datasets: that would be a second path", () => {
+    const { model, diagnostics } = check("relate(orders.b, customers.id)\nrelate(orders.a, customers.name)");
+    expect(diagnostics.map((d) => [d.line, d.message])).toEqual([
+      [2, "this relationship gives orders a second path to customers: orders.a → customers.name and orders.b → customers.id"],
+    ]);
+    expect(model.relationships).toHaveLength(1);
   });
 
   it("checks that the columns exist when known", () => {
@@ -420,6 +507,58 @@ describe("relate", () => {
 
   it("is a line of its own, not a value", () => {
     expect(messages("x = relate(orders.b, customers.id)")).toEqual(["relate(...) has to be a line of its own"]);
+  });
+});
+
+describe("the relationship graph", () => {
+  const SNOW: Schema = { ...SCHEMA, regions: ["id"], stores: ["id", "region_id"], goals: ["region_id"] };
+  const snow = (source: string) => check(source, SNOW);
+
+  it("accepts a snowflake and two facts sharing a dimension", () => {
+    const { model, diagnostics } = snow(
+      ["relate(items.order_id, orders.a)", "relate(orders.b, customers.id)", "relate(customers.name, regions.id)", "relate(goals.region_id, regions.id)"].join("\n"),
+    );
+    expect(diagnostics).toEqual([]);
+    expect(model.relationships).toHaveLength(4);
+  });
+
+  it("refuses a cycle, naming the relationship and the way back, and leaves it out", () => {
+    const { model, diagnostics } = check("relate(orders.b, customers.id)\nrelate(customers.name, orders.a)");
+    expect(diagnostics.map((d) => [d.line, d.message])).toEqual([
+      [2, "this relationship creates a cycle: customers.name → orders.a and, the other way, orders.b → customers.id"],
+    ]);
+    expect(model.relationships).toHaveLength(1);
+  });
+
+  it("refuses a cycle through several datasets", () => {
+    const d = snow("relate(items.order_id, orders.a)\nrelate(orders.b, customers.id)\nrelate(customers.name, items.qty)").diagnostics;
+    expect(d.map((x) => x.line)).toEqual([3]);
+    expect(d[0].message).toContain("creates a cycle");
+    expect(d[0].message).toContain("items.order_id → orders.a then orders.b → customers.id");
+  });
+
+  it("refuses a second path, naming both, and leaves the relationship out", () => {
+    const { model, diagnostics } = snow(
+      ["relate(orders.a, stores.id)", "relate(stores.region_id, regions.id)", "relate(orders.b, customers.id)", "relate(customers.name, regions.id)"].join("\n"),
+    );
+    expect(diagnostics.map((d) => [d.line, d.message])).toEqual([
+      [
+        4,
+        "this relationship gives orders a second path to regions: orders.b → customers.id then customers.name → regions.id" +
+          " and orders.a → stores.id then stores.region_id → regions.id",
+      ],
+    ]);
+    expect(model.relationships.map((r) => r.span.line)).toEqual([1, 2, 3]);
+  });
+
+  it("underlines the whole relate call", () => {
+    expect(check("relate(orders.b, customers.id)\nrelate(customers.name, orders.a)").diagnostics[0]).toMatchObject({ line: 2, col: 1, from: 31, to: 63 });
+  });
+
+  it("checks the graph with the relationships that were kept, not the ones refused", () => {
+    // line 2 is refused (a cycle), so line 3 is not one too
+    const d = check("relate(orders.b, customers.id)\nrelate(customers.name, orders.a)\nrelate(items.order_id, orders.a)").diagnostics;
+    expect(d.map((x) => x.line)).toEqual([2]);
   });
 });
 

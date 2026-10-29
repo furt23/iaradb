@@ -5,7 +5,8 @@ import { checkExpr, type Entry, type Env } from "./expr";
 import { ModelError } from "./functions/def";
 import { parse } from "./parse";
 
-const measure = { name: "revenue", dataset: "orders", sql: 'SUM("a")', span: { from: 0, to: 0, line: 1, col: 1 } };
+const sum = { dataset: "orders", sql: 'SUM("a")' };
+const measure = { name: "revenue", datasets: ["orders"], atoms: [sum], expr: [{ atom: 0 }], span: { from: 0, to: 0, line: 1, col: 1 } };
 const names = new Map<string, Entry>([
   ["revenue", { kind: "measure", measure }],
   ["rate", { kind: "const", sql: "0.1" }],
@@ -33,23 +34,29 @@ const error = (source: string) => {
 
 describe("checkExpr", () => {
   it("gives literals the scalar level", () => {
-    expect(typed("1_000")).toEqual({ level: "scalar", sql: "1000", datasets: [] });
-    expect(typed("'it\\'s'")).toEqual({ level: "scalar", sql: "'it''s'", datasets: [], text: true });
-    expect([typed("True").sql, typed("False").sql, typed("None").sql]).toEqual(["TRUE", "FALSE", "NULL"]);
+    expect(typed("1_000")).toEqual({ level: "scalar", sql: ["1000"], datasets: [] });
+    expect(typed("'it\\'s'")).toEqual({ level: "scalar", sql: ["'it''s'"], datasets: [], text: true });
+    expect([typed("True").sql, typed("False").sql, typed("None").sql]).toEqual([["TRUE"], ["FALSE"], ["NULL"]]);
   });
 
   it("gives a column the row level and remembers it as the bare one", () => {
     const t = typed("orders.a");
-    expect(t).toMatchObject({ level: "row", sql: '"a"', datasets: ["orders"], bare: { text: "orders.a", span: { from: 4, to: 12 } } });
+    expect(t).toMatchObject({ level: "row", sql: ['"a"'], datasets: ["orders"], bare: { text: "orders.a", span: { from: 4, to: 12 } } });
   });
 
-  it("gives a measure its sql in parentheses and the aggregate level", () => {
-    expect(typed("revenue")).toEqual({ level: "aggregate", sql: '(SUM("a"))', datasets: ["orders"] });
+  it("gives a measure its atoms in parentheses and the aggregate level", () => {
+    expect(typed("revenue")).toEqual({ level: "aggregate", sql: ["(", sum, ")"], datasets: ["orders"] });
+    expect(typed("revenue * 2").sql).toEqual(["((", sum, ") * 2)"]);
+  });
+
+  it("gives an aggregation one atom, which reads the one dataset of its columns", () => {
+    expect(typed("sum(orders.a * 2)")).toEqual({ level: "aggregate", sql: [{ dataset: "orders", sql: 'SUM(("a" * 2))' }], datasets: ["orders"] });
+    expect(error("sum(orders.a * loose.x)")).toBe("an aggregation reads one dataset: sum(...) reads orders and loose");
   });
 
   it("writes out a constant", () => {
-    expect(typed("rate")).toEqual({ level: "scalar", sql: "0.1", datasets: [], text: undefined });
-    expect(typed("rate * 2").sql).toBe("(0.1 * 2)");
+    expect(typed("rate")).toEqual({ level: "scalar", sql: ["0.1"], datasets: [], text: undefined });
+    expect(typed("rate * 2").sql).toEqual(["(0.1 * 2)"]);
   });
 
   it("takes the highest level of the parts and the datasets in order", () => {

@@ -1,15 +1,16 @@
 import "server-only";
 
-import type { CellValue, KernelMethod, ParamsOf, ResultOf } from "@iara/protocol";
+import type { CellValue, KernelMethod, ParamsOf, QueryParams, ResultOf } from "@iara/protocol";
 
 import type { ParamSpec } from "@/features/queries/queryHeader";
 import { coerce, detectParams, mergeSpecs, shown, type ParamRaw } from "@/features/queries/queryParams";
 import { freshEntry, uncovered, wantsExtract, type ExtractManifest } from "@/lib/dashboards/extracts";
-import { checkPicks, datasetQuery, filterValueProblem, MAX_LIST, optionsQuery, paramValuesOf, type DatasetQuery } from "@/lib/dashboards/query";
+import { groupField, narrower, type Form, type PickOn } from "@/lib/dashboards/narrow";
+import { checkPicks, datasetQuery, filterValueProblem, MAX_LIST, mergeParams, optionsQuery, paramValuesOf, type DatasetQuery } from "@/lib/dashboards/query";
 import { checkModel } from "@/lib/model/check";
-import { measureQuery } from "@/lib/model/compile";
+import { modelQuery } from "@/lib/model/compile";
 import type { Model } from "@/lib/model/types";
-import type { ChartWidget, CrossPick, CrossPicks, Dataset, FilterValues, FilterWidget, RenderResult, TableWidget, Widget, WidgetData } from "@/lib/dashboards/types";
+import type { ChartWidget, CrossPicks, Dataset, FilterValues, FilterWidget, RenderResult, TableWidget, Widget, WidgetData } from "@/lib/dashboards/types";
 
 import { datasetHash } from "./extractStore";
 
@@ -41,10 +42,15 @@ export interface RunDeps {
   };
 }
 
-/** Where a dataset runs in a render: on the serving kernel, reading its extract (`serve`), or live on the dashboard's kernel. */
+/** Where a query runs: on the serving kernel, reading the extracts of every dataset it reads (`serve`), or live on the dashboard's kernel. */
 interface Route {
-  dataset: Dataset;
+  form: Form;
   serve?: NonNullable<RunDeps["extracts"]>["serve"];
+}
+
+/** A pick of a chart, on the column it narrows. */
+interface Picked extends PickOn {
+  widget: string;
 }
 
 /** The `allow` a kernel request carries: none when unchecked, since the kernel checks only what it is sent. */
@@ -140,13 +146,17 @@ function tableData(widget: TableWidget, columns: { name: string; type: string }[
 
 /**
  * The data of the chart, table and filter widgets of a dashboard, for the
- * filter values (by filter id) and the chart picks (`cross`) given. A chart or
- * table is narrowed by the picks of the other charts on its dataset, so the
- * widgets that share their picks share one run of the dataset. Queries run one
- * after another, on the dashboard's kernel (or the serving kernel, for a dataset
- * with a fresh extract); one that fails fails its widgets only. A chart with
- * `measures` draws them from `input.model` with a query of its own over the
- * dataset's narrowed rows; a dataset only measure charts use is not run as is.
+ * filter values (by filter id) and the chart picks (`cross`) given. Every
+ * widget reads its dataset narrowed by the filters and the picks of the other
+ * charts, on its dataset and on the datasets it points at through the model's
+ * relationships (lib/dashboards/narrow.ts); widgets on one dataset with the
+ * same picks share one run. A pick narrows the column its chart's x names, a
+ * related dataset's for a measure chart with `dataset.column`. Queries run one
+ * after another; one that fails fails its widgets only. A query runs on the
+ * serving kernel when every dataset it reads has a fresh extract, and live on
+ * the dashboard's kernel otherwise. A chart with `measures` draws them from
+ * `input.model` with a query of its own, over the narrowed rows of each dataset
+ * it reads; a dataset only measure charts use is not run as is.
  */
 export async function renderDashboard(input: { datasets: Dataset[]; widgets: Widget[]; model?: string }, values: FilterValues, deps: RunDeps, cross: CrossPicks = []): Promise<RenderResult> {
   checkValues(input.widgets, values);
@@ -154,6 +164,7 @@ export async function renderDashboard(input: { datasets: Dataset[]; widgets: Wid
   const filters = input.widgets.filter((w): w is FilterWidget => w.kind === "filter");
   const paramValues = paramValuesOf(filters, values);
   const out: Record<string, WidgetData> = {};
+  const names = input.datasets.map((d) => d.name);
 
   const fail = (id: string, e: unknown) => {
     const message = e instanceof Error ? e.message : String(e);
@@ -173,49 +184,99 @@ export async function renderDashboard(input: { datasets: Dataset[]; widgets: Wid
     return output.result;
   }
 
-  /** A dataset with a fresh extract is read from it (its SQL is the read: nothing to compile); any other runs live. */
-  async function resolve(d: Dataset): Promise<Route> {
+  /** A dataset with a fresh extract, as a read of it (its SQL is the read: nothing to compile); null: it has none, or is stale. */
+  function extractOf(d: Dataset): Dataset | null {
     const { extracts } = deps;
     const entry = extracts && wantsExtract(d) ? freshEntry(extracts.manifest, d.name, datasetHash(d)) : null;
-    if (!extracts || !entry) return { dataset: await withSql(d, deps.request) };
+    if (!extracts || !entry) return null;
     const lost = uncovered(entry, deps.allow);
     if (lost) throw new Error(`no read grant on table ${lost}`);
     const url = extracts.url(d.name, entry.version).replaceAll("'", "''");
-    return { dataset: { name: d.name, sql: `SELECT * FROM read_parquet('${url}')`, params: {} }, serve: extracts.serve };
+    return { name: d.name, sql: `SELECT * FROM read_parquet('${url}')`, params: {} };
   }
 
-  // a dataset is routed (and a recipe compiled) at most once per render, by whichever widget or filter needs it first
-  const routes = new Map<string, Promise<Route>>();
-  async function route(name: string): Promise<Route> {
-    const d = input.datasets.find((x) => x.name === name);
-    if (!d) throw new Error(`there is no dataset ${name}`);
-    if (!routes.has(name)) routes.set(name, resolve(d));
-    return routes.get(name)!;
+  // the datasets as queries read them, filled by `route`; a recipe is compiled at most once per render, by whichever query needs it first
+  const forms: Record<Form, Map<string, Dataset>> = { extract: new Map(), live: new Map() };
+  const compiled = new Map<string, Promise<Dataset>>();
+  const datasetOf = (name: string, form: Form): Dataset => {
+    const d = forms[form].get(name);
+    if (!d) throw new Error(`dataset ${name} is not part of this query`);
+    return d;
+  };
+
+  /**
+   * Where a query that reads these datasets runs. All with a fresh extract:
+   * the serving kernel, reading the extracts. Otherwise the whole query runs
+   * live, since one query has one kernel to run on.
+   */
+  async function route(read: string[]): Promise<Route> {
+    const found = read.map((name) => {
+      const d = input.datasets.find((x) => x.name === name);
+      if (!d) throw new Error(`there is no dataset ${name}`);
+      return d;
+    });
+    const fresh = found.map(extractOf);
+    const { extracts } = deps;
+    if (extracts && fresh.every((d) => d)) {
+      found.forEach((d, i) => forms.extract.set(d.name, fresh[i]!));
+      return { form: "extract", serve: extracts.serve };
+    }
+    await Promise.all(
+      found.map(async (d) => {
+        if (!compiled.has(d.name)) compiled.set(d.name, withSql(d, deps.request));
+        forms.live.set(d.name, await compiled.get(d.name)!);
+      }),
+    );
+    return { form: "live" };
   }
 
-  // the model is checked once, by the first measure chart that needs it; the columns of the datasets are not known here, so the SQL itself fails on a bad one
+  // the model is checked once, by whoever needs it first; the columns of the datasets are not known here, so the SQL itself fails on a bad one
   let checked: Model | undefined;
-  const modelOf = (): Model => (checked ??= checkModel(input.model ?? "", Object.fromEntries(input.datasets.map((d) => [d.name, null]))).model);
+  const modelOf = (): Model => (checked ??= checkModel(input.model ?? "", Object.fromEntries(names.map((n) => [n, null]))).model);
+  // a dashboard with a model has relationships to narrow through, whatever its widgets draw
+  const nar = narrower({ rels: input.model?.trim() ? modelOf().relationships : [], filters, values, paramValues, datasetOf });
 
-  /** The data of a chart that draws measures: one query over the dataset's rows (narrowed as `q` says), whose points the kernel's chart would send. */
-  async function measureChart(r: Route, q: DatasetQuery, w: ChartWidget & { measures: string[] }): Promise<WidgetData> {
+  // the pick of a chart narrows the column of its x; a measure chart's x may be a related dataset's `dataset.column`
+  // ids in the order of the widgets' ids, so the parameters of the same pick are named the same however the viewer clicked
+  const charts = new Map(input.widgets.flatMap((w) => (w.kind === "chart" ? [[w.id, w] as const] : [])));
+  const picks: Picked[] = [...cross]
+    .sort((a, b) => (a.widget < b.widget ? -1 : 1))
+    .map((p, id) => {
+      const c = charts.get(p.widget)!;
+      const { dataset, column } = isMeasureChart(c) ? groupField(c.dataset, c.spec.x, names) : { dataset: c.dataset, column: c.spec.x };
+      return { id, widget: p.widget, dataset, column, value: p.value };
+    });
+  /** the picks that narrow a widget: all but its own */
+  const othersOf = (w: Widget) => picks.filter((p) => p.widget !== w.id);
+
+  /** The data of a chart that draws measures: one query over the narrowed rows of each dataset the measures read, whose points the kernel's chart would send. */
+  async function measureChart(w: ChartWidget & { measures: string[] }): Promise<WidgetData> {
     const { kind, x, group } = w.spec;
     const limit = MEASURE_LIMITS[kind];
     if (!limit) throw new Error("measures work with bar, line, area, pie and counter charts");
-    const base = ready(q);
     const model = modelOf();
-    const sql = measureQuery(model, {
-      source: base.query,
-      x: kind === "counter" ? null : x,
-      group: group ?? null,
+    const others = othersOf(w);
+    const ask = {
+      x: kind === "counter" ? null : groupField(w.dataset, x, names),
+      group: group ? groupField(w.dataset, group, names) : null,
       measures: w.measures,
-      order: kind === "line" || kind === "area" ? "x" : "value",
+      order: kind === "line" || kind === "area" ? ("x" as const) : ("value" as const),
       limit: limit + 1,
+    };
+    // the first compile only learns which datasets are read: the query runs on one kernel, so every source must be read in the form that kernel takes
+    const read = modelQuery(model, { ...ask, source: () => "SELECT 1" }).datasets.flatMap((d) => nar.reads(nar.plan(d, others)));
+    const r = await route(read);
+    let params: QueryParams = {};
+    const { sql, notes } = modelQuery(model, {
+      ...ask,
+      source: (d) => {
+        const q = ready(nar.query(nar.plan(d, others), r.form));
+        params = mergeParams(params, q.params);
+        return q.query;
+      },
     });
     const drawn = w.measures.flatMap((name) => model.measures.filter((m) => m.name === name));
-    const stray = drawn.find((m) => m.dataset !== w.dataset);
-    if (stray) throw new Error(`measure ${stray.name} is over ${stray.dataset}, not ${w.dataset}`);
-    const result = await run(r, { query: sql, params: base.params });
+    const result = await run(r, { query: sql, params });
     const { rows } = await call(r, "result.page", { result_id: result.id, offset: 0, limit: limit + 1 });
     for (const name of w.measures) {
       const i = result.columns.findIndex((c) => c.name === name);
@@ -227,57 +288,51 @@ export async function renderDashboard(input: { datasets: Dataset[]; widgets: Wid
       data: { columns: result.columns.map((c) => c.name), rows: rows.slice(0, limit), truncated: rows.length > limit },
       columns: result.columns,
       ...(Object.keys(formats).length && { formats }),
+      // what the author should know; a viewer is told nothing about the model
+      ...(!deps.redact && notes.length && { notes }),
     };
   }
 
-  // chart and table widgets by dataset and the picks that narrow them (a chart's own never does), in the order they first appear
-  const charts = new Map(input.widgets.flatMap((w) => (w.kind === "chart" ? [[w.id, w] as const] : [])));
-  const groups = new Map<string, { name: string; picks: CrossPick[]; widgets: (ChartWidget | TableWidget)[] }>();
+  // chart and table widgets by dataset and the picks that narrow it (a chart's own never does), in the order they first appear
+  const groups = new Map<string, { name: string; picks: Picked[]; widgets: (ChartWidget | TableWidget)[] }>();
   for (const w of input.widgets) {
-    if (w.kind !== "chart" && w.kind !== "table") continue;
-    // sorted, so the parameters of the same picks are named the same
-    const picks = cross.filter((p) => p.widget !== w.id && charts.get(p.widget)!.dataset === w.dataset).sort((a, b) => (a.widget < b.widget ? -1 : 1));
-    const key = JSON.stringify([w.dataset, picks.map((p) => p.widget)]);
-    if (!groups.has(key)) groups.set(key, { name: w.dataset, picks, widgets: [] });
+    if ((w.kind !== "chart" && w.kind !== "table") || isMeasureChart(w)) continue;
+    const mine = nar.relevant(w.dataset, othersOf(w));
+    const key = JSON.stringify([w.dataset, mine.map((p) => p.id)]);
+    if (!groups.has(key)) groups.set(key, { name: w.dataset, picks: mine, widgets: [] });
     groups.get(key)!.widgets.push(w);
   }
 
-  for (const { name, picks, widgets } of groups.values()) {
+  for (const { name, picks: mine, widgets } of groups.values()) {
     try {
-      const narrowing = picks.map((p) => ({ column: charts.get(p.widget)!.spec.x, value: p.value }));
-      const r = await route(name);
-      const q = datasetQuery(r.dataset, filters, values, paramValues, narrowing);
-      // the dataset runs once for the widgets that draw its rows; a measure chart runs a query of its own over them
-      const plain = widgets.filter((w) => !isMeasureChart(w));
-      if (plain.length) {
-        try {
-          const result = await run(r, q);
-          await Promise.all(
-            plain.map(async (w) => {
-              try {
-                if (w.kind === "chart") {
-                  out[w.id] = { kind: "chart", data: await call(r, "result.chart", { result_id: result.id, spec: w.spec }), columns: result.columns };
-                } else {
-                  out[w.id] = tableData(w, result.columns, await call(r, "result.page", { result_id: result.id, offset: 0, limit: TABLE_ROWS }));
-                }
-              } catch (e) {
-                fail(w.id, e);
-              }
-            }),
-          );
-        } catch (e) {
-          for (const w of plain) fail(w.id, e);
-        }
-      }
-      for (const w of widgets.filter(isMeasureChart)) {
-        try {
-          out[w.id] = await measureChart(r, q, w);
-        } catch (e) {
-          fail(w.id, e);
-        }
-      }
+      const plan = nar.plan(name, mine);
+      const r = await route(nar.reads(plan));
+      // the dataset runs once for the widgets that draw its rows
+      const result = await run(r, nar.query(plan, r.form));
+      await Promise.all(
+        widgets.map(async (w) => {
+          try {
+            if (w.kind === "chart") {
+              out[w.id] = { kind: "chart", data: await call(r, "result.chart", { result_id: result.id, spec: w.spec }), columns: result.columns };
+            } else {
+              out[w.id] = tableData(w, result.columns, await call(r, "result.page", { result_id: result.id, offset: 0, limit: TABLE_ROWS }));
+            }
+          } catch (e) {
+            fail(w.id, e);
+          }
+        }),
+      );
     } catch (e) {
       for (const w of widgets) fail(w.id, e);
+    }
+  }
+
+  // a measure chart runs a query of its own, so a dataset that only they use is not run as is
+  for (const w of input.widgets.filter(isMeasureChart)) {
+    try {
+      out[w.id] = await measureChart(w);
+    } catch (e) {
+      fail(w.id, e);
     }
   }
 
@@ -285,8 +340,9 @@ export async function renderDashboard(input: { datasets: Dataset[]; widgets: Wid
   for (const f of filters) {
     if (!f.fields) continue;
     try {
-      const r = await route(f.fields[0].dataset);
-      const result = await run(r, optionsQuery(r.dataset, f.fields[0].column, paramValues));
+      const { dataset, column } = f.fields[0];
+      const r = await route([dataset]);
+      const result = await run(r, optionsQuery(datasetOf(dataset, r.form), column, paramValues));
       const page = await call(r, "result.page", { result_id: result.id, offset: 0, limit: MAX_LIST });
       out[f.id] = { kind: "filter", options: page.rows.map((row) => row[0]) };
     } catch (e) {

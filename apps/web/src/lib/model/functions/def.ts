@@ -5,8 +5,14 @@
  */
 
 import type { Call, Expr } from "../ast";
+import type { Parts } from "../parts";
 import type { ColumnRef, Relationship, Span } from "../types";
 import type { NumberFormat } from "@/lib/dashboards/types";
+
+/** `a`, `a and b`, `a, b and c` */
+export function list(items: readonly string[]): string {
+  return items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
 
 /**
  * How many rows a value has: a literal is one value (`scalar`), a column is one
@@ -17,7 +23,8 @@ export type Level = "scalar" | "row" | "aggregate";
 /** A checked expression: its level and the SQL it renders to. */
 export interface Typed {
   level: Level;
-  sql: string;
+  /** its SQL; an aggregate has its aggregations in it as atoms (see `Parts`), the other levels are text only */
+  sql: Parts;
   /** datasets it reads, in order of appearance (a referenced measure counts its own) */
   datasets: string[];
   /** a row-level value: its first column used outside an aggregation, for the error that asks to wrap it */

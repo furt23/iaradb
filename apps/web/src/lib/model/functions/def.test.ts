@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Call, Expr } from "../ast";
 import { parse } from "../parse";
-import { bind, fail, merge, ModelError, noText, type Typed } from "./def";
+import { bind, fail, list, merge, ModelError, noText, type Typed } from "./def";
 
 function callOf(source: string): Call {
   const [s] = parse(`x = ${source}`).statements;
@@ -58,7 +58,7 @@ describe("bind", () => {
 describe("merge", () => {
   const num = (level: Typed["level"], datasets: string[] = [], bare?: Typed["bare"]) => ({
     node: exprOf("1"),
-    typed: { level, sql: "x", datasets, bare },
+    typed: { level, sql: ["x"], datasets, bare },
   });
 
   it("takes the highest level and the datasets in order, without repeats", () => {
@@ -76,12 +76,18 @@ describe("merge", () => {
 
 describe("noText and fail", () => {
   it("refuses text where numbers are needed", () => {
-    expect(() => noText(exprOf("1"), { level: "scalar", sql: "1", datasets: [] })).not.toThrow();
-    expect(thrown(() => noText(exprOf("'a'"), { level: "scalar", sql: "'a'", datasets: [], text: true }))).toContain("arithmetic needs numbers");
+    expect(() => noText(exprOf("1"), { level: "scalar", sql: ["1"], datasets: [] })).not.toThrow();
+    expect(thrown(() => noText(exprOf("'a'"), { level: "scalar", sql: ["'a'"], datasets: [], text: true }))).toContain("arithmetic needs numbers");
   });
 
   it("fail throws a ModelError carrying the span", () => {
     const e = exprOf("1");
     expect(() => fail(e, "no")).toThrow(ModelError);
+  });
+});
+
+describe("list", () => {
+  it("joins with commas and an and", () => {
+    expect([list([]), list(["a"]), list(["a", "b"]), list(["a", "b", "c"])]).toEqual(["", "a", "a and b", "a, b and c"]);
   });
 });

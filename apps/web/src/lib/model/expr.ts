@@ -8,6 +8,7 @@
 import type { Attr, Binary, Call, Expr, Name, Unary } from "./ast";
 import { fail, merge, noText, type FnCx, type Typed } from "./functions/def";
 import { FUNCTIONS, PLANNED } from "./functions/registry";
+import { partsOf, sql, type Parts } from "./parts";
 import type { ColumnRef, Measure, Relationship, Schema } from "./types";
 import { quoteIdent } from "@/lib/dashboards/query";
 
@@ -28,9 +29,9 @@ const ARITHMETIC = new Set(["+", "-", "*", "/", "%"]);
 const SQL_OPS: Record<string, string> = { "==": "=", "!=": "<>", and: "AND", or: "OR" };
 
 /** `x == y` and friends read as SQL; `/` is Python's true division (never whole-number division). */
-function binarySql(op: string, l: string, r: string): string {
-  if (op === "/") return `(CAST((${l}) AS DOUBLE) / (${r}))`;
-  return `(${l} ${SQL_OPS[op] ?? op} ${r})`;
+function binarySql(op: string, l: Parts, r: Parts): Parts {
+  if (op === "/") return sql`(CAST((${l}) AS DOUBLE) / (${r}))`;
+  return sql`(${l} ${SQL_OPS[op] ?? op} ${r})`;
 }
 
 function sqlString(s: string): string {
@@ -66,7 +67,7 @@ function column(node: Expr, env: Env): ColumnRef {
 
 function checkAttr(node: Attr, env: Env): Typed {
   const { dataset, column: col } = column(node, env);
-  return { level: "row", sql: quoteIdent(col), datasets: [dataset], bare: { text: `${dataset}.${col}`, span: node.span } };
+  return { level: "row", sql: [quoteIdent(col)], datasets: [dataset], bare: { text: `${dataset}.${col}`, span: node.span } };
 }
 
 function checkName(node: Name, env: Env): Typed {
@@ -74,15 +75,16 @@ function checkName(node: Name, env: Env): Typed {
   if (r === "dataset") {
     return fail(node, `\`${node.name}\` is a dataset, not a value: use ${node.name}.column or count_rows(${node.name})`);
   }
-  if (r.kind === "measure") return { level: "aggregate", sql: `(${r.measure.sql})`, datasets: [r.measure.dataset] };
-  return { level: "scalar", sql: r.sql, datasets: [], text: r.text };
+  // a measure used by name brings its aggregations along, in parentheses
+  if (r.kind === "measure") return { level: "aggregate", sql: sql`(${partsOf(r.measure)})`, datasets: r.measure.datasets };
+  return { level: "scalar", sql: [r.sql], datasets: [], text: r.text };
 }
 
 function checkUnary(node: Unary, cx: FnCx): Typed {
   const x = cx.expr(node.operand);
   if (node.op !== "not") noText(node.operand, x);
-  const sql = node.op === "-" ? `(-${x.sql})` : node.op === "not" ? `(NOT ${x.sql})` : x.sql;
-  return { ...merge([{ node: node.operand, typed: x }]), sql };
+  const value = node.op === "-" ? sql`(-${x.sql})` : node.op === "not" ? sql`(NOT ${x.sql})` : x.sql;
+  return { ...merge([{ node: node.operand, typed: x }]), sql: value };
 }
 
 function checkBinary(node: Binary, cx: FnCx): Typed {
@@ -109,11 +111,11 @@ export function exprContext(env: Env): FnCx & { walk(node: Expr, wholeValue: boo
     walk(node, wholeValue) {
       switch (node.kind) {
         case "num":
-          return { level: "scalar", sql: node.value, datasets: [] };
+          return { level: "scalar", sql: [node.value], datasets: [] };
         case "str":
-          return { level: "scalar", sql: sqlString(node.value), datasets: [], text: true };
+          return { level: "scalar", sql: [sqlString(node.value)], datasets: [], text: true };
         case "const":
-          return { level: "scalar", sql: node.value === null ? "NULL" : node.value ? "TRUE" : "FALSE", datasets: [] };
+          return { level: "scalar", sql: [node.value === null ? "NULL" : node.value ? "TRUE" : "FALSE"], datasets: [] };
         case "name":
           return checkName(node, env);
         case "attr":

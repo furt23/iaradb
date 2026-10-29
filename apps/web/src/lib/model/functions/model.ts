@@ -4,6 +4,7 @@ import type { Expr } from "../ast";
 import type { Relationship } from "../types";
 import type { NumberFormat } from "@/lib/dashboards/types";
 
+import { conflict } from "../graph";
 import { bind, fail, type FnDef } from "./def";
 
 const STYLES = ["number", "currency", "percent"] as const;
@@ -65,7 +66,7 @@ export const MODEL_SHAPING_FUNCTIONS: readonly FnDef[] = [
     kind: "statement",
     name: "relate",
     signature: "relate(many.column, one.column)",
-    doc: "Says each row of the first column's dataset points at one row of the second's, the 'many' side first. Checked now, used to join datasets later. Example: relate(orders.customer_id, customers.id)",
+    doc: "Says each row of the first column's dataset points at one row of the second's, the 'many' side first. Used to join datasets: a chart can group by a column of the second dataset. The relationships must not form a cycle or give two datasets more than one path. Example: relate(orders.customer_id, customers.id)",
     check(call, cx): Relationship {
       const a = bind(call, { params: ["many", "one"], required: 2, positional: 2 });
       const many = cx.column(a.many);
@@ -76,7 +77,10 @@ export const MODEL_SHAPING_FUNCTIONS: readonly FnDef[] = [
         if (same(r.many, many) && same(r.one, one)) fail(call, `this relationship is already defined on line ${r.span.line}`);
         if (same(r.many, one) && same(r.one, many)) fail(call, `this is the reverse of the relationship on line ${r.span.line}`);
       }
-      return { many, one, span: call.span };
+      const rel = { many, one, span: call.span };
+      const why = conflict(cx.relationships, rel);
+      if (why) fail(call, why);
+      return rel;
     },
   },
 ];

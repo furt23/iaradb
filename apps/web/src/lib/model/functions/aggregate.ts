@@ -1,6 +1,15 @@
-/** Aggregations: they collapse the rows of a dataset into one value. */
+/** Aggregations: they collapse the rows of a dataset into one value (an atom). */
 
-import { bind, fail, type FnDef } from "./def";
+import type { Call } from "../ast";
+import { text } from "../parts";
+import { bind, fail, list, type FnDef } from "./def";
+
+/** The one dataset an aggregation reads: a total of two datasets' rows side by side has no meaning. */
+function readsOne(call: Call, datasets: readonly string[]): string {
+  if (datasets.length === 0) fail(call, `${call.func}() does not read any dataset: aggregate a column, e.g. sum(orders.total)`);
+  if (datasets.length > 1) fail(call, `an aggregation reads one dataset: ${call.func}(...) reads ${list(datasets)}`);
+  return datasets[0];
+}
 
 /** `sum(expr)` and friends: `expr` is a value per row (or a constant), never another aggregation. */
 function aggregate(name: string, render: (x: string) => string, doc: string, example: string): FnDef {
@@ -13,7 +22,8 @@ function aggregate(name: string, render: (x: string) => string, doc: string, exa
       const { expr } = bind(call, { params: ["expr"], required: 1, positional: 1 });
       const x = cx.expr(expr);
       if (x.level === "aggregate") fail(expr, `an aggregation inside another is not allowed: ${name}() takes a value per row`);
-      return { level: "aggregate", sql: render(x.sql), datasets: x.datasets };
+      const dataset = readsOne(call, x.datasets);
+      return { level: "aggregate", sql: [{ dataset, sql: render(text(x.sql)) }], datasets: [dataset] };
     },
   };
 }
@@ -32,7 +42,8 @@ export const AGGREGATE_FUNCTIONS: readonly FnDef[] = [
     doc: "How many rows the dataset has. Example: count_rows(orders)",
     check(call, cx) {
       const { dataset } = bind(call, { params: ["dataset"], required: 1, positional: 1 });
-      return { level: "aggregate", sql: "COUNT(*)", datasets: [cx.dataset(dataset)] };
+      const name = cx.dataset(dataset);
+      return { level: "aggregate", sql: [{ dataset: name, sql: "COUNT(*)" }], datasets: [name] };
     },
   },
 ];

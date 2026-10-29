@@ -22,7 +22,7 @@ import { withCurrent } from "./datasets";
 import { FilterSettings } from "./FilterSettings";
 import { widgetLabel } from "./newWidget";
 import { columnsIn, type FoundColumns } from "./useDatasetColumns";
-import { useModel } from "./useModel";
+import { relatedDatasets, useModel } from "./useModel";
 
 /** The datasets whose columns a widget's settings list. */
 function usedDatasets(widget: Widget): string[] {
@@ -51,12 +51,20 @@ export function WidgetPanel({
 }) {
   const { t } = useTranslation();
   const model = useModel();
-  const used = usedDatasets(widget);
+  // a measure chart also reads the datasets its measures reach, so their columns are read too
+  const related = widget.kind === "chart" && widget.measures?.length ? relatedDatasets(model, widget.dataset, widget.measures) : [];
+  const used = [...usedDatasets(widget), ...related];
   const key = used.join(",");
   // the columns are read again each time the panel opens or the datasets are
   useEffect(() => {
     for (const name of key ? key.split(",") : []) load(name).catch(() => undefined);
   }, [key, load]);
+
+  /** The columns a chart takes its x and group from: its dataset's as they are, and with measures the related datasets' as `dataset.column`. */
+  const chartColumns = (chart: ChartWidget): ColumnInfo[] => [
+    ...columnsIn(found, chart.dataset),
+    ...related.flatMap((name) => columnsIn(found, name).map((c) => ({ ...c, name: `${name}.${c.name}` }))),
+  ];
 
   const datasetSelect = (value: string, set: (name: string) => void) => (
     <TextField select size="small" fullWidth label={t("Dataset")} value={value} onChange={(e) => set(e.target.value)}>
@@ -68,17 +76,17 @@ export function WidgetPanel({
     </TextField>
   );
 
-  /** The model's measures over the chart's dataset: a counter takes one, a chart several. */
+  /** The model's measures, all of them: a counter takes one, a chart several. Each is labelled with the datasets it reads. */
   const measureSelect = (chart: ChartWidget) => {
-    const names = model.measures.filter((m) => m.dataset === chart.dataset).map((m) => m.name);
+    const labels = new Map(model.measures.map((m) => [m.name, `${m.name} · ${m.datasets.join(", ")}`]));
     const picked = chart.measures ?? [];
     // a measure the model no longer has stays listed, so it can be seen and cleared
-    const options = [...picked.filter((p) => !names.includes(p)), ...names];
+    const options = [...picked.filter((p) => !labels.has(p)), ...model.measures.map((m) => m.name)];
     const set = (list: string[]) => onChange({ ...chart, measures: list.length ? list : undefined }, true);
-    const helperText = names.length ? undefined : t("No measures for this dataset yet: write them in the Model tab");
+    const helperText = model.measures.length ? undefined : t("No measures yet: write them in the Model tab");
     const items = options.map((n) => (
       <MenuItem key={n} value={n}>
-        {n}
+        {labels.get(n) ?? n}
       </MenuItem>
     ));
     return chart.spec.kind === "counter" ? (
@@ -132,14 +140,14 @@ export function WidgetPanel({
         {widget.kind === "chart" && (
           <>
             {datasetSelect(widget.dataset, (dataset) => {
-              // the measures are of the dataset they were picked from
-              onChange({ ...widget, dataset, measures: undefined });
+              // measures belong to the model, not to a dataset: they stay
+              onChange({ ...widget, dataset });
               // keep the columns the new dataset has
-              load(dataset).then((columns) => onChange({ ...widget, dataset, measures: undefined, spec: fitSpec(widget.spec, columns) }), () => undefined);
+              load(dataset).then((columns) => onChange({ ...widget, dataset, spec: fitSpec(widget.spec, columns) }), () => undefined);
             })}
             {measureSelect(widget)}
             <Box sx={{ mx: -2 }}>
-              <ChartControls spec={widget.spec} columns={columnsIn(found, widget.dataset)} hideValues={!!widget.measures?.length} onChange={(spec) => onChange({ ...widget, spec })} />
+              <ChartControls spec={widget.spec} columns={chartColumns(widget)} hideValues={!!widget.measures?.length} onChange={(spec) => onChange({ ...widget, spec })} />
             </Box>
             <Stack spacing={1}>
               <Typography sx={SECTION_HEADING}>{t("Format")}</Typography>

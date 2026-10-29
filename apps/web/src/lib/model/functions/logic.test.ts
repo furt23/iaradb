@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { checkModel } from "../check";
+import { render } from "../parts";
 
 const SCHEMA = { orders: ["a", "b"] };
-const sql = (source: string) => checkModel(`m = ${source}`, SCHEMA).model.measures[0]?.sql;
+const sql = (source: string) => {
+  const m = checkModel(`m = ${source}`, SCHEMA).model.measures[0];
+  return m && render(m.expr, (i) => m.atoms[i].sql);
+};
 const errors = (source: string) => checkModel(`m = ${source}`, SCHEMA).diagnostics.map((d) => d.message);
 
 describe("if_", () => {
@@ -15,7 +19,7 @@ describe("if_", () => {
   it("is a constant when everything in it is", () => {
     const { model, diagnostics } = checkModel("k = if_(1 > 0, 1, 2)\nm = sum(orders.a) * k", SCHEMA);
     expect(diagnostics).toEqual([]);
-    expect(model.measures[0].sql).toBe('(SUM("a") * CASE WHEN (1 > 0) THEN 1 ELSE 2 END)');
+    expect(render(model.measures[0].expr, (i) => model.measures[0].atoms[i].sql)).toBe('(SUM("a") * CASE WHEN (1 > 0) THEN 1 ELSE 2 END)');
   });
 
   it("refuses a column beside an aggregation in any of its parts", () => {
@@ -24,6 +28,11 @@ describe("if_", () => {
 });
 
 describe("divide", () => {
+  it("writes the divisor twice and the measure keeps one atom for it", () => {
+    const [m] = checkModel("m = divide(sum(orders.a), sum(orders.b))", SCHEMA).model.measures;
+    expect(m.atoms.map((a) => a.sql)).toEqual(['SUM("b")', 'SUM("a")']); // in order of first use: the divisor is tested first
+  });
+
   it("guards the divisor with = 0 and IS NULL, and defaults the alternate to NULL", () => {
     expect(sql("divide(sum(orders.a), sum(orders.b))")).toBe(
       'CASE WHEN (SUM("b")) = 0 OR (SUM("b")) IS NULL THEN NULL ELSE CAST((SUM("a")) AS DOUBLE) / (SUM("b")) END',

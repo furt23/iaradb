@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { canPick, checkPicks, datasetQuery, filterValueProblem, optionsQuery, paramValuesOf, pickableIds, quoteIdent } from "./query";
+import { canPick, checkPicks, datasetQuery, filterValueProblem, mergeParams, narrows, optionsQuery, paramValuesOf, pickableIds, quoteIdent } from "./query";
 import type { ChartWidget, Dataset, FilterWidget, Widget } from "./types";
 
 const sales: Dataset = { name: "sales", sql: "SELECT * FROM sales;", params: {} };
@@ -101,13 +101,23 @@ describe("datasetQuery: field filters", () => {
     expect(q.params).toEqual({ params: { _f0: "50%_off" }, param_types: { _f0: "text" } });
   });
 
-  it("leaves out filters without a value and filters of other datasets, and numbers the ones it uses", () => {
+  it("leaves out filters without a value and filters of other datasets, and names the parameters by the filter's place in the list", () => {
     const other = filter({ id: "f2", fields: [{ dataset: "stores", column: "city" }] });
     const empty = filter({ id: "f3" });
     const used = filter({ id: "f4", control: "text", fields: [{ dataset: "sales", column: "name" }] });
     const q = run(sales, [other, empty, used], { f2: "Rome", f3: "", f4: "ab" });
-    expect(q.query).toBe('SELECT * FROM (\nSELECT * FROM sales\n) AS _d\nWHERE strpos(lower(CAST("name" AS VARCHAR)), lower(:_f1)) > 0');
-    expect(q.params).toEqual({ params: { _f1: "ab" }, param_types: { _f1: "text" } });
+    expect(q.query).toBe('SELECT * FROM (\nSELECT * FROM sales\n) AS _d\nWHERE strpos(lower(CAST("name" AS VARCHAR)), lower(:_f2)) > 0');
+    expect(q.params).toEqual({ params: { _f2: "ab" }, param_types: { _f2: "text" } });
+  });
+
+  it("binds a filter to the same name on every dataset, and different filters to different names, so the parameters of two datasets can be merged", () => {
+    const stores = filter({ id: "f1", fields: [{ dataset: "stores", column: "city" }] });
+    const name = filter({ id: "f2", control: "text", fields: [{ dataset: "sales", column: "name" }] });
+    const both = filter({ id: "f3", fields: [{ dataset: "stores", column: "region" }, { dataset: "sales", column: "region" }] });
+    const values = { f1: "Rome", f2: "ab", f3: "EU" };
+    const bound = (d: Dataset) => (run(d, [stores, name, both], values).params as { params: object }).params;
+    expect(bound(sales)).toEqual({ _f1: "ab", _f2: "EU" });
+    expect(bound({ ...sales, name: "stores" })).toEqual({ _f0: "Rome", _f2: "EU" });
   });
 
   it("joins the conditions with AND and keeps the dataset's own parameters", () => {
@@ -269,6 +279,78 @@ describe("datasetQuery: chart picks", () => {
   it("reserves the names of the picks' parameters", () => {
     expect(() => run({ ...sales, sql: "SELECT :_c0" }, [])).toThrow(/reserved/);
     expect(() => run({ ...sales, sql: "SELECT :_c" }, [])).not.toThrow(/reserved/);
+    expect(() => run({ ...sales, sql: "SELECT :_c3_1" }, [])).toThrow(/reserved/);
+  });
+
+  it("names a pick's parameters by its id, so the same pick has one name on every dataset and two picks never share one", () => {
+    const at = (id: number, column: string, value: string | number) => datasetQuery(sales, [], {}, {}, [{ id, column, value }]) as { query: string; params: { params: object } };
+    const a = at(3, "region", "2024-03-05T13:30:00.123000");
+    expect(a.query).toContain('CAST("region" AS VARCHAR) IN (:_c3, :_c3_1)');
+    expect(a.params.params).toEqual({ _c3: "2024-03-05T13:30:00.123000", _c3_1: "2024-03-05T13:30:00.123" });
+    expect(at(1, "year", 2024).params.params).toEqual({ _c1: 2024 });
+    // without an id the name is the pick's place in the list
+    const two = datasetQuery(sales, [], {}, {}, [{ column: "a", value: 1 }, { id: 7, column: "b", value: 2 }]) as { params: { params: object } };
+    expect(two.params.params).toEqual({ _c0: 1, _c7: 2 });
+  });
+});
+
+describe("datasetQuery: narrowed by another dataset", () => {
+  const regions: Dataset = { name: "regions", sql: "SELECT * FROM regions", params: {} };
+  const inner = (d: Dataset, picks: { column: string; value: string }[] = []) => datasetQuery(d, [], {}, {}, picks) as { query: string; params: object };
+
+  it("adds a semi-join on the key, after the filters and picks, with the other query as a subquery", () => {
+    const north = inner(regions, [{ column: "name", value: "N" }]);
+    const q = datasetQuery(sales, [filter({})], { f1: "EU" } as never, {}, [{ id: 2, column: "year", value: 2024 }], [{ column: "region_id", key: "id", query: north as never, alias: "_n0" }]);
+    expect(q).toEqual({
+      query:
+        'SELECT * FROM (\nSELECT * FROM sales\n) AS _d\nWHERE "region" = :_f0\n  AND "year" = :_c2' +
+        '\n  AND "region_id" IN (SELECT "id" FROM (\nSELECT * FROM (\nSELECT * FROM regions\n) AS _d\nWHERE CAST("name" AS VARCHAR) = :_c0\n) AS _n0)',
+      params: { params: { _f0: "EU", _c2: 2024, _c0: "N" }, param_types: { _f0: "text", _c2: "number", _c0: "text" } },
+    });
+  });
+
+  it("is the plain query without semi-joins, and quotes the columns", () => {
+    expect(datasetQuery(sales, [], {}, {}, [], [])).toEqual(datasetQuery(sales, [], {}, {}));
+    const q = datasetQuery(sales, [], {}, {}, [], [{ column: 'a"b', key: 'c"d', query: inner(regions) as never, alias: "_n1" }]);
+    expect((q as { query: string }).query).toContain('"a""b" IN (SELECT "c""d" FROM (');
+  });
+
+  it("keeps the dataset's own placeholders next to the other query's", () => {
+    const d: Dataset = { name: "sales", sql: "SELECT * FROM sales WHERE year = :year", params: { year: { type: "number" } } };
+    const r: Dataset = { name: "regions", sql: "SELECT * FROM regions WHERE year = :year", params: { year: { type: "number" } } };
+    const other = datasetQuery(r, [], {}, { year: "2024" });
+    const q = datasetQuery(d, [], {}, { year: "2024" }, [], [{ column: "region_id", key: "id", query: other as never, alias: "_n0" }]);
+    expect((q as { params: object }).params).toEqual({ params: { year: 2024 }, param_types: { year: "number" } });
+  });
+});
+
+describe("mergeParams", () => {
+  it("joins two sets of parameters, and takes an empty one", () => {
+    expect(mergeParams({ params: { a: 1 }, param_types: { a: "number" } }, { params: { b: "x" }, param_types: { b: "text" } })).toEqual({
+      params: { a: 1, b: "x" },
+      param_types: { a: "number", b: "text" },
+    });
+    expect(mergeParams({}, {})).toEqual({});
+    expect(mergeParams({ params: { a: 1 }, param_types: { a: "number" } }, {})).toEqual({ params: { a: 1 }, param_types: { a: "number" } });
+  });
+
+  it("accepts a name bound twice to the same value, and refuses two values or two types", () => {
+    const a = { params: { year: 2024 }, param_types: { year: "number" as const } };
+    expect(mergeParams(a, a)).toEqual(a);
+    expect(() => mergeParams(a, { params: { year: 2023 }, param_types: { year: "number" } })).toThrow(/:year is bound to two different values/);
+    expect(() => mergeParams(a, { params: { year: 2024 }, param_types: { year: "text" } })).toThrow(/:year/);
+  });
+});
+
+describe("narrows", () => {
+  it("says whether the filters or the picks put a condition on the dataset's columns", () => {
+    const f = filter({});
+    expect(narrows("sales", [f], { f1: "EU" } as never, [])).toBe(true);
+    expect(narrows("sales", [f], { f1: "" } as never, [])).toBe(false);
+    expect(narrows("sales", [f], {}, [])).toBe(false);
+    expect(narrows("stores", [f], { f1: "EU" } as never, [])).toBe(false);
+    expect(narrows("sales", [], {}, [{ column: "region", value: null }])).toBe(true);
+    expect(narrows("sales", [filter({ control: "multi" })], { f1: [] } as never, [])).toBe(false);
   });
 });
 
