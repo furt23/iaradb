@@ -58,7 +58,9 @@ Aggregation tables, join build sides, sort buffers and window buffers reserve me
 
 A single partition must still fit in memory. `iara.memory_usage()` returns `{limit, used, peak, spilled}`, and on Linux and macOS `heap` (bytes the allocator has handed out) and `resident` (bytes it holds in memory).
 
-The allocator is jemalloc on Linux and macOS and mimalloc on Windows. jemalloc gives blocks of 8 MB and more back to the system as they are freed, so the process holds close to what it uses; queries that rebuild large hash tables pay for faulting that memory in again.
+The allocator is jemalloc on Linux and macOS and mimalloc on Windows. jemalloc's own purging is off. A thread of the engine checks every 20 ms how much freed memory jemalloc keeps, and gives some back once in use plus kept would pass the most the process had in use over the last 5 seconds. So the process holds about its recent peak, and memory freed below it is reused instead of being faulted in again. jemalloc's default gives every freed block of 8 MB or more back at once, and scans and aggregations that allocate such blocks all the time spent 10-30% of their time faulting them in again. One second after the last query ends, all freed memory goes back.
+
+On Linux jemalloc asks for transparent huge pages (2 MB pages, where the system's THP setting is `madvise` or `always`): large hash tables fault in 2 MB at a time and miss the TLB far less often. It costs some memory, as pages are only partly used, and when memory is short the kernel can stall a page fault to compact memory into a huge page. `_RJEM_MALLOC_CONF=thp:default` turns it off.
 
 ## Running queries
 
