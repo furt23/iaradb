@@ -54,6 +54,60 @@ export interface Dataset {
   recipe?: Recipe;
 }
 
+/** how numbers are written (Intl.NumberFormat in the viewer's language); a percent of 0.25 is 25% */
+export interface NumberFormat {
+  style: "number" | "currency" | "percent";
+  /** digits after the decimal point (absent: up to 2) */
+  decimals?: number;
+  /** ISO 4217 code; required by "currency" */
+  currency?: string;
+  /** 1.2K, 3.4M */
+  compact?: boolean;
+}
+
+/** a tint of conditional formatting: the status colors, and blue to highlight */
+export type Tone = "green" | "amber" | "orange" | "red" | "blue";
+
+export interface ColorRule {
+  op: ">" | ">=" | "<" | "<=" | "=" | "!=";
+  /** numbers compare as numbers; >, <… need a number on both sides (text never matches them) */
+  value: number | string;
+  tone: Tone;
+}
+
+/** how a table column is shown */
+export interface ColumnFormat {
+  number?: NumberFormat;
+  /** the first rule a cell matches tints it (rules win over the scale) */
+  rules?: ColorRule[];
+  /**
+   * Tints numeric cells by where they sit between the lowest and highest value
+   * of the shown rows: `high` grows from none to full; with `low`, `low` fades
+   * out toward the middle and `high` grows from there.
+   */
+  scale?: { high: Tone; low?: Tone };
+}
+
+/** a value column of a bar, line or area chart without a group */
+export interface SeriesStyle {
+  /** drawn against the right axis */
+  axis?: "right";
+  /** drawn as bars or as a line whatever the chart's kind (a combo chart) */
+  as?: "bar" | "line";
+}
+
+/** how a chart is drawn, on top of what its spec asks the kernel for */
+export interface ChartStyle {
+  /** by value column */
+  series?: Record<string, SeriesStyle>;
+  /** the value next to each bar, point or slice */
+  labels?: boolean;
+  /** the left axis and its series (counters and pies too) */
+  format?: NumberFormat;
+  /** the right axis and its series */
+  right_format?: NumberFormat;
+}
+
 /** a chart over a dataset; `spec.kind` "counter" is a single number, "pie" a pie */
 export interface ChartWidget {
   id: string;
@@ -61,6 +115,7 @@ export interface ChartWidget {
   title?: string;
   dataset: string;
   spec: ChartSpec;
+  style?: ChartStyle;
 }
 
 /** the first rows of a dataset */
@@ -71,6 +126,8 @@ export interface TableWidget {
   dataset: string;
   /** the columns shown, in order (absent: all) */
   columns?: string[];
+  /** by column name */
+  formats?: Record<string, ColumnFormat>;
 }
 
 /** markdown */

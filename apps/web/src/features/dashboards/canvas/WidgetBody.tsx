@@ -12,7 +12,7 @@ import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import Typography from "@mui/material/Typography";
 import type { CellValue } from "@iara/protocol";
-import { useRef } from "react";
+import { useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -20,21 +20,35 @@ import remarkGfm from "remark-gfm";
 import { ChartCanvas } from "@/features/results/chart/ChartCanvas";
 import type { ParamSpec } from "@/features/queries/queryHeader";
 import { formatCount, isNumericType } from "@/lib/format";
-import type { ChartWidget, FilterValue, FilterWidget, PickValue, TableWidget, TextWidget, Widget, WidgetData } from "@/lib/dashboards/types";
+import { cellTint, columnRange, tintBackground } from "@/lib/dashboards/conditional";
+import { formatNumber, numberLocale } from "@/lib/dashboards/numberFormat";
+import type { ChartWidget, FilterValue, FilterWidget, NumberFormat, PickValue, TableWidget, TextWidget, Widget, WidgetData } from "@/lib/dashboards/types";
 import { useElementHeight } from "@/lib/useElementHeight";
 
 import { FilterControl } from "./FilterControl";
 
 const MONO = "'JetBrains Mono Variable', monospace";
 
-function Cell({ value }: { value: CellValue }) {
+/** A number's value, or null: a number, or a numeric string. */
+function numberOf(value: CellValue): number | null {
+  const n = typeof value === "string" && value.trim() !== "" ? Number(value) : value;
+  return typeof n === "number" && Number.isFinite(n) ? n : null;
+}
+
+function Cell({ value, format, locale }: { value: CellValue; format?: NumberFormat; locale: string }) {
   if (value === null) return <Box component="span" sx={{ color: "text.disabled" }}>null</Box>;
+  const n = format ? numberOf(value) : null;
+  if (n !== null) return <>{formatNumber(n, format, locale)}</>;
   return <>{typeof value === "object" ? JSON.stringify(value) : String(value)}</>;
 }
 
 function TableView({ widget, data }: { widget: TableWidget; data: Extract<WidgetData, { kind: "table" }> }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const numeric = data.columns.map((c) => isNumericType(c.type));
+  const locale = numberLocale(i18n.language);
+  const formats = data.columns.map((c) => widget.formats?.[c.name]);
+  // the lowest and highest value of each column with a color scale, over the rows shown
+  const ranges = useMemo(() => data.columns.map((c, i) => (widget.formats?.[c.name]?.scale ? columnRange(data.rows, i) : null)), [data, widget.formats]);
   return (
     <>
       <TableContainer sx={{ flex: 1, minHeight: 0 }}>
@@ -60,11 +74,14 @@ function TableView({ widget, data }: { widget: TableWidget; data: Extract<Widget
           <TableBody>
             {data.rows.map((row, r) => (
               <TableRow key={r}>
-                {row.map((value, c) => (
-                  <TableCell key={c} align={numeric[c] ? "right" : "left"}>
-                    <Cell value={value} />
-                  </TableCell>
-                ))}
+                {row.map((value, c) => {
+                  const tint = cellTint(formats[c], value, ranges[c]);
+                  return (
+                    <TableCell key={c} align={numeric[c] ? "right" : "left"} sx={tint ? { bgcolor: tintBackground(tint) } : undefined}>
+                      <Cell value={value} format={formats[c]?.number} locale={locale} />
+                    </TableCell>
+                  );
+                })}
               </TableRow>
             ))}
           </TableBody>
@@ -96,7 +113,7 @@ function ChartView({
   const xType = data.columns.find((c) => c.name === widget.spec.x)?.type ?? "";
   return (
     <Box ref={ref} role="figure" aria-label={widget.title ?? t("Chart")} sx={{ flex: 1, minHeight: 0, overflow: "hidden", px: 1 }}>
-      {height > 0 && <ChartCanvas data={data.data} spec={widget.spec} height={height} xType={xType} onPick={onPick} picked={picked} />}
+      {height > 0 && <ChartCanvas data={data.data} spec={widget.spec} height={height} xType={xType} onPick={onPick} picked={picked} style={widget.style} />}
     </Box>
   );
 }

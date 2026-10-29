@@ -13,9 +13,17 @@ const fieldFilter: FilterWidget = {
   value_type: "text",
 };
 const paramFilter: FilterWidget = { id: "dddddddd", kind: "filter", title: "Year", control: "select", param: "year" };
+const styledChart: ChartWidget = {
+  ...chart,
+  style: { series: { amount: { axis: "right", as: "line" } }, labels: true, format: { style: "currency", currency: "BRL", decimals: 2 } },
+};
+const formattedTable: TableWidget = {
+  ...table,
+  formats: { amount: { number: { style: "percent", decimals: 1 }, rules: [{ op: "<", value: 0, tone: "red" }], scale: { high: "green", low: "red" } } },
+};
 
 describe("parseWidget / widgetJson", () => {
-  it.each([chart, table, fieldFilter, paramFilter])("round-trips a $kind widget", (w) => {
+  it.each([chart, table, fieldFilter, paramFilter, styledChart, formattedTable])("round-trips a $kind widget", (w) => {
     expect(parseWidget(w.id, widgetJson(w as never))).toEqual(w);
   });
 
@@ -66,6 +74,11 @@ describe("checkWidget", () => {
   it("takes a text widget (an action's input)", () => {
     expect(checkWidget("ffffffff", { kind: "text", markdown: "# Hi", extra: 1 })).toEqual(textWidget("ffffffff", "# Hi"));
     expect(() => checkWidget("ffffffff", { kind: "text" })).toThrow(/markdown/);
+  });
+
+  it("refuses a bad tone in a table's formats", () => {
+    const bad = { ...table, formats: { amount: { rules: [{ op: ">", value: 1, tone: "purple" }] } } };
+    expect(() => checkWidget("aaaaaaaa", bad)).toThrow(/rule tone is one of/);
   });
 });
 

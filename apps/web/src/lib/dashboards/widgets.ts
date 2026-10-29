@@ -4,6 +4,7 @@ import type { ChartAgg, ChartSpec } from "@iara/protocol";
 
 import { ID, randomId } from "./config";
 import type { ChartWidget, FilterControl, FilterField, FilterWidget, TableWidget, TextWidget, Widget } from "./types";
+import { checkChartStyle, checkColumnFormats } from "./widgetStyle";
 
 export const newWidgetId = randomId;
 
@@ -83,7 +84,14 @@ export function checkWidget(id: string, value: unknown): Widget {
       if (typeof c.markdown !== "string") throw new Error("markdown is text");
       return textWidget(id, c.markdown);
     case "chart":
-      return { id, kind: "chart", ...optionalTitle(c.title), dataset: text(c.dataset, "dataset"), spec: chartSpec(c.spec) };
+      return {
+        id,
+        kind: "chart",
+        ...optionalTitle(c.title),
+        dataset: text(c.dataset, "dataset"),
+        spec: chartSpec(c.spec),
+        ...(c.style !== undefined && { style: checkChartStyle(c.style) }),
+      };
     case "table":
       return {
         id,
@@ -91,6 +99,7 @@ export function checkWidget(id: string, value: unknown): Widget {
         ...optionalTitle(c.title),
         dataset: text(c.dataset, "dataset"),
         ...(c.columns !== undefined && { columns: strings(c.columns, "columns") }),
+        ...(c.formats !== undefined && { formats: checkColumnFormats(c.formats) }),
       };
     case "filter":
       if (typeof c.control !== "string" || !FILTER_CONTROLS.includes(c.control as FilterControl)) {
@@ -118,9 +127,9 @@ export function parseWidget(id: string, json: string): Widget {
 export function widgetJson(w: ChartWidget | TableWidget | FilterWidget): string {
   const fields =
     w.kind === "chart"
-      ? { kind: w.kind, title: w.title, dataset: w.dataset, spec: w.spec }
+      ? { kind: w.kind, title: w.title, dataset: w.dataset, spec: w.spec, style: w.style }
       : w.kind === "table"
-        ? { kind: w.kind, title: w.title, dataset: w.dataset, columns: w.columns }
+        ? { kind: w.kind, title: w.title, dataset: w.dataset, columns: w.columns, formats: w.formats }
         : { kind: w.kind, title: w.title, control: w.control, fields: w.fields, value_type: w.value_type, param: w.param };
   return `${JSON.stringify(fields, null, 2)}\n`;
 }

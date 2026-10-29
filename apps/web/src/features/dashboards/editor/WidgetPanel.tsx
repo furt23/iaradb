@@ -16,6 +16,8 @@ import { ChartControls } from "@/features/results/chart/ChartControls";
 import { fitSpec } from "@/features/results/chart/chartSpec";
 import type { Dataset, Widget } from "@/lib/dashboards/types";
 
+import { ChartStyleSettings } from "./ChartStyleSettings";
+import { ColumnFormatSettings } from "./ColumnFormatSettings";
 import { withCurrent } from "./datasets";
 import { FilterSettings } from "./FilterSettings";
 import { widgetLabel } from "./newWidget";
@@ -26,6 +28,9 @@ function usedDatasets(widget: Widget): string[] {
   if (widget.kind === "chart" || widget.kind === "table") return [widget.dataset];
   return widget.kind === "filter" ? [...new Set((widget.fields ?? []).map((f) => f.dataset))] : [];
 }
+
+/** The heading of the Format section of the settings. */
+const SECTION_HEADING = { fontSize: 12, fontWeight: 650, color: "text.secondary" };
 
 /** The settings of the selected widget; every edit goes to `onChange` (`reload`: the data changes with it, true unless said otherwise). */
 export function WidgetPanel({
@@ -90,6 +95,10 @@ export function WidgetPanel({
             <Box sx={{ mx: -2 }}>
               <ChartControls spec={widget.spec} columns={columnsIn(found, widget.dataset)} onChange={(spec) => onChange({ ...widget, spec })} />
             </Box>
+            <Stack spacing={1}>
+              <Typography sx={SECTION_HEADING}>{t("Format")}</Typography>
+              <ChartStyleSettings widget={widget} onChange={(w) => onChange(w, false)} />
+            </Stack>
           </>
         )}
         {widget.kind === "table" && (
@@ -117,6 +126,10 @@ export function WidgetPanel({
                 </MenuItem>
               ))}
             </TextField>
+            <Stack spacing={1}>
+              <Typography sx={SECTION_HEADING}>{t("Format")}</Typography>
+              <ColumnFormatSettings widget={widget} columns={columnsIn(found, widget.dataset)} onChange={(w) => onChange(w, false)} />
+            </Stack>
           </>
         )}
         {widget.kind === "text" && (
