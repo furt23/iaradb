@@ -1,8 +1,10 @@
 "use client";
 
+import Cancel from "@mui/icons-material/Cancel";
 import CloseOutlined from "@mui/icons-material/CloseOutlined";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
+import Chip from "@mui/material/Chip";
 import IconButton from "@mui/material/IconButton";
 import MenuItem from "@mui/material/MenuItem";
 import Stack from "@mui/material/Stack";
@@ -22,7 +24,6 @@ import { CALENDAR_COLUMN_INFO, isCalendar } from "./calendarColumns";
 import { withCurrent } from "./datasets";
 import { FilterSettings } from "./FilterSettings";
 import { widgetLabel } from "./newWidget";
-import { NewMeasure } from "./NewMeasure";
 import { columnsIn, type FoundColumns } from "./useDatasetColumns";
 import { relatedDatasets, useModel } from "./useModel";
 
@@ -87,7 +88,7 @@ export function WidgetPanel({
     // a measure the model no longer has stays listed, so it can be seen and cleared
     const options = [...picked.filter((p) => !labels.has(p)), ...model.measures.map((m) => m.name)];
     const set = (list: string[]) => onChange({ ...chart, measures: list.length ? list : undefined }, true);
-    const helperText = model.measures.length ? undefined : t("No measures yet: write them in the Model tab");
+    const helperText = model.measures.length ? undefined : t("No measures yet: create one from the Fields pane");
     const items = options.map((n) => (
       <MenuItem key={n} value={n}>
         {labels.get(n) ?? n}
@@ -114,7 +115,21 @@ export function WidgetPanel({
         }}
         slotProps={{
           inputLabel: { shrink: true },
-          select: { multiple: true, displayEmpty: true, renderValue: (v) => ((v as string[]).length ? (v as string[]).join(", ") : t("Nothing")) },
+          select: {
+            multiple: true,
+            displayEmpty: true,
+            // the picked measures as chips that take themselves out (the mouse down must not open the list)
+            renderValue: (v) =>
+              (v as string[]).length ? (
+                <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+                  {(v as string[]).map((n) => (
+                    <Chip key={n} size="small" label={n} onMouseDown={(e) => e.stopPropagation()} onDelete={() => set(picked.filter((p) => p !== n))} deleteIcon={<Cancel aria-label={`${t("Remove")} ${n}`} />} />
+                  ))}
+                </Box>
+              ) : (
+                t("Nothing")
+              ),
+          },
         }}
       >
         {items}
@@ -150,12 +165,6 @@ export function WidgetPanel({
               load(dataset).then((columns) => onChange({ ...widget, dataset, spec: fitSpec(widget.spec, columns) }), () => undefined);
             })}
             {measureSelect(widget)}
-            <NewMeasure
-              datasets={datasets}
-              found={found}
-              load={load}
-              onAdded={(name) => onChange({ ...widget, measures: widget.spec.kind === "counter" ? [name] : [...(widget.measures ?? []), name] }, true)}
-            />
             <Box sx={{ mx: -2 }}>
               <ChartControls spec={widget.spec} columns={chartColumns(widget)} hideValues={!!widget.measures?.length} onChange={(spec) => onChange({ ...widget, spec })} />
             </Box>

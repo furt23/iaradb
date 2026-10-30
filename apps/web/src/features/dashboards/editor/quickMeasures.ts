@@ -65,6 +65,9 @@ export interface QuickFields {
   date: ColumnRef;
 }
 
+/** What the dialog opens with: a template and the fields it reads (the rest start as they do without). */
+export type QuickInitial = { kind: QuickKind } & Partial<Pick<QuickFields, "dataset" | "column" | "measure">>;
+
 /** the model function a template calls (the others write their own expression) */
 const FUNCTION: Partial<Record<QuickKind, string>> = {
   sum: "sum",

@@ -1,7 +1,7 @@
 "use client";
 
 import type { ColumnInfo } from "@iara/protocol";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { Dataset } from "@/lib/dashboards/types";
 import { datasetColumns } from "@/server/actions/dashboards";
@@ -37,4 +37,18 @@ export function useDatasetColumns(slug: string, datasets: Dataset[]) {
     [slug, datasets],
   );
   return { found, load };
+}
+
+/** Reads the columns of the datasets not read yet, each once (until the datasets change), while `on`. */
+export function useReadColumns(datasets: Dataset[], found: FoundColumns, load: (name: string) => Promise<ColumnInfo[]>, on = true) {
+  const asked = useRef<{ load: typeof load; names: Set<string> } | null>(null);
+  useEffect(() => {
+    if (!on) return;
+    if (asked.current?.load !== load) asked.current = { load, names: new Set() };
+    for (const { name } of datasets) {
+      if (found[name] !== undefined || asked.current.names.has(name)) continue;
+      asked.current.names.add(name);
+      load(name).catch(() => undefined);
+    }
+  }, [on, datasets, found, load]);
 }

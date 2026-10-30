@@ -17,20 +17,27 @@ import type { Dashboard, LayoutItem, Widget } from "@/lib/dashboards/types";
 
 import { CrossFilterBar } from "../canvas/CrossFilterBar";
 import { DashboardGrid } from "../canvas/DashboardGrid";
+import type { FieldRef } from "../canvas/fieldDrag";
 import type { useDashboardData } from "../canvas/useDashboardData";
 import { WidgetBody } from "../canvas/WidgetBody";
 import { WidgetFrame } from "../canvas/WidgetFrame";
 import { AddWidgetMenu } from "./AddWidgetMenu";
 import { paramSpecOf } from "./datasets";
+import { dropField } from "./fieldActions";
+import { FieldsPane } from "./FieldsPane";
+import { FormulaBar } from "./FormulaBar";
 import type { NewKind } from "./newWidget";
 import { widgetLabel } from "./newWidget";
-import type { FoundColumns } from "./useDatasetColumns";
+import { columnsIn, type FoundColumns } from "./useDatasetColumns";
+import { useFormulaBar } from "./useFormulaBar";
+import { useMeasureActions } from "./useMeasureActions";
 import { useModel } from "./useModel";
 import { WidgetPanel } from "./WidgetPanel";
 
 /**
  * The canvas: widgets on the grid (drag by the header, resize from the corner),
- * with live data and filters, and the settings of the selected one on the right.
+ * with live data and filters. On the right, the settings of the selected widget
+ * and the Fields pane; measures are written in the formula bar above the grid.
  */
 export function CanvasTab({
   dashboard,
@@ -60,6 +67,16 @@ export function CanvasTab({
   const [deleting, setDeleting] = useState<Widget | null>(null);
   const byId = useMemo(() => new Map(dashboard.widgets.map((w) => [w.id, w])), [dashboard.widgets]);
   const current = selected ? byId.get(selected) : undefined;
+  const formula = useFormulaBar();
+  const measures = useMeasureActions(dashboard.widgets, current, onChange);
+
+  /** A field dropped on a widget does what checking it for that widget does, and selects the widget. */
+  const dropOn = (w: Widget) => (field: FieldRef) => {
+    const columns = w.kind === "table" ? columnsIn(found, w.dataset).map((c) => c.name) : [];
+    const next = dropField(w, field, columns);
+    onSelect(w.id);
+    if (next) onChange(next);
+  };
 
   const renderWidget = (id: string) => {
     const w = byId.get(id);
@@ -73,6 +90,7 @@ export function CanvasTab({
         selected={id === selected}
         draggable
         onClick={() => onSelect(id)}
+        onFieldDrop={w.kind === "chart" || w.kind === "table" ? dropOn(w) : undefined}
         actions={
           <IconButton
             size="small"
@@ -111,6 +129,7 @@ export function CanvasTab({
             </Typography>
           )}
         </Box>
+        {formula.target && <FormulaBar key={formula.target.key} target={formula.target} datasets={dashboard.datasets} found={found} load={load} actions={measures} onClose={formula.close} />}
         <CrossFilterBar
           cross={data.cross}
           widgets={dashboard.widgets}
@@ -129,6 +148,7 @@ export function CanvasTab({
         </Box>
       </Box>
       {current && <WidgetPanel key={current.id} widget={current} datasets={dashboard.datasets} found={found} load={load} onChange={onChange} onClose={() => onSelect(null)} />}
+      <FieldsPane datasets={dashboard.datasets} found={found} load={load} widget={current} onChange={onChange} formula={formula} actions={measures} />
       <Dialog open={deleting !== null} onClose={() => setDeleting(null)} maxWidth="xs" fullWidth>
         <DialogTitle>{t("Delete this widget?")}</DialogTitle>
         <DialogActions>

@@ -5,14 +5,18 @@ import Box from "@mui/material/Box";
 import Paper from "@mui/material/Paper";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
-import type { ReactNode } from "react";
+import { useState, type DragEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+
+import { carriesField, FIELD_MIME, parseField, type FieldRef } from "./fieldDrag";
 
 /**
  * The card around a widget: a header with its title (the grid drags by the
  * `dash-drag` part of it), a warning for the author's `notes` (editor only),
  * and the widget's own actions, then the body. A widget without a title has a
- * header only as a thin strip to drag it by.
+ * header only as a thin strip to drag it by. With `onFieldDrop` a field dragged
+ * from the editor's Fields pane can be dropped on it, and it is outlined while
+ * one is over it.
  */
 export function WidgetFrame({
   title,
@@ -21,6 +25,7 @@ export function WidgetFrame({
   onClick,
   notes,
   actions,
+  onFieldDrop,
   children,
 }: {
   title?: string;
@@ -29,9 +34,30 @@ export function WidgetFrame({
   onClick?(): void;
   notes?: string[];
   actions?: ReactNode;
+  onFieldDrop?(field: FieldRef): void;
   children: ReactNode;
 }) {
   const { t } = useTranslation();
+  const [over, setOver] = useState(false);
+  const drop = onFieldDrop && {
+    onDragOver: (e: DragEvent<HTMLElement>) => {
+      if (!carriesField(e.dataTransfer.types)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      setOver(true);
+    },
+    // moving onto the widget's own children is not leaving it
+    onDragLeave: (e: DragEvent<HTMLElement>) => {
+      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOver(false);
+    },
+    onDrop: (e: DragEvent<HTMLElement>) => {
+      setOver(false);
+      const field = parseField(e.dataTransfer.getData(FIELD_MIME));
+      if (!field) return;
+      e.preventDefault();
+      onFieldDrop(field);
+    },
+  };
   const header = title || actions || draggable || notes?.length;
   return (
     <Paper
@@ -39,7 +65,18 @@ export function WidgetFrame({
       component="section"
       aria-label={title}
       onClick={onClick}
-      sx={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden", outline: selected ? 2 : 0, outlineColor: "primary.main", outlineOffset: -1 }}
+      {...drop}
+      sx={{
+        height: "100%",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+        outline: selected || over ? 2 : 0,
+        outlineStyle: over ? "dashed" : "solid",
+        outlineColor: "primary.main",
+        outlineOffset: -1,
+        bgcolor: over ? "action.hover" : undefined,
+      }}
     >
       {header && (
         <Box sx={{ display: "flex", alignItems: "center", flexShrink: 0, minHeight: title ? 32 : 18, pl: 1.5, pr: 0.5 }}>

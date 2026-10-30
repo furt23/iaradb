@@ -21,7 +21,7 @@ import { isNumericType } from "@/lib/format";
 import type { Schema } from "@/lib/model/types";
 
 import { checkAdded } from "./measureLine";
-import { QUICK_TEMPLATES, quickMeasure, suggestName, templateOf, type QuickKind } from "./quickMeasures";
+import { QUICK_TEMPLATES, quickMeasure, suggestName, templateOf, type QuickInitial, type QuickKind } from "./quickMeasures";
 import { columnsIn, type FoundColumns } from "./useDatasetColumns";
 import { useModel, useModelSource } from "./useModel";
 
@@ -54,6 +54,7 @@ function QuickMeasureForm({
   found,
   load,
   schema,
+  initial,
   onAdd,
   onClose,
 }: {
@@ -61,16 +62,18 @@ function QuickMeasureForm({
   found: FoundColumns;
   load(name: string): Promise<ColumnInfo[]>;
   schema: Schema;
+  /** the template and fields it opens on (default: Sum, the first dataset) */
+  initial?: QuickInitial;
   onAdd(lines: string[], name: string): Promise<void>;
   onClose(): void;
 }) {
   const { t } = useTranslation();
   const model = useModel();
   const { source } = useModelSource();
-  const [kind, setKind] = useState<QuickKind>("sum");
-  const [dataset, setDataset] = useState(datasets[0]?.name ?? "");
-  const [column, setColumn] = useState("");
-  const [measure, setMeasure] = useState("");
+  const [kind, setKind] = useState<QuickKind>(initial?.kind ?? "sum");
+  const [dataset, setDataset] = useState(initial?.dataset ?? datasets[0]?.name ?? "");
+  const [column, setColumn] = useState(initial?.column ?? "");
+  const [measure, setMeasure] = useState(initial?.measure ?? "");
   const [size, setSize] = useState("3");
   const [dateDataset, setDateDataset] = useState(datasets[0]?.name ?? "");
   const [dateColumn, setDateColumn] = useState("");
@@ -122,15 +125,15 @@ function QuickMeasureForm({
     dataset: <Select label={t("Dataset")} value={fields.dataset} options={names} onChange={setDataset} />,
     percent: (
       <>
-        <Select label={t("Measure")} value={fields.measure} options={measures} onChange={setMeasure} helperText={measures.length ? undefined : t("No measures yet: write them in the Model tab")} />
+        <Select label={t("Measure")} value={fields.measure} options={measures} onChange={setMeasure} helperText={measures.length ? undefined : t("No measures yet: create one from the Fields pane")} />
         <Select label={t("Total over")} value={fields.dataset} options={names} onChange={setDataset} />
         <Select label={t("Column")} value={fields.column} options={columns} onChange={setColumn} empty={t("The whole dataset")} />
       </>
     ),
-    measure: <Select label={t("Measure")} value={fields.measure} options={measures} onChange={setMeasure} helperText={measures.length ? undefined : t("No measures yet: write them in the Model tab")} />,
+    measure: <Select label={t("Measure")} value={fields.measure} options={measures} onChange={setMeasure} helperText={measures.length ? undefined : t("No measures yet: create one from the Fields pane")} />,
     rolling: (
       <>
-        <Select label={t("Measure")} value={fields.measure} options={measures} onChange={setMeasure} helperText={measures.length ? undefined : t("No measures yet: write them in the Model tab")} />
+        <Select label={t("Measure")} value={fields.measure} options={measures} onChange={setMeasure} helperText={measures.length ? undefined : t("No measures yet: create one from the Fields pane")} />
         <TextField
           size="small"
           fullWidth
