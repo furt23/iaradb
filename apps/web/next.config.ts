@@ -11,6 +11,7 @@ const config: NextConfig = {
   devIndicators: { position: "bottom-right" },
   experimental: {
     optimizePackageImports: ["@mui/material", "@mui/icons-material"],
+    agentUpgrade: "security",
   },
 };
 
