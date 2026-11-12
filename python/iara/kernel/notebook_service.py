@@ -4,8 +4,9 @@ Running a cell runs it, and the cells it reads from that have no value yet
 (never ran, or failed). The cells that read its values are marked stale, not
 run: nothing runs unless asked. With ``autorun`` (a notebook setting in the
 Studio) they run too, as marimo does, and so do edited ancestors. Running
-all cells stops at the first cell that fails, as a notebook does; changing a
-widget runs everything that depends on it, failures included.
+all cells stops at the first cell that fails, as a notebook does; running one
+cell or changing a widget goes on, and a failure blocks only the cells that
+read from it.
 
 Notebook files belong to the Studio (protocol v2): it sends a notebook's
 source when opening it and writes back the source the kernel returns on
@@ -254,7 +255,9 @@ class NotebookService:
         the cells that read their values run too, instead of turning stale.
         ``stop_on_error``: the run ends at the first cell that fails, and the
         cells after it do not run, as in a notebook (otherwise the cells that
-        read from a failed cell are blocked and the rest still run)."""
+        read from a failed cell are blocked and the rest still run). A single
+        target always goes on: a failure elsewhere must not keep it from running."""
+        stop_on_error = stop_on_error and (targets is None or len(targets) != 1)
         with self._lock:
             nb = self._sync(cells)
             self._emit_widgets(emit)
@@ -278,7 +281,7 @@ class NotebookService:
                 self.states[cid].defs = ()
             if cid in graph.errors:
                 outcome = self._blocked(graph.errors[cid])
-            elif cid not in graph.setup and graph.setup & failed:
+            elif deps.parents & graph.setup & failed:
                 outcome = self._blocked("the setup cell failed")
             elif deps.parents & failed:
                 outcome = self._blocked("an upstream cell failed")

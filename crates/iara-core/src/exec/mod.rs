@@ -24,6 +24,7 @@ pub mod packed_sort;
 pub mod pipeline;
 pub mod query;
 pub mod recursive;
+pub mod result_stream;
 pub mod sort;
 pub mod topk_bound;
 pub mod spill;

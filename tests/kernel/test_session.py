@@ -160,6 +160,38 @@ def test_a_failed_cell_stops_the_run(session: KernelSession):
     assert states["c"]["status"] == "idle" and states["d"]["status"] == "idle"
 
 
+def test_a_single_cell_runs_past_failures_it_does_not_read(session: KernelSession):
+    session.notebook.create("notebooks/one.py")
+    cells = [py("a", "a = 1 / 0"), py("b", "b = a + 1"), py("c", "c = 5\nc")]
+    run(session, cells)
+    result, _ = run(session, cells, ["c"])
+    assert result["ran"] == ["c"] and session.notebook.view()["states"]["c"]["output"]["text"] == "5"
+
+
+def test_a_single_cell_says_why_a_failure_it_reads_blocks_it(session: KernelSession):
+    session.notebook.create("notebooks/two.py")
+    cells = [py("a", "a = 1 / 0"), py("b", "b = a + 1")]
+    result, _ = run(session, cells, ["b"])
+    assert result["ran"] == ["a"]
+    assert session.notebook.view()["states"]["b"]["output"]["evalue"] == "an upstream cell failed"
+
+
+def test_with_autorun_a_failure_stops_only_what_reads_from_it(session: KernelSession):
+    session.notebook.create("notebooks/three.py")
+    cells = [py("a", "x = 1"), py("b", "y = x / 0"), py("c", "z = y + 1"), py("d", "w = x + 1\nw")]
+    result, _ = run(session, cells, ["a"], autorun=True)
+    assert result["ran"] == ["a", "b", "d"]
+    states = session.notebook.view()["states"]
+    assert states["c"]["output"]["ename"] == "Blocked" and states["d"]["output"]["text"] == "2"
+
+
+def test_several_targets_stop_at_the_first_failure(session: KernelSession):
+    session.notebook.create("notebooks/four.py")
+    cells = [py("a", "a = 1 / 0"), py("c", "c = 5")]
+    result, _ = run(session, cells, ["a", "c"])
+    assert result["ran"] == ["a"] and session.notebook.view()["states"]["c"]["status"] == "idle"
+
+
 def test_errors_block_dependents_when_the_run_goes_on(session: KernelSession):
     session.notebook.create("notebooks/e.py")
     cells = [py("a", "a = 1 / 0"), py("b", "b = a + 1"), py("r", "print(z)\nz = 1"), py("y", "z = 2")]
@@ -478,13 +510,23 @@ def test_the_setup_cell_runs_first_and_its_names_reach_every_cell(session: Kerne
     assert result["ran"][0] == "setup" and set(result["ran"]) == everyone - {"plain"}
 
 
-def test_a_failing_setup_cell_blocks_the_others(session: KernelSession):
+def test_a_failing_setup_cell_stops_run_all(session: KernelSession):
     session.notebook.create("notebooks/bad.py", persist=False)
     cells = [{**py("setup", "import nothing_here"), "setup": True}, py("a", "x = 1")]
-    result, rec = run(session, cells, ["a"])
+    result, rec = run(session, cells)
     assert result["ran"] == ["setup"]
     # the run stopped at the setup cell: the cell after it is back to idle, never ran
     assert rec.states("setup")[-1] == "error" and rec.states("a")[-1] == "idle"
+
+
+def test_a_failing_setup_cell_blocks_only_the_single_cells_that_read_it(session: KernelSession):
+    session.notebook.create("notebooks/bad2.py", persist=False)
+    cells = [{**py("setup", "import nothing_here"), "setup": True}, py("a", "x = 1\nx"), py("b", "nothing_here.go()")]
+    result, _ = run(session, cells, ["a"])
+    assert result["ran"] == ["setup", "a"] and session.notebook.view()["states"]["a"]["output"]["text"] == "1"
+    result, _ = run(session, cells, ["b"])
+    assert result["ran"] == ["setup"]
+    assert session.notebook.view()["states"]["b"]["output"]["evalue"] == "the setup cell failed"
 
 
 def test_cells_describe_the_frames_they_make(session: KernelSession):
