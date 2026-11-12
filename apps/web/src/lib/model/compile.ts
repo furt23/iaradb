@@ -7,6 +7,7 @@
  */
 
 import { quoteIdent } from "@/lib/dashboards/query";
+import type { ChartSort } from "@/lib/dashboards/types";
 
 import { guard } from "./calendar";
 import { factSql, keyName, planFacts, type Fact, type Ignore } from "./facts";
@@ -32,8 +33,8 @@ export interface ModelQuery {
   x: GroupField | null;
   group: GroupField | null;
   measures: string[];
-  /** "x": by x, then group; "value": by the first measure, largest first, empty values last */
-  order: "x" | "value";
+  /** "x", "x_desc": by x, then group; "value", "value_asc": by the first measure, empty values last */
+  order: ChartSort;
   limit: number;
 }
 
@@ -150,7 +151,10 @@ export function modelQuery(model: Model, q: ModelQuery): Compiled {
     ),
   );
   const select = [...keys.map((k, i) => `${key(i)} AS ${quoteIdent(k.as)}`), ...chosen.map((m, i) => `${values[i]} AS ${quoteIdent(m.name)}`)];
-  const order = keys.length === 0 ? "" : ` ORDER BY ${q.order === "x" ? keys.map((_, i) => key(i)).join(", ") : `${quoteIdent(chosen[0].name)} DESC NULLS LAST`}`;
+  const byKeys = (direction: string) => keys.map((_, i) => `${key(i)}${direction}`).join(", ");
+  const byValue = (direction: string) => `${quoteIdent(chosen[0].name)} ${direction} NULLS LAST`;
+  const orders: Record<ChartSort, () => string> = { x: () => byKeys(""), x_desc: () => byKeys(" DESC"), value: () => byValue("DESC"), value_asc: () => byValue("ASC") };
+  const order = keys.length === 0 ? "" : ` ORDER BY ${orders[q.order]()}`;
   const withs = several ? `WITH ${subqueries.map((s, i) => `_q${i} AS (${s})`).join(", ")} ` : "";
 
   const notes = chosen.flatMap((m) =>

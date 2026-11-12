@@ -12,6 +12,26 @@ vi.mock("./tokens", () => ({
 }));
 
 describe("contextText", () => {
+  it("lists a dashboard's datasets, model, widgets and where the user is", async () => {
+    const text = await contextText({
+      surface: "dashboard",
+      path: "dashboards/sales",
+      title: "Sales",
+      view: "canvas",
+      selectedWidgetId: "wid00001",
+      datasets: [
+        { name: "orders", sql: "SELECT * FROM orders", columns: [{ name: "total", type: "double" }] },
+        { name: "clean", sql: "", recipe: true, columns: null },
+      ],
+      model: "revenue = sum(orders.total)",
+      widgets: [{ id: "wid00001", json: '{"kind":"table"}', status: "error: boom" }],
+      layout: [{ widget: "wid00001", x: 0, y: 1, w: 6, h: 8 }],
+    });
+    for (const part of ['Dashboard "Sales"', "canvas tab", "selected widget: wid00001", "total double", "SELECT * FROM orders", "cleaning steps", "columns not read yet", "revenue = sum(orders.total)", "wid00001 [error: boom]", "x 0, y 1, w 6, h 8"]) {
+      expect(text).toContain(part);
+    }
+  });
+
   it("lists a notebook's cells in order with the selected one and the variables", async () => {
     const ctx: IaraFileContext = {
       surface: "notebook",

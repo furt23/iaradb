@@ -6,7 +6,7 @@ import { z } from "zod";
 import { Change } from "@/lib/iara/protocol";
 
 import { CODE_MODEL } from "../../ai/models";
-import { contextText, NOTEBOOK_API, resultStep, userStep } from "../prompt";
+import { contextText, DASHBOARD_API, NOTEBOOK_API, resultStep, userStep } from "../prompt";
 import { addUsage, AUTHOR_STEPS, emit, MAX_STEPS, type ChatUsage, type FunctionDecl, type IaraDeps, type IaraGraphState, type IaraUpdate, type Step } from "../state";
 import { cutToTokens } from "../tokens";
 import { dataTools, runDataTool } from "../tools";
@@ -27,6 +27,17 @@ const AUTHOR_SYSTEM = `You write exactly one change for the user's open file in 
 You must end by calling submit_change.
 
 ${NOTEBOOK_API}`;
+
+/** On a dashboard the change is one edit_dashboard, its steps together. */
+const DASHBOARD_SYSTEM = `You write exactly one change for the dashboard the user has open in Iara Studio, then submit it with submit_change, as one edit_dashboard with all the operations the task needs (a table to add, its relationship and the chart that uses it go together).
+- SQL is a single read-only query in Iara SQL (Apache DataFusion, DuckDB-style syntax). Write table names in full (catalog.schema.table).
+- Use only tables and columns you have seen, in the dashboard, in the analyst's findings or from list_tables and describe_table. Never guess. Call describe_table only for a table you have not seen.
+- Change the model with edit_model only to change what is there: copy each old exactly from it. New lines go in add_model_lines.
+- To change a widget, send the whole widget with its id: it replaces the file.
+- When an earlier change drew with an error, fix it with the ids in the message.
+You must end by calling submit_change.
+
+${DASHBOARD_API}`;
 
 const KIND = { type: "string", enum: ["python", "sql", "markdown"] };
 const EDITS = {
@@ -69,6 +80,36 @@ const SUBMIT_CHANGE: FunctionDecl = {
           { type: "object", properties: { action: action("edit_cell"), cellId: { type: "string" }, edits: EDITS, run }, required: ["action", "cellId", "edits", "run"] },
           { type: "object", properties: { action: action("run_cell"), cellId: { type: "string" } }, required: ["action", "cellId"] },
           { type: "object", properties: { action: action("edit_query"), edits: EDITS, run }, required: ["action", "edits", "run"] },
+          {
+            type: "object",
+            properties: {
+              action: action("edit_dashboard"),
+              operations: {
+                type: "array",
+                minItems: 1,
+                items: {
+                  type: "object",
+                  description: "op, and what that op takes (see the instructions)",
+                  properties: {
+                    op: { type: "string", enum: ["set_dataset", "remove_dataset", "add_model_lines", "edit_model", "set_widget", "remove_widget", "move_widget"] },
+                    name: { type: "string" },
+                    sql: { type: "string" },
+                    lines: { type: "array", items: { type: "string" } },
+                    edits: EDITS,
+                    id: { type: ["string", "null"] },
+                    widget: { type: "object", additionalProperties: true },
+                    place: { type: "object", properties: { x: { type: "integer" }, y: { type: "integer" }, w: { type: "integer" }, h: { type: "integer" } } },
+                    x: { type: "integer" },
+                    y: { type: "integer" },
+                    w: { type: "integer" },
+                    h: { type: "integer" },
+                  },
+                  required: ["op"],
+                },
+              },
+            },
+            required: ["action", "operations"],
+          },
         ],
       },
       explanation: { type: "string", description: "one or two sentences for the user: what the change does" },
@@ -101,7 +142,7 @@ export function authorNode(deps: IaraDeps) {
     while (calls < AUTHOR_STEPS && s.steps + calls < MAX_STEPS) {
       const reply = await deps.chat({
         model: CODE_MODEL,
-        system: AUTHOR_SYSTEM,
+        system: s.context.surface === "dashboard" ? DASHBOARD_SYSTEM : AUTHOR_SYSTEM,
         steps,
         tools: TOOLS,
         onThought: (id, delta) => emit(config, { type: "thought", agent: "author", id, delta }),

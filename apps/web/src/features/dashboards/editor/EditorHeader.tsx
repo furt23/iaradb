@@ -1,6 +1,5 @@
 "use client";
 
-import AutoAwesomeOutlined from "@mui/icons-material/AutoAwesomeOutlined";
 import EditOutlined from "@mui/icons-material/EditOutlined";
 import EventRepeatOutlined from "@mui/icons-material/EventRepeatOutlined";
 import OpenInNew from "@mui/icons-material/OpenInNew";
@@ -19,6 +18,8 @@ import { useTranslation } from "react-i18next";
 
 import { useCompute } from "@/features/compute/ComputeProvider";
 import { PageHeader } from "@/features/shell/PageHeader";
+import { IaraMark } from "@iara/ui";
+
 import type { DashboardConfig } from "@/lib/dashboards/types";
 import type { PublishedInfo } from "@/server/actions/dashboards";
 import { viewLink } from "@/server/actions/viewLink";
@@ -72,7 +73,7 @@ function Title({ value, onRename }: { value: string; onRename(title: string): vo
   );
 }
 
-/** Title, cluster, settings, refresh, its schedule, ask and publish of the dashboard being edited. */
+/** Title, cluster, settings, refresh, its schedule, Iara and publish of the dashboard being edited. */
 export function EditorHeader({
   config,
   published,
@@ -81,7 +82,8 @@ export function EditorHeader({
   onRefresh,
   onSettings,
   onSchedule,
-  onAsk,
+  iaraOpen,
+  onIara,
   onPublish,
 }: {
   config: DashboardConfig;
@@ -91,7 +93,8 @@ export function EditorHeader({
   onRefresh(): void;
   onSettings(): void;
   onSchedule(): void;
-  onAsk(): void;
+  iaraOpen: boolean;
+  onIara(): void;
   onPublish(): void;
 }) {
   const { t } = useTranslation();
@@ -146,8 +149,8 @@ export function EditorHeader({
           <Button startIcon={<EventRepeatOutlined />} onClick={onSchedule}>
             {t("Schedule refresh")}
           </Button>
-          <Button startIcon={<AutoAwesomeOutlined />} onClick={onAsk}>
-            {t("Ask")}
+          <Button startIcon={<IaraMark size={20} />} onClick={onIara} sx={{ color: iaraOpen ? "secondary.main" : "text.secondary" }}>
+            Iara
           </Button>
           <Button variant="contained" color="secondary" onClick={onPublish}>
             {t("Publish")}

@@ -1,31 +1,36 @@
 "use client";
 
-import Cancel from "@mui/icons-material/Cancel";
 import CloseOutlined from "@mui/icons-material/CloseOutlined";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
-import Chip from "@mui/material/Chip";
 import IconButton from "@mui/material/IconButton";
 import MenuItem from "@mui/material/MenuItem";
 import Stack from "@mui/material/Stack";
+import Tab from "@mui/material/Tab";
+import Tabs from "@mui/material/Tabs";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import type { ColumnInfo } from "@iara/protocol";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ChartControls } from "@/features/results/chart/ChartControls";
 import { fitSpec } from "@/features/results/chart/chartSpec";
-import type { ChartWidget, Dataset, Widget } from "@/lib/dashboards/types";
+import { usesRows } from "@/lib/dashboards/chartFields";
+import type { Dataset, TableWidget, Widget, WidgetData } from "@/lib/dashboards/types";
 
 import { ChartStyleSettings } from "./ChartStyleSettings";
+import { lookIdOf, withLook } from "./chartLooks";
 import { ColumnFormatSettings } from "./ColumnFormatSettings";
 import { CALENDAR_COLUMN_INFO, isCalendar } from "./calendarColumns";
 import { withCurrent } from "./datasets";
+import { FieldWells } from "./FieldWells";
 import { FilterSettings } from "./FilterSettings";
+import { PANEL_FIELDS, PANEL_HEADING } from "./panelStyle";
 import { widgetLabel } from "./newWidget";
-import { columnsIn, type FoundColumns } from "./useDatasetColumns";
-import { relatedDatasets, useModel } from "./useModel";
+import { columnsIn, useReadColumns, type FoundColumns } from "./useDatasetColumns";
+import { useModel } from "./useModel";
+import { VisualGallery } from "./VisualGallery";
 
 /** The datasets whose columns a widget's settings list. */
 function usedDatasets(widget: Widget): string[] {
@@ -33,19 +38,22 @@ function usedDatasets(widget: Widget): string[] {
   return widget.kind === "filter" ? [...new Set((widget.fields ?? []).map((f) => f.dataset))] : [];
 }
 
-/** The heading of the Format section of the settings. */
-const SECTION_HEADING = { fontSize: 12, fontWeight: 650, color: "text.secondary" };
-
 /** The settings of the selected widget; every edit goes to `onChange` (`reload`: the data changes with it, true unless said otherwise). */
 export function WidgetPanel({
   widget,
+  data,
   datasets,
   found,
   load,
   onChange,
+  onMeasure,
   onClose,
 }: {
+  /** a measure on the chart was clicked: it is edited where measures are */
+  onMeasure?(name: string): void;
   widget: Widget;
+  /** what it draws now: the series and categories its colors are set for */
+  data: WidgetData | undefined;
   datasets: Dataset[];
   found: FoundColumns;
   load(name: string): Promise<ColumnInfo[]>;
@@ -54,22 +62,16 @@ export function WidgetPanel({
 }) {
   const { t } = useTranslation();
   const model = useModel();
-  // a measure chart also reads the datasets its measures reach, so their columns are read too
-  const related = widget.kind === "chart" && widget.measures?.length ? relatedDatasets(model, widget.dataset, widget.measures) : [];
-  // a calendar is the model's own: its columns are known, there is nothing to read
-  const columnsOf = (name: string) => (isCalendar(model.calendars, name) ? CALENDAR_COLUMN_INFO : columnsIn(found, name));
-  const used = [...usedDatasets(widget), ...related].filter((name) => !isCalendar(model.calendars, name));
+  const [tab, setTab] = useState<"data" | "format">("data");
+  const word = (key: string, vars: { column: string }) => t(key, vars);
+  const used = usedDatasets(widget).filter((name) => !isCalendar(model.calendars, name));
   const key = used.join(",");
   // the columns are read again each time the panel opens or the datasets are
   useEffect(() => {
     for (const name of key ? key.split(",") : []) load(name).catch(() => undefined);
   }, [key, load]);
-
-  /** The columns a chart takes its x and group from: its dataset's as they are, and with measures the related datasets' as `dataset.column`. */
-  const chartColumns = (chart: ChartWidget): ColumnInfo[] => [
-    ...columnsIn(found, chart.dataset),
-    ...related.flatMap((name) => columnsOf(name).map((c) => ({ ...c, name: `${name}.${c.name}` }))),
-  ];
+  // charts and tables can take a field of any dataset, so all their columns are listed
+  useReadColumns(datasets, found, load, widget.kind === "chart" || widget.kind === "table");
 
   const datasetSelect = (value: string, set: (name: string) => void) => (
     <TextField select size="small" fullWidth label={t("Dataset")} value={value} onChange={(e) => set(e.target.value)}>
@@ -81,64 +83,16 @@ export function WidgetPanel({
     </TextField>
   );
 
-  /** The model's measures, all of them: a counter takes one, a chart several. Each is labelled with the datasets it reads. */
-  const measureSelect = (chart: ChartWidget) => {
-    const labels = new Map(model.measures.map((m) => [m.name, `${m.name} · ${m.datasets.join(", ")}`]));
-    const picked = chart.measures ?? [];
-    // a measure the model no longer has stays listed, so it can be seen and cleared
-    const options = [...picked.filter((p) => !labels.has(p)), ...model.measures.map((m) => m.name)];
-    const set = (list: string[]) => onChange({ ...chart, measures: list.length ? list : undefined }, true);
-    const helperText = model.measures.length ? undefined : t("No measures yet: create one from the Fields pane");
-    const items = options.map((n) => (
-      <MenuItem key={n} value={n}>
-        {labels.get(n) ?? n}
-      </MenuItem>
-    ));
-    return chart.spec.kind === "counter" ? (
-      <TextField select size="small" fullWidth label={t("Measures")} value={picked[0] ?? ""} helperText={helperText} onChange={(e) => set(e.target.value ? [e.target.value] : [])} slotProps={{ inputLabel: { shrink: true } }}>
-        <MenuItem value="">
-          <em>{t("Nothing")}</em>
-        </MenuItem>
-        {items}
-      </TextField>
-    ) : (
-      <TextField
-        select
-        size="small"
-        fullWidth
-        label={t("Measures")}
-        value={picked}
-        helperText={helperText}
-        onChange={(e) => {
-          const v = e.target.value as string | string[];
-          set(typeof v === "string" ? v.split(",") : v);
-        }}
-        slotProps={{
-          inputLabel: { shrink: true },
-          select: {
-            multiple: true,
-            displayEmpty: true,
-            // the picked measures as chips that take themselves out (the mouse down must not open the list)
-            renderValue: (v) =>
-              (v as string[]).length ? (
-                <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-                  {(v as string[]).map((n) => (
-                    <Chip key={n} size="small" label={n} onMouseDown={(e) => e.stopPropagation()} onDelete={() => set(picked.filter((p) => p !== n))} deleteIcon={<Cancel aria-label={`${t("Remove")} ${n}`} />} />
-                  ))}
-                </Box>
-              ) : (
-                t("Nothing")
-              ),
-          },
-        }}
-      >
-        {items}
-      </TextField>
-    );
+  /** What a table can show: its dataset's columns as they are, and the others' as `dataset.column`. */
+  const tableColumns = (table: TableWidget): string[] => {
+    const own = columnsIn(found, table.dataset).map((c) => c.name);
+    const others = datasets.filter((d) => d.name !== table.dataset).flatMap((d) => columnsIn(found, d.name).map((c) => `${d.name}.${c.name}`));
+    const calendars = model.calendars.flatMap((c) => CALENDAR_COLUMN_INFO.map((x) => `${c.name}.${x.name}`));
+    return [...(table.columns ?? []).filter((c) => !own.includes(c) && !others.includes(c) && !calendars.includes(c)), ...own, ...others, ...calendars];
   };
 
   return (
-    <Box component="aside" aria-label={t("Widget settings")} sx={{ width: 340, flexShrink: 0, overflow: "auto", borderLeft: 1, borderColor: "divider", bgcolor: "background.paper" }}>
+    <Box component="aside" aria-label={t("Widget settings")} sx={{ width: 340, flexShrink: 0, overflow: "auto", borderLeft: 1, borderColor: "divider", bgcolor: "background.paper", ...PANEL_FIELDS }}>
       <Box sx={{ display: "flex", alignItems: "center", px: 2, minHeight: 48, borderBottom: 1, borderColor: "divider" }}>
         <Typography sx={{ flex: 1, fontWeight: 650 }}>{t(widgetLabel(widget))}</Typography>
         <IconButton size="small" aria-label={t("Close settings")} onClick={onClose}>
@@ -158,20 +112,30 @@ export function WidgetPanel({
         )}
         {widget.kind === "chart" && (
           <>
-            {datasetSelect(widget.dataset, (dataset) => {
-              // measures belong to the model, not to a dataset: they stay
-              onChange({ ...widget, dataset });
-              // keep the columns the new dataset has
-              load(dataset).then((columns) => onChange({ ...widget, dataset, spec: fitSpec(widget.spec, columns) }), () => undefined);
-            })}
-            {measureSelect(widget)}
-            <Box sx={{ mx: -2 }}>
-              <ChartControls spec={widget.spec} columns={chartColumns(widget)} hideValues={!!widget.measures?.length} onChange={(spec) => onChange({ ...widget, spec })} />
-            </Box>
-            <Stack spacing={1}>
-              <Typography sx={SECTION_HEADING}>{t("Format")}</Typography>
-              <ChartStyleSettings widget={widget} onChange={(w) => onChange(w, false)} />
-            </Stack>
+            <Tabs value={tab} onChange={(_, next: "data" | "format") => setTab(next)} variant="fullWidth" aria-label={t("Widget settings")} sx={{ minHeight: 36, "& .MuiTab-root": { minHeight: 36, py: 0 } }}>
+              <Tab value="data" label={t("Data")} />
+              <Tab value="format" label={t("Format")} />
+            </Tabs>
+            {tab === "data" && (
+              <>
+                <VisualGallery value={lookIdOf(widget)} onPick={(def) => onChange(withLook(widget, def, columnsIn(found, widget.dataset), word))} />
+                {usesRows(widget) ? (
+                  <>
+                    {datasetSelect(widget.dataset, (dataset) => {
+                      onChange({ ...widget, dataset });
+                      // keep the columns the new dataset has
+                      load(dataset).then((columns) => onChange({ ...widget, dataset, spec: fitSpec(widget.spec, columns) }), () => undefined);
+                    })}
+                    <Box sx={{ mx: -2 }}>
+                      <ChartControls spec={widget.spec} columns={columnsIn(found, widget.dataset)} hideKinds onChange={(spec) => onChange({ ...widget, spec })} />
+                    </Box>
+                  </>
+                ) : (
+                  <FieldWells widget={widget} datasets={datasets} found={found} onChange={(w) => onChange(w)} onMeasure={onMeasure} />
+                )}
+              </>
+            )}
+            {tab === "format" && <ChartStyleSettings widget={widget} data={data} onChange={(w) => onChange(w, false)} />}
           </>
         )}
         {widget.kind === "table" && (
@@ -193,15 +157,15 @@ export function WidgetPanel({
                 select: { multiple: true, displayEmpty: true, renderValue: (v) => ((v as string[]).length ? (v as string[]).join(", ") : t("All columns")) },
               }}
             >
-              {withCurrentAll(columnsIn(found, widget.dataset), widget.columns).map((n) => (
+              {tableColumns(widget).map((n) => (
                 <MenuItem key={n} value={n}>
                   {n}
                 </MenuItem>
               ))}
             </TextField>
             <Stack spacing={1}>
-              <Typography sx={SECTION_HEADING}>{t("Format")}</Typography>
-              <ColumnFormatSettings widget={widget} columns={columnsIn(found, widget.dataset)} onChange={(w) => onChange(w, false)} />
+              <Typography sx={PANEL_HEADING}>{t("Format")}</Typography>
+              <ColumnFormatSettings widget={widget} columns={tableFormatColumns(widget, datasets, found)} onChange={(w) => onChange(w, false)} />
             </Stack>
           </>
         )}
@@ -214,8 +178,11 @@ export function WidgetPanel({
   );
 }
 
-/** The column names, with those already picked that the dataset no longer has. */
-function withCurrentAll(columns: ColumnInfo[], picked: string[] = []): string[] {
-  const names = columns.map((c) => c.name);
-  return [...picked.filter((p) => !names.includes(p)), ...names];
+/** The columns a table's formats can name: its dataset's, and the related ones it shows, under the names it shows them by. */
+function tableFormatColumns(table: TableWidget, datasets: Dataset[], found: FoundColumns): ColumnInfo[] {
+  const others = datasets
+    .filter((d) => d.name !== table.dataset)
+    .flatMap((d) => columnsIn(found, d.name).map((c) => ({ ...c, name: `${d.name}.${c.name}` })))
+    .filter((c) => table.columns?.includes(c.name));
+  return [...columnsIn(found, table.dataset), ...others];
 }

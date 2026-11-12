@@ -3,7 +3,8 @@
 import type { ColumnInfo } from "@iara/protocol";
 
 import { freshEntry, wantsExtract } from "@/lib/dashboards/extracts";
-import { datasetQuery } from "@/lib/dashboards/query";
+import type { ModelLayout } from "@/lib/dashboards/modelLayout";
+import { datasetQuery, quoteIdent } from "@/lib/dashboards/query";
 import type { CrossPicks, Dashboard, DashboardConfig, DashboardSummary, Dataset, FilterValues, LayoutItem, PublishedDashboard, Recipe, RenderResult, Share, Widget } from "@/lib/dashboards/types";
 import { nextScheduled, type JobRun } from "@/lib/jobs";
 
@@ -27,6 +28,7 @@ import {
   saveDataset,
   saveLayout,
   saveModel,
+  saveModelLayout,
   saveRecipe,
   saveWidget,
   type DashboardProblem,
@@ -147,6 +149,13 @@ export async function saveModelAction(slug: string, source: string): Promise<Act
   });
 }
 
+export async function saveModelLayoutAction(slug: string, layout: ModelLayout): Promise<ActionResult<ModelLayout>> {
+  return attempt(async () => {
+    await requireUser();
+    return saveModelLayout(slug, layout);
+  });
+}
+
 export async function deleteDashboardAction(slug: string): Promise<ActionResult<null>> {
   return attempt(async () => {
     await requireUser();
@@ -186,6 +195,30 @@ export async function datasetColumns(slug: string, name: string): Promise<Action
     if (output.type === "error") throw new Error(`${output.ename}: ${output.evalue}`);
     if (output.type !== "table") throw new Error("the dataset did not return a table");
     return output.result.columns;
+  });
+}
+
+/** For each column, whether it has one row per value: which side of a relationship it can be. */
+export async function uniqueColumnsAction(slug: string, columns: { dataset: string; column: string }[]): Promise<ActionResult<boolean[]>> {
+  return attempt(async () => {
+    const user = await requireUser();
+    const { config, datasets } = await readDashboard(slug);
+    const request = requestOn(config);
+    const allow = allowParam(userAllow(user));
+    return Promise.all(
+      columns.map(async ({ dataset, column }) => {
+        const found = datasets.find((d) => d.name === dataset);
+        if (!found) throw new Error(`there is no dataset ${dataset}`);
+        const q = datasetQuery(await withSql(found, request), [], {}, {});
+        if ("missing" in q) throw new Error(`needs a value for ${q.missing.map((n) => `:${n}`).join(", ")}`);
+        const query = `SELECT COUNT(*) AS n, COUNT(DISTINCT ${quoteIdent(column)}) AS d FROM (\n${q.query}\n) AS _k`;
+        const output = await request("sql.run", { query, source: `dashboard ${config.title}`, ...q.params, ...allow });
+        if (output.type === "error") throw new Error(`${output.ename}: ${output.evalue}`);
+        if (output.type !== "table") throw new Error("the dataset did not return a table");
+        const { rows } = await request("result.page", { result_id: output.result.id, offset: 0, limit: 1 });
+        return Number(rows[0]?.[0]) === Number(rows[0]?.[1]);
+      }),
+    );
   });
 }
 

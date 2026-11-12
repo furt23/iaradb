@@ -28,6 +28,16 @@ const SQL: IaraFileContext = { surface: "sql", path: "q.sql", query: "SELECT 1" 
 const insert = (over: Partial<Extract<IaraChange, { action: "insert_cell" }>> = {}): IaraChange => ({ action: "insert_cell", kind: "python", code: "y = 2", afterCellId: "c1", run: false, ...over });
 
 describe("checkChange", () => {
+  const board = { surface: "dashboard", path: "d", title: "D", view: "canvas", datasets: [], model: "", widgets: [], layout: [] } satisfies IaraFileContext;
+
+  it("checks a change to a dashboard, only on a dashboard", () => {
+    const change = { action: "edit_dashboard", operations: [{ op: "set_dataset", name: "orders", sql: "SELECT 1" }] } satisfies IaraChange;
+    expect(checkChange(change, board)).toEqual([]);
+    expect(checkChange({ action: "edit_dashboard", operations: [{ op: "remove_dataset", name: "ghost" }] }, board)).toEqual(["there is no dataset ghost"]);
+    expect(checkChange(change, NOTEBOOK)[0]).toContain("only works in a dashboard");
+    expect(checkChange({ action: "edit_query", edits: [{ old: "", new: "SELECT 1" }], run: false }, board)[0]).toContain("use edit_dashboard");
+  });
+
   it("accepts changes that fit the file", () => {
     expect(checkChange(insert(), NOTEBOOK)).toEqual([]);
     expect(checkChange(insert({ afterCellId: null, kind: "markdown", code: "# Title" }), NOTEBOOK)).toEqual([]);

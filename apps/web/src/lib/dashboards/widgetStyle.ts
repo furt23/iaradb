@@ -1,6 +1,6 @@
 /** Chart styles, number formats and table column formats: checked at the trust boundary, rebuilt with the known keys only (pure). */
 
-import type { ChartStyle, ColorRule, ColumnFormat, NumberFormat, SeriesStyle, Tone } from "./types";
+import type { ChartLook, ChartPalette, ChartStyle, ColorRule, ColumnFormat, LegendPosition, NumberFormat, SeriesStyle, Tone } from "./types";
 
 type Obj = Record<string, unknown>;
 
@@ -9,6 +9,12 @@ const OPS = [">", ">=", "<", "<=", "=", "!="] as const;
 const TONES: readonly Tone[] = ["green", "amber", "orange", "red", "blue"];
 const CURRENCY = /^[A-Z]{3}$/;
 const MAX_RULES = 20;
+const LOOKS: readonly ChartLook[] = ["stacked", "percent", "hbar", "hbar_stacked", "hbar_percent", "combo", "area_stacked", "donut", "treemap", "funnel", "waterfall", "heatmap", "matrix", "gauge"];
+const PALETTES: readonly ChartPalette[] = ["ocean", "sunset", "forest", "berry", "earth", "mono"];
+const LEGENDS: readonly LegendPosition[] = ["top", "bottom", "left", "right", "none"];
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+const MAX_COLORS = 200;
+const MAX_TITLE = 120;
 
 function object(v: unknown, what: string): Obj {
   if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error(`${what} is an object`);
@@ -59,10 +65,37 @@ function seriesOf(v: unknown): Record<string, SeriesStyle> {
   );
 }
 
+function colorsOf(v: unknown): Record<string, string> {
+  const entries = Object.entries(object(v, "colors"));
+  if (entries.length > MAX_COLORS) throw new Error(`colors holds at most ${MAX_COLORS} colors`);
+  // fromEntries, not an assignment: a label named __proto__ must stay a key
+  return Object.fromEntries(
+    entries.map(([label, color]) => {
+      if (typeof color !== "string" || !HEX_COLOR.test(color)) throw new Error(`the color of ${label} is written #rrggbb`);
+      return [label, color];
+    }),
+  );
+}
+
+function axisTitle(v: unknown, what: string): string {
+  if (typeof v !== "string" || v.length > MAX_TITLE) throw new Error(`${what} is text of at most ${MAX_TITLE} characters`);
+  return v;
+}
+
 /** The style of a chart widget. */
 export function checkChartStyle(v: unknown): ChartStyle {
-  const { series, labels, format, right_format } = object(v, "style");
+  const { look, palette, colors, legend, gridlines, smooth, x_title, y_title, gauge_max, series, labels, format, right_format } = object(v, "style");
+  if (gauge_max !== undefined && (typeof gauge_max !== "number" || !Number.isFinite(gauge_max) || gauge_max <= 0)) throw new Error("gauge_max is a number above zero");
   return {
+    ...(look !== undefined && { look: oneOf(look, LOOKS, "look") }),
+    ...(palette !== undefined && { palette: oneOf(palette, PALETTES, "palette") }),
+    ...(colors !== undefined && { colors: colorsOf(colors) }),
+    ...(legend !== undefined && { legend: oneOf(legend, LEGENDS, "legend") }),
+    ...(gridlines !== undefined && { gridlines: flag(gridlines, "gridlines") }),
+    ...(smooth !== undefined && { smooth: flag(smooth, "smooth") }),
+    ...(x_title !== undefined && { x_title: axisTitle(x_title, "x_title") }),
+    ...(y_title !== undefined && { y_title: axisTitle(y_title, "y_title") }),
+    ...(gauge_max !== undefined && { gauge_max: gauge_max as number }),
     ...(series !== undefined && { series: seriesOf(series) }),
     ...(labels !== undefined && { labels: flag(labels, "labels") }),
     ...(format !== undefined && { format: checkNumberFormat(format, "format") }),

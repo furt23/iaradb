@@ -72,11 +72,14 @@ export interface Point {
   id: number;
 }
 
-function num(v: CellValue | undefined): number | null {
+/** A cell as a number, when it is one or a numeric text (a decimal reaches the browser as text). */
+export function numberOf(v: CellValue | undefined): number | null {
   if (typeof v === "number") return v;
   if (typeof v === "string" && v.trim() !== "" && !Number.isNaN(Number(v))) return Number(v);
   return null;
 }
+
+const num = numberOf;
 
 function key(v: CellValue | undefined): string | number {
   return typeof v === "number" ? v : v === null || v === undefined ? "(null)" : String(v);

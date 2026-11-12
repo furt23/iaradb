@@ -20,12 +20,14 @@ import remarkGfm from "remark-gfm";
 import { ChartCanvas } from "@/features/results/chart/ChartCanvas";
 import type { ParamSpec } from "@/features/queries/queryHeader";
 import { formatCount, isNumericType } from "@/lib/format";
+import { chartMissing, drawnNames } from "@/lib/dashboards/chartFields";
 import { cellTint, columnRange, tintBackground } from "@/lib/dashboards/conditional";
 import { formatNumber, numberLocale } from "@/lib/dashboards/numberFormat";
 import type { ChartStyle, ChartWidget, FilterValue, FilterWidget, NumberFormat, PickValue, TableWidget, TextWidget, Widget, WidgetData } from "@/lib/dashboards/types";
 import { useElementHeight } from "@/lib/useElementHeight";
 
 import { FilterControl } from "./FilterControl";
+import { DASH_TABLE_SX, MatrixView } from "./MatrixView";
 
 const MONO = "'JetBrains Mono Variable', monospace";
 
@@ -52,21 +54,13 @@ function TableView({ widget, data }: { widget: TableWidget; data: Extract<Widget
   return (
     <>
       <TableContainer sx={{ flex: 1, minHeight: 0 }}>
-        <Table
-          size="small"
-          stickyHeader
-          aria-label={widget.title ?? t("Table")}
-          sx={{
-            "& .MuiTableCell-root": { fontFamily: MONO, fontSize: 12, py: 0.5, whiteSpace: "nowrap", maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis" },
-            // the theme's header is see-through, which a sticky one cannot be
-            "& .MuiTableHead-root .MuiTableCell-root": { bgcolor: "background.paper" },
-          }}
-        >
+        <Table size="small" stickyHeader aria-label={widget.title ?? t("Table")} sx={DASH_TABLE_SX}>
           <TableHead>
             <TableRow>
               {data.columns.map((c, i) => (
                 <TableCell key={c.name} align={numeric[i] ? "right" : "left"} title={c.name}>
-                  {c.name}
+                  {/* a related dataset's column is headed by its own name */}
+                  {c.name.slice(c.name.lastIndexOf(".") + 1)}
                 </TableCell>
               ))}
             </TableRow>
@@ -102,7 +96,7 @@ function TableView({ widget, data }: { widget: TableWidget; data: Extract<Widget
  */
 function styleWithFormats(widget: ChartWidget, formats: Record<string, NumberFormat> | undefined): ChartStyle | undefined {
   const style = widget.style;
-  const measures = widget.measures ?? [];
+  const measures = drawnNames(widget);
   const left = measures.find((m) => style?.series?.[m]?.axis !== "right");
   const right = measures.find((m) => style?.series?.[m]?.axis === "right");
   const format = style?.format ?? (left === undefined ? undefined : formats?.[left]);
@@ -127,11 +121,12 @@ function ChartView({
   const height = useElementHeight(ref);
   const xType = data.columns.find((c) => c.name === widget.spec.x)?.type ?? "";
   const style = useMemo(() => styleWithFormats(widget, data.formats), [widget, data.formats]);
-  // a counter over a measure is captioned with the measure's name
-  const caption = widget.spec.kind === "counter" ? widget.measures?.[0] : undefined;
+  // a counter over a measure or a value is captioned with its name
+  const caption = widget.spec.kind === "counter" ? drawnNames(widget)[0] : undefined;
+  if (widget.style?.look === "matrix") return <MatrixView widget={widget} data={data} onPick={onPick} picked={picked} />;
   return (
     <Box ref={ref} role="figure" aria-label={widget.title ?? t("Chart")} sx={{ flex: 1, minHeight: 0, overflow: "hidden", px: 1 }}>
-      {height > 0 && <ChartCanvas data={data.data} spec={widget.spec} height={height} xType={xType} onPick={onPick} picked={picked} style={style} caption={caption} />}
+      {height > 0 && <ChartCanvas data={data.data} spec={widget.spec} height={height} xType={xType} onPick={onPick} picked={picked} style={style} caption={caption} formats={widget.style?.format ? undefined : data.formats} />}
     </Box>
   );
 }
@@ -178,6 +173,10 @@ interface BodyProps {
 function Content({ widget, data, filterValue, onFilterValue, paramSpec, onPick, picked }: Omit<BodyProps, "loading">) {
   const { t } = useTranslation();
   if (widget.kind === "text") return <TextView widget={widget} />;
+  const missing = widget.kind === "chart" ? chartMissing(widget) : null;
+  if (missing) {
+    return <Typography sx={{ m: "auto", p: 1.5, fontSize: 13, color: "text.secondary", textAlign: "center" }}>{t(missing)}</Typography>;
+  }
   if (data?.kind === "error") {
     return (
       <Alert severity="error" variant="outlined" aria-label={t("Widget error")} sx={{ m: 1.5, py: 0, alignItems: "center", overflow: "auto" }}>

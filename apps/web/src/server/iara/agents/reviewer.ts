@@ -5,6 +5,8 @@ import crypto from "node:crypto";
 import type { LangGraphRunnableConfig } from "@langchain/langgraph";
 import { z } from "zod";
 
+import { detectParams } from "@/features/queries/queryParams";
+import { datasetsWritten, opsProblems } from "@/lib/dashboards/iaraOps";
 import { applyEdits } from "@/lib/iara/edits";
 import type { ContextCell, IaraChange, IaraEdit, IaraFileContext } from "@/lib/iara/protocol";
 
@@ -13,7 +15,7 @@ import { explainSql } from "../../ai/tools";
 import { contextText } from "../prompt";
 import { emit, MAX_REVIEWS, type IaraDeps, type IaraGraphState, type IaraUpdate } from "../state";
 
-const REVIEW_SYSTEM = `You review a change another agent wrote for a user's notebook or SQL editor.
+const REVIEW_SYSTEM = `You review a change another agent wrote for a user's notebook, SQL editor or dashboard.
 Answer ok=false only when the change does not do the task or is wrong.
 In notes, name anything with side effects (writes, deletes, overwrites tables or files, long runs) so the user sees it before approving. Be terse.`;
 
@@ -29,6 +31,10 @@ const NOT_A_QUERY = /^\s*(create|insert|update|delete|drop|alter|merge|copy|trun
 
 /** Problems that make a change impossible to apply to the open file (pure). */
 export function checkChange(change: IaraChange, ctx: IaraFileContext): string[] {
+  if (change.action === "edit_dashboard") {
+    return ctx.surface === "dashboard" ? opsProblems(change.operations, ctx) : ["edit_dashboard only works in a dashboard"];
+  }
+  if (ctx.surface === "dashboard") return [`${change.action} does not work in a dashboard: use edit_dashboard`];
   if (change.action === "edit_query") {
     if (ctx.surface !== "sql") return ["edit_query only works in the SQL editor"];
     return editProblems(ctx.query, change.edits);
@@ -69,6 +75,7 @@ function written(change: IaraChange, ctx: IaraFileContext): { kind: ContextCell[
       return cell ? { kind: cell.kind, code: applyEdits(cell.code, change.edits) } : null;
     }
     case "run_cell":
+    case "edit_dashboard":
       return null;
   }
 }
@@ -86,6 +93,11 @@ export function reviewerNode(deps: IaraDeps) {
       await explainSql(deps.tools, code.code).catch((e: Error) => problems.push(`The SQL does not plan: ${e.message}`));
     } else if (code?.kind === "python") {
       for (const item of (await deps.lint?.(code.code, "python")) ?? []) (item.severity === "error" ? problems : warnings).push(item.message);
+    } else if (!problems.length && change.action === "edit_dashboard") {
+      for (const { name, sql } of datasetsWritten(change.operations)) {
+        // a placeholder has no value to plan with
+        if (!detectParams(sql).length) await explainSql(deps.tools, sql).catch((e: Error) => problems.push(`The query of dataset ${name} does not plan: ${e.message}`));
+      }
     }
 
     let steps = s.steps;

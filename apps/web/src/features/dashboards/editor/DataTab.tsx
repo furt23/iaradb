@@ -11,7 +11,12 @@ import List from "@mui/material/List";
 import ListItem from "@mui/material/ListItem";
 import ListItemButton from "@mui/material/ListItemButton";
 import ListItemText from "@mui/material/ListItemText";
+import Stack from "@mui/material/Stack";
+import Tab from "@mui/material/Tab";
+import Tabs from "@mui/material/Tabs";
+import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
+import type { ColumnInfo } from "@iara/protocol";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -19,15 +24,22 @@ import { drafts } from "@/features/queries/drafts";
 import { SqlFileTab } from "@/features/queries/SqlFileTab";
 import { useNotify } from "@/features/shell/notify";
 import { type WranglerStep, WranglerView } from "@/features/wrangler";
-import type { Dataset, Recipe } from "@/lib/dashboards/types";
+import type { Dataset, Recipe, Widget } from "@/lib/dashboards/types";
 import { setDatasetMode } from "@/server/actions/extracts";
 import { saveQuery } from "@/server/actions/queries";
 
 import { AddDatasetMenu } from "./AddDatasetMenu";
 import { DatasetModeButton, DatasetModeLine } from "./DatasetModeLine";
 import { tableNames } from "./datasets";
+import { FormulaBar } from "./FormulaBar";
+import { MeasureList } from "./MeasureList";
+import { RelationshipsDialog } from "./RelationshipsDialog";
+import type { FoundColumns } from "./useDatasetColumns";
 import { useDebouncedSave } from "./useDebouncedSave";
 import { useExtractStatus } from "./useExtractStatus";
+import { useFormulaBar } from "./useFormulaBar";
+import { useMeasureActions } from "./useMeasureActions";
+import { useModel } from "./useModel";
 
 const NO_SCHEMA: Record<string, { name: string; type: string }[]> = {};
 const RECIPE_SAVE_MS = 800;
@@ -47,7 +59,19 @@ export function DataTab({
   onSaveRecipe,
   onDelete,
   onDatasetSaved,
+  widgets,
+  found,
+  load,
+  onWidget,
+  version,
 }: {
+  /** bumped when something other than the SQL editor wrote the datasets' files: it reads them again */
+  version: number;
+  /** the widgets that draw the measures made here */
+  widgets: Widget[];
+  found: FoundColumns;
+  load(name: string): Promise<ColumnInfo[]>;
+  onWidget(widget: Widget, reload?: boolean): void;
   slug: string;
   /** the kernel the wrangler runs its recipes on */
   kernelKey: string;
@@ -74,6 +98,14 @@ export function DataTab({
   // per dataset: a recipe still waiting to be saved goes on while another is picked
   const recipeSaver = useDebouncedSave<Recipe>(onSaveRecipe, RECIPE_SAVE_MS);
   const { statuses, refresh: refreshStatuses } = useExtractStatus(slug, datasets, shown);
+  const formula = useFormulaBar();
+  const measures = useMeasureActions(widgets, undefined, onWidget);
+  // null: closed; a dataset: it was just added, so its suggestions come first
+  const [relating, setRelating] = useState<string[] | null>(null);
+  const [side, setSide] = useState<"datasets" | "measures">("datasets");
+  const [search, setSearch] = useState("");
+  const { measures: allMeasures } = useModel();
+  const shownDatasets = datasets.filter((d) => d.name.toLowerCase().includes(search.trim().toLowerCase()));
 
   /** Imported or live: saved to the dataset's file, then the statuses are read again. */
   const changeMode = async (name: string, mode: "extract" | "live") => {
@@ -97,45 +129,56 @@ export function DataTab({
   return (
     <Box sx={{ display: shown ? "flex" : "none", flex: 1, minHeight: 0 }}>
       <Box sx={{ width: 260, flexShrink: 0, display: "flex", flexDirection: "column", borderRight: 1, borderColor: "divider", bgcolor: "background.paper" }}>
-        <Box sx={{ p: 1.5 }}>
-          <AddDatasetMenu
-            taken={datasets.map((d) => d.name)}
-            tables={tables}
-            onCreate={async (name, content) => {
-              const ok = await onAdd(name, content);
-              if (ok) setPicked(name);
-              return ok;
-            }}
-          />
+        <Tabs value={side} onChange={(_, next: "datasets" | "measures") => { setSide(next); setSearch(""); }} variant="fullWidth" aria-label={t("Data")} sx={{ minHeight: 40, flexShrink: 0, borderBottom: 1, borderColor: "divider", "& .MuiTab-root": { minHeight: 40, py: 0, textTransform: "none" } }}>
+          <Tab value="datasets" label={`${t("Datasets")} (${datasets.length})`} />
+          <Tab value="measures" label={`${t("Measures")} (${allMeasures.length})`} />
+        </Tabs>
+        <Box sx={{ display: side === "datasets" ? "flex" : "none", flexDirection: "column", flex: 1, minHeight: 0 }}>
+          <Stack spacing={1} sx={{ p: 1.5 }}>
+            <AddDatasetMenu
+              taken={datasets.map((d) => d.name)}
+              tables={tables}
+              onCreate={async (name, content) => {
+                const ok = await onAdd(name, content);
+                if (ok) setPicked(name);
+                // a new table is ready to be connected to the others
+                if (ok && datasets.length > 0) setRelating([name]);
+                return ok;
+              }}
+            />
+            <TextField size="small" fullWidth value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t("Search")} slotProps={{ htmlInput: { "aria-label": t("Search datasets") } }} />
+          </Stack>
+          <List dense sx={{ overflow: "auto", flex: 1, minHeight: 0 }} aria-label={t("Datasets")}>
+            {shownDatasets.map((d) => (
+              <ListItem
+                key={d.name}
+                disablePadding
+                // room for two icons: the list item only leaves 48px for one
+                sx={{ "& > .MuiListItemButton-root": { pr: 9 } }}
+                secondaryAction={
+                  <Box sx={{ display: "flex", alignItems: "center" }}>
+                    {statuses[d.name] && <DatasetModeButton name={d.name} status={statuses[d.name]} onChange={(mode) => void changeMode(d.name, mode)} />}
+                    <IconButton edge="end" size="small" aria-label={`${t("Delete dataset")} ${d.name}`} onClick={() => setDeleting(d.name)}>
+                      <DeleteOutline fontSize="small" />
+                    </IconButton>
+                  </Box>
+                }
+              >
+                <ListItemButton selected={d.name === current} onClick={() => setPicked(d.name)}>
+                  <ListItemText
+                    primary={d.name}
+                    secondary={<DatasetModeLine status={statuses[d.name]} />}
+                    slotProps={{ primary: { noWrap: true, sx: { fontFamily: "var(--font-mono, monospace)", fontSize: 13 } }, secondary: { sx: { fontSize: 11 } } }}
+                  />
+                </ListItemButton>
+              </ListItem>
+            ))}
+          </List>
         </Box>
-        <List dense sx={{ overflow: "auto", flex: 1 }} aria-label={t("Datasets")}>
-          {datasets.map((d) => (
-            <ListItem
-              key={d.name}
-              disablePadding
-              // room for two icons: the list item only leaves 48px for one
-              sx={{ "& > .MuiListItemButton-root": { pr: 9 } }}
-              secondaryAction={
-                <Box sx={{ display: "flex", alignItems: "center" }}>
-                  {statuses[d.name] && <DatasetModeButton name={d.name} status={statuses[d.name]} onChange={(mode) => void changeMode(d.name, mode)} />}
-                  <IconButton edge="end" size="small" aria-label={`${t("Delete dataset")} ${d.name}`} onClick={() => setDeleting(d.name)}>
-                    <DeleteOutline fontSize="small" />
-                  </IconButton>
-                </Box>
-              }
-            >
-              <ListItemButton selected={d.name === current} onClick={() => setPicked(d.name)}>
-                <ListItemText
-                  primary={d.name}
-                  secondary={<DatasetModeLine status={statuses[d.name]} />}
-                  slotProps={{ primary: { noWrap: true, sx: { fontFamily: "var(--font-mono, monospace)", fontSize: 13 } }, secondary: { sx: { fontSize: 11 } } }}
-                />
-              </ListItemButton>
-            </ListItem>
-          ))}
-        </List>
+        {side === "measures" && <MeasureList datasets={datasets} widgets={widgets} formula={formula} actions={measures} />}
       </Box>
       <Box sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+        {shown && formula.target && <FormulaBar key={formula.target.key} target={formula.target} datasets={datasets} found={found} load={load} actions={measures} onClose={formula.close} />}
         {recipe ? (
           <WranglerView
             key={current}
@@ -148,7 +191,7 @@ export function DataTab({
             onSteps={(steps) => recipeSaver.schedule(current, { source: recipe.source, steps })}
           />
         ) : current ? (
-          <SqlFileTab key={`${current}:${reopened}`} path={`dashboards/${slug}/datasets/${current}.sql`} shown={shown} schema={schema ?? NO_SCHEMA} />
+          <SqlFileTab key={`${current}:${reopened}:${version}`} path={`dashboards/${slug}/datasets/${current}.sql`} shown={shown} schema={schema ?? NO_SCHEMA} ownIara={false} />
         ) : (
           <Box sx={{ textAlign: "center", py: 8, px: 3, color: "text.secondary" }}>
             <Typography variant="h4" sx={{ color: "text.primary" }}>
@@ -157,6 +200,7 @@ export function DataTab({
           </Box>
         )}
       </Box>
+      <RelationshipsDialog open={relating !== null} slug={slug} focus={relating ?? []} datasets={datasets} found={found} load={load} onClose={() => setRelating(null)} />
       <Dialog open={deleting !== null} onClose={() => setDeleting(null)} maxWidth="xs" fullWidth>
         <DialogTitle>{t("Delete {{name}}?", { name: deleting })}</DialogTitle>
         <DialogActions>

@@ -6,6 +6,7 @@ import path from "node:path";
 import { joinQuery, splitQuery } from "@/features/queries/queryHeader";
 import { configToml, ID, parseConfig, randomId } from "@/lib/dashboards/config";
 import { checkLayout, layoutJson, parseLayout } from "@/lib/dashboards/layout";
+import { checkModelLayout, parseModelLayout, type ModelLayout } from "@/lib/dashboards/modelLayout";
 import { DATASET_NAME } from "@/lib/dashboards/query";
 import { checkRecipe, parseRecipe, recipeJson } from "@/lib/dashboards/recipe";
 import type { Dashboard, DashboardConfig, DashboardSummary, Dataset, LayoutItem, Recipe, Widget } from "@/lib/dashboards/types";
@@ -221,7 +222,8 @@ export async function readDashboard(slug: string): Promise<Dashboard> {
 
   const layout = (await attempt("layout.json", async () => parseLayout((await readOptional(pathIn(slug, "layout.json"))) ?? "[]"))) ?? [];
   const model = (await attempt("model.py", async () => (await readOptional(pathIn(slug, "model.py"))) ?? "")) ?? "";
-  return { slug, config, datasets, widgets, layout, model, problems };
+  const modelLayout = (await attempt("model_layout.json", async () => parseModelLayout((await readOptional(pathIn(slug, "model_layout.json"))) ?? "{}"))) ?? {};
+  return { slug, config, datasets, widgets, layout, model, modelLayout, problems };
 }
 
 /** A widget id that names a file (throws when it is not an id). */
@@ -355,6 +357,14 @@ export async function saveModel(slug: string, source: string): Promise<string> {
   if (source === "") await fs.rm(pathIn(slug, "model.py"), { force: true });
   else await writeAtomic(pathIn(slug, "model.py"), source);
   return source;
+}
+
+/** Where the model's diagram places each table. */
+export async function saveModelLayout(slug: string, layout: ModelLayout): Promise<ModelLayout> {
+  const checked = checkModelLayout(layout);
+  await readConfig(slug);
+  await writeAtomic(pathIn(slug, "model_layout.json"), `${JSON.stringify(checked, null, 2)}\n`);
+  return checked;
 }
 
 /** Remove a dashboard's folder and its published copy. Returns its id (null: its config could not be read). */

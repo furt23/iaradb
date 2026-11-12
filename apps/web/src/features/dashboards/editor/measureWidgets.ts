@@ -1,5 +1,6 @@
 /** What a measure added, renamed or deleted does to the widgets that draw it (pure). */
 
+import { asValues } from "@/lib/dashboards/chartFields";
 import type { ChartStyle, ChartWidget, Widget } from "@/lib/dashboards/types";
 
 /** The chart widgets that draw the measure. */
@@ -7,7 +8,7 @@ export const widgetsUsing = (widgets: readonly Widget[], name: string): ChartWid
   widgets.filter((w): w is ChartWidget => w.kind === "chart" && !!w.measures?.includes(name));
 
 /** The chart's style with the series style of `from` moved to `to`, or dropped when there is no `to`. */
-function restyled(chart: ChartWidget, from: string, to?: string): ChartWidget {
+export function restyled(chart: ChartWidget, from: string, to?: string): ChartWidget {
   const series = chart.style?.series;
   if (!chart.style || !series || !Object.hasOwn(series, from)) return chart;
   const { [from]: moved, ...rest } = series;
@@ -18,10 +19,15 @@ function restyled(chart: ChartWidget, from: string, to?: string): ChartWidget {
   return Object.keys(style).length ? { ...bare, style } : bare;
 }
 
-/** The chart drawing the measure too (a counter draws one: it replaces its measure). */
-export function withMeasure(chart: ChartWidget, name: string): ChartWidget {
+/** The chart drawing the measure too, after what it already draws (a card draws one: the measure takes its place). */
+export function withMeasure(chart: ChartWidget, name: string, word?: Parameters<typeof asValues>[1]): ChartWidget {
   if (chart.measures?.includes(name)) return chart;
-  return { ...chart, measures: chart.spec.kind === "counter" ? [name] : [...(chart.measures ?? []), name] };
+  const c = asValues(chart, word);
+  if (c.spec.kind === "counter" && c.style?.look !== "gauge") {
+    const { values: _v, ...bare } = c;
+    return { ...bare, measures: [name] };
+  }
+  return { ...c, measures: [...(c.measures ?? []), name] };
 }
 
 /** The chart without the measure (no `measures` key when it was the last). */

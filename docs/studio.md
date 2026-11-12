@@ -58,7 +58,7 @@ path = "data/events"
 ## Notebooks
 
 - A notebook is a `.py` file in marimo format. Each cell is a function: its parameters are the variables it reads and its return values are the variables it defines. The file runs with `python notebook.py`. A notebook that redefines a variable in several cells does not run in marimo itself.
-- Running a cell runs it, and the cells it reads from that have no value yet. The cells that read its values are marked stale; they run when you run them. Kernel → Run dependent cells automatically (a per-notebook choice, kept by the browser) runs them right away instead, as marimo does. Run all stops at the first cell that fails, as a notebook does; the cells after it keep their state. Changing a widget runs everything that depends on it, failures included.
+- Running a cell runs it, and the cells it reads from that have no value yet. The cells that read its values are marked stale; they run when you run them. Kernel → Run dependent cells automatically (a per-notebook choice, kept by the browser) runs them right away instead, as marimo does. Run all and the keys that run several cells stop at the first cell that fails, as a notebook does; the cells after it keep their state. Running one cell does not stop at a failure: only the cells that read from the failed cell are blocked, and they say why. Changing a widget runs everything that depends on it, under the same rule.
 - Keys (Ctrl, or Cmd on Mac): Shift+Enter or Ctrl+Enter runs the cell. Ctrl+Shift+Enter runs the cells above it. Ctrl+Alt+Enter runs it and the cells below. Ctrl+. stops the run. Ctrl+F opens find and replace over every cell with code showing: match case, regular expression (replacements may use `$1`) and whole word, Enter for the next match, Shift+Enter for the previous, and Replace or Replace all.
 - A variable can be redefined by later cells (`df = df.filter(...)`). A cell reads the nearest definition above it. A variable defined by one cell only is read from that cell wherever it is.
 - Python and SQL cells share data. A DataFrame from a Python cell can be queried by name in SQL, and a SQL cell's result is a variable in later Python cells.
@@ -181,25 +181,16 @@ Admins grant read access to `*` (everything), a catalog, a schema or a table. A 
 Grants apply wherever Studio runs the query on someone's behalf:
 - a dashboard, in the editor and when published: each viewer's own grants apply, and two viewers with different grants never share cached results;
 - publishing: refused when a dataset reads a table the publisher has no grant on;
-- Ask;
+- Iara;
 - the MCP server.
 
 They do not apply yet to notebooks, the SQL editor or the Data panel's previews: an editor running code there reads what the team bucket allows. With the Local cluster on, notebook code runs as Studio's user and can change `grants.json` itself.
 
-## Ask
-
-"Ask" in the dashboard editor turns a question into a dataset (one SQL query) and a chart or table.
-
-1. `gpt-6-luna`, with low reasoning effort, picks up to five of the tables you can read.
-2. `gpt-6-luna`, with medium reasoning effort, writes the query and the widget.
-3. Studio checks the proposal like any saved dataset and widget, and has the engine plan the query with your grants. When a check fails, the error goes back to the model, up to three attempts.
-4. You see the query, the tables used and a preview. Add to dashboard saves the dataset, the widget and its place on the canvas; Change asks for another proposal with your note; Cancel saves nothing.
-
-Ask needs `OPENAI_API_KEY` in Studio's environment; kernels never receive it. Table names and columns of the chosen tables are sent to OpenAI (requests are sent with `store: false`); the rows are not. A question waiting for your decision is kept in memory for 30 minutes and is lost if Studio restarts.
-
 ## Iara (chat agent)
 
-Iara is a chat panel in notebooks and in the SQL editor. It answers questions about your data and writes or fixes cells and queries. It is not available in dashboards.
+Iara is a chat panel in notebooks, in the SQL editor and in the dashboard editor. It answers questions about your data and writes or fixes cells, queries and dashboards.
+
+In a dashboard the button is in the page's header, and Iara sees the whole dashboard. One proposal can add or change datasets, measures, relationships, charts, tables, filters and their places on the canvas; the panel lists its steps, and Apply writes them together. Iara then reads how the widgets draw, and proposes a fix when one that worked stops working. Table names and columns she reads are sent to OpenAI (requests are sent with `store: false`); rows are sent only when she runs a query on your behalf.
 
 - **Reading:** Iara reads on its own, with your grants. It uses the same tools as the [MCP server](#mcp-server) (`list_tables`, `describe_table`, `explain_sql`, `run_sql`, `list_files`, `read_file`), called in-process. It is not exposed through MCP.
 - **Changing:** every new or edited cell, every SQL edit and every run needs your approval. A proposal appears in the file as an inline diff with Keep and run, Keep and Reject. Nothing is written or saved until you keep it, and Undo after keeping reverts it. If the code changed since Iara read it, the proposal is refused; reject it and ask again.
@@ -238,9 +229,28 @@ A dashboard is a canvas of datasets (one SQL query each) and widgets (charts or 
 
 Datasets are imported by default. Publishing, each scheduled run and "Refresh now" run the dataset once, with the publisher's grants, and store the result as a Parquet file under `_iara/extracts/<dashboard id>/` in the bucket (`.iara/extracts/` in the workspace without one). Renders read that copy in a kernel Studio runs itself, so filters and chart picks need no cluster. A viewer must have grants on every table the dataset read. A dataset with parameters of its own (`:name`), or with `-- iara:mode live` in its header (`"mode": "live"` in a recipe), runs on every render instead; the switch is in the editor's Data tab. While a dataset has no copy built from its current query, it runs live. A copy over `IARA_EXTRACT_MAX_MB` fails that dataset's refresh. With every dataset imported, runs store no initial-view render.
 
-The Model tab edits the dashboard's `model.py`: measures, one per line, such as `revenue = sum(orders.o_totalprice)` or `margin = measure(divide(sum(orders.profit), sum(orders.o_totalprice)), format="percent")`. The file has Python syntax but is never run: Studio checks it as you type, completes names (Ctrl+Space) and turns each measure into SQL. Datasets are available by name.
+A dashboard's model is stored in its `model.py`, which the formula bar, Quick measure, the diagram and Iara write: measures, one per line, such as `revenue = sum(orders.o_totalprice)` or `margin = measure(divide(sum(orders.profit), sum(orders.o_totalprice)), format="percent")`. The file has Python syntax but is never run: the formula bar checks a measure as you type and completes names (Ctrl+Space), and Studio turns each measure into SQL. Datasets are available by name.
 
-Measures are made on the canvas. The Fields pane on its right lists each dataset's columns and measures (ƒx), the calendar and the parameters. "+ Measure", or New measure in a dataset's menu, opens the formula bar above the canvas: type `name = expression`, pick a number format, and confirm; the line is added to `model.py` and the measure to the selected chart. A measure's menu edits it in the same bar, renames it (in the model and in every chart that uses it) or deletes it. Quick measure writes the line from a template (sum of a column, % of total, year to date, change vs previous year, running total, rank, rolling total). With a chart selected, checking a measure adds it to the chart and clicking a column sets the x axis; with a table selected, checking a column shows it. A field can also be dragged onto a chart or table.
+Select a chart to set it up. The Data tab of its settings has the visual and the fields; the Format tab has the rest.
+
+| Visual | Data |
+|---|---|
+| Columns, bars (stacked or 100%), columns and line, line, area (stacked), heatmap, matrix, waterfall | X axis, Legend, Values |
+| Pie, donut, treemap, funnel | X axis, Values |
+| Card, gauge | Values (a gauge's second value is its maximum, unless Format sets one) |
+| Scatter, histogram | Columns of one dataset |
+
+X axis, Legend and Values each take a column of any dataset: drag it from the Fields pane, check its box there, or click the well's "Add" slot, which lists the fields by dataset and searches them. A column of another dataset is stored as `dataset.column`. A number goes to Values as a sum and anything else to the X axis, then to Legend. Click a value to change its name, its aggregation (sum, average, min, max, count, distinct count) and its number format. A value needs no line in `model.py`. Values also takes measures and "Rows", the row count of a dataset. Charts of categories have a sort and a "Show top" limit. A matrix has no totals. Waterfall's last column is the total of the steps.
+
+Format sets the palette, a color per series or slice, the legend's position, axis titles, gridlines, smooth lines, data labels and the number format.
+
+A table takes columns of the datasets its own dataset points at, also as `dataset.column`.
+
+The Data tab holds the datasets and the measures. Its left side switches between them, each with a search; measures are grouped by the dataset they read first.
+
+The Model tab shows the datasets and calendars as tables on a diagram. Drag a table by its title to place it (arrow keys move it too), and "Arrange" places them all again, facts on the left; the places are saved in the dashboard's `model_layout.json`. Drag a column onto a column of another table to relate them. A click on a line selects it, to remove it. N marks the many side and 1 the one side; a dashed line is a calendar's. "Relationships" there lists them and connects datasets without writing `model.py`. It suggests columns that look like the same key (`o_custkey` and `c_custkey`, `customer_id` and `customers.id`), or you pick any two. It reads both columns to find which has one row per value, and refuses when neither has. Adding a dataset opens that list, and so does using two datasets that nothing connects on the canvas. A chart reaches a column from the dataset of its values to the "one" side, not the other way: a sum of `orders` can be drawn by `customer.c_mktsegment`, a sum of `customer` by `orders.o_orderstatus` cannot.
+
+The Fields pane on the canvas's right lists each dataset's columns and measures (ƒx), the calendar and the parameters. "+ Measure", here or in the Data tab's list of measures, or New measure in a dataset's menu, opens the formula bar: type `name = expression`, pick a number format, and confirm; the line is added to `model.py` and the measure to the selected chart. Clicking a measure's name, in either place or on a chart's Values, opens it in the bar. A format picked there for a measure that exists applies at once, without confirming. A measure's menu also renames it (in the model and in every chart that uses it) or deletes it. Quick measure writes the line from a template (sum of a column, % of total, year to date, change vs previous year, running total, rank, rolling total). Only a field's checkbox puts it on the selected chart or table or takes it off. A field can also be dragged onto a chart or table. Clicking the canvas outside a widget deselects it.
 
 | Function | What it gives |
 |---|---|
@@ -280,7 +290,7 @@ Sign-in is off unless `IARA_AUTH=auth0` (or `AUTH0_DOMAIN` is set). With sign-in
 | `IARA_RESULT_MEMORY` | `128MB` | Largest result kept in memory. |
 | `IARA_STUDIO_DIR` | the checkout's `apps/web` | Where `iara serve` finds the web app. |
 | `IARA_SCHEDULER` | on | `0` turns the job scheduler off. |
-| `OPENAI_API_KEY` | | Key for Iara and Ask (OpenAI API). Without it, they answer that the key is not set. |
+| `OPENAI_API_KEY` | | Key for Iara (OpenAI API). Without it, she answers that the key is not set. |
 | `IARA_AUTH` | off | `auth0` turns on sign-in (see [Sign-in](#sign-in)). |
 | `IARA_ALLOWED_EMAILS` | | Editors, comma-separated. Used with sign-in on. |
 | `IARA_VIEWER_EMAILS` | | Viewers, comma-separated: dashboards only. |

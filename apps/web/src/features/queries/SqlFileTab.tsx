@@ -50,7 +50,7 @@ async function persist(path: string): Promise<Status> {
  * default cluster with Ctrl+Enter, explain. Its text lives in `drafts`, so a
  * rename (which remounts the tab) keeps unsaved edits.
  */
-export function SqlFileTab({ path, shown, schema }: { path: string; shown: boolean; schema: Record<string, { name: string }[]> }) {
+export function SqlFileTab({ path, shown, schema, ownIara = true }: { path: string; shown: boolean; schema: Record<string, { name: string }[]>; /** false: the page around it has Iara, who sees more than this query */ ownIara?: boolean }) {
   const [text, setText] = useState<string | null>(() => drafts.get(path)?.text ?? null);
   const [failure, setFailure] = useState<string | null>(null);
   const [status, setStatus] = useState<Status>(() => {
@@ -163,9 +163,11 @@ export function SqlFileTab({ path, shown, schema }: { path: string; shown: boole
           </Button>
         )}
         <FileActionsMenu path={path} kind="sql" />
-        <Button startIcon={<IaraMark size={20} />} onClick={() => setIaraOpen(!iaraOpen)} sx={{ color: iaraOpen ? "secondary.main" : "text.secondary" }}>
-          Iara
-        </Button>
+        {ownIara && (
+          <Button startIcon={<IaraMark size={20} />} onClick={() => setIaraOpen(!iaraOpen)} sx={{ color: iaraOpen ? "secondary.main" : "text.secondary" }}>
+            Iara
+          </Button>
+        )}
         <SqlRunButtons runner={runner} onRun={run} query={body} source={path} values={paramValues} blocked={missing.length > 0} />
       </Box>
       <Box sx={{ display: "flex", flex: 1, minHeight: 0 }}>
@@ -192,7 +194,7 @@ export function SqlFileTab({ path, shown, schema }: { path: string; shown: boole
             </Paper>
           </Box>
         </Box>
-        {iaraOpen && <IaraPanel fileId={fileIdOf(path) ?? path} surface="sql" getContext={iara.getContext} adapter={iara.adapter} onClose={() => setIaraOpen(false)} />}
+        {ownIara && iaraOpen && <IaraPanel fileId={fileIdOf(path) ?? path} surface="sql" getContext={iara.getContext} adapter={iara.adapter} onClose={() => setIaraOpen(false)} />}
       </Box>
     </Box>
   );

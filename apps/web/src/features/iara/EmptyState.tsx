@@ -32,6 +32,11 @@ const EXAMPLES: Record<IaraSurface, Example[]> = {
     { text: "Explain this query", hint: "What it reads and returns", Icon: DescriptionOutlined },
     { text: "Make this query faster", hint: "Suggestions you can apply", Icon: SpeedOutlined },
   ],
+  dashboard: [
+    { text: "Which tables can I use?", hint: "See what is in your catalog", Icon: TableChartOutlined },
+    { text: "Add a chart of sales by month", hint: "Iara builds it, you approve", Icon: InsertChartOutlined },
+    { text: "Explain this dashboard", hint: "What each chart shows", Icon: DescriptionOutlined },
+  ],
 };
 
 /** A new conversation: a hello and three prompts that fill the composer. */

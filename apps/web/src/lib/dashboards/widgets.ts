@@ -3,8 +3,8 @@
 import type { ChartAgg, ChartSpec } from "@iara/protocol";
 
 import { ID, randomId } from "./config";
-import type { ChartWidget, FilterControl, FilterField, FilterWidget, TableWidget, TextWidget, Widget } from "./types";
-import { checkChartStyle, checkColumnFormats } from "./widgetStyle";
+import type { ChartSort, ChartWidget, FilterControl, FilterField, FilterWidget, TableWidget, TextWidget, ValueAgg, ValueField, Widget } from "./types";
+import { checkChartStyle, checkColumnFormats, checkNumberFormat } from "./widgetStyle";
 
 export const newWidgetId = randomId;
 
@@ -15,6 +15,10 @@ export const FILTER_CONTROLS: readonly FilterControl[] = ["select", "multi", "da
 const VALUE_TYPES: readonly string[] = ["text", "number", "date"];
 const PLACEHOLDER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const MAX_MEASURES = 10;
+const VALUE_AGGS: readonly string[] = ["sum", "avg", "count", "count_distinct", "min", "max"];
+const CHART_SORTS: readonly string[] = ["x", "x_desc", "value", "value_asc"];
+const MAX_VALUE_NAME = 120;
+const MAX_TOP = 1000;
 
 type Obj = Record<string, unknown>;
 
@@ -66,6 +70,32 @@ function measureNames(v: unknown): string[] {
   return names;
 }
 
+/** The columns a chart aggregates: a name is a result column, so it stays out of the way of `:param` scanning. */
+function valueFields(v: unknown, measures: readonly string[] = []): ValueField[] {
+  if (!Array.isArray(v) || !v.length || v.length + measures.length > MAX_MEASURES) throw new Error(`values is a list of 1 to ${MAX_MEASURES} fields, with the measures`);
+  const fields = v.map((item): ValueField => {
+    const f = object(item, "a value");
+    const name = text(f.name, "value name");
+    if (name.length > MAX_VALUE_NAME || /[:\0]/.test(name)) throw new Error(`${JSON.stringify(name)} is not a value name`);
+    if (typeof f.agg !== "string" || !VALUE_AGGS.includes(f.agg)) throw new Error(`value agg is one of ${VALUE_AGGS.join(", ")}`);
+    if (f.column === undefined && f.agg !== "count") throw new Error("a value without a column counts rows");
+    return { name, dataset: text(f.dataset, "value dataset"), ...(f.column !== undefined && { column: text(f.column, "value column") }), agg: f.agg as ValueAgg, ...(f.format !== undefined && { format: checkNumberFormat(f.format, name) }) };
+  });
+  const names = [...measures, ...fields.map((f) => f.name)];
+  if (new Set(names).size !== names.length) throw new Error("values has a name twice");
+  return fields;
+}
+
+function chartSort(v: unknown): ChartSort {
+  if (typeof v !== "string" || !CHART_SORTS.includes(v)) throw new Error(`sort is one of ${CHART_SORTS.join(", ")}`);
+  return v as ChartSort;
+}
+
+function chartTop(v: unknown): number {
+  if (typeof v !== "number" || !Number.isInteger(v) || v < 1 || v > MAX_TOP) throw new Error(`top is a whole number from 1 to ${MAX_TOP}`);
+  return v;
+}
+
 function field(v: unknown): FilterField {
   const f = object(v, "a field");
   return { dataset: text(f.dataset, "field dataset"), column: text(f.column, "field column") };
@@ -94,16 +124,21 @@ export function checkWidget(id: string, value: unknown): Widget {
     case "text":
       if (typeof c.markdown !== "string") throw new Error("markdown is text");
       return textWidget(id, c.markdown);
-    case "chart":
+    case "chart": {
+      const measures = c.measures !== undefined ? measureNames(c.measures) : undefined;
       return {
         id,
         kind: "chart",
         ...optionalTitle(c.title),
         dataset: text(c.dataset, "dataset"),
         spec: chartSpec(c.spec),
-        ...(c.measures !== undefined && { measures: measureNames(c.measures) }),
+        ...(measures && { measures }),
+        ...(c.values !== undefined && { values: valueFields(c.values, measures) }),
+        ...(c.sort !== undefined && { sort: chartSort(c.sort) }),
+        ...(c.top !== undefined && { top: chartTop(c.top) }),
         ...(c.style !== undefined && { style: checkChartStyle(c.style) }),
       };
+    }
     case "table":
       return {
         id,
@@ -139,7 +174,7 @@ export function parseWidget(id: string, json: string): Widget {
 export function widgetJson(w: ChartWidget | TableWidget | FilterWidget): string {
   const fields =
     w.kind === "chart"
-      ? { kind: w.kind, title: w.title, dataset: w.dataset, spec: w.spec, measures: w.measures, style: w.style }
+      ? { kind: w.kind, title: w.title, dataset: w.dataset, spec: w.spec, measures: w.measures, values: w.values, sort: w.sort, top: w.top, style: w.style }
       : w.kind === "table"
         ? { kind: w.kind, title: w.title, dataset: w.dataset, columns: w.columns, formats: w.formats }
         : { kind: w.kind, title: w.title, control: w.control, fields: w.fields, value_type: w.value_type, param: w.param };

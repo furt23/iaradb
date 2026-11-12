@@ -25,7 +25,7 @@ export function AddDatasetMenu({ taken, tables, onCreate }: { taken: string[]; t
   };
   return (
     <>
-      <Button variant="contained" size="small" startIcon={<Add />} onClick={(e) => setAnchor(e.currentTarget)} aria-haspopup="menu">
+      <Button variant="contained" size="small" fullWidth startIcon={<Add />} onClick={(e) => setAnchor(e.currentTarget)} aria-haspopup="menu">
         {t("Add dataset")}
       </Button>
       <Menu anchorEl={anchor} open={anchor !== null} onClose={() => setAnchor(null)}>

@@ -44,10 +44,19 @@ describe("FieldTreeView", () => {
     expect(checkboxes(html(undefined))).toEqual([]);
   });
 
-  it("checks a chart's measures and marks its x column", () => {
-    const markup = html(chart);
-    expect(checkboxes(markup)).toEqual([{ name: "revenue", checked: true }]);
-    expect(markup).toContain('aria-pressed="true"');
+  it("checks what a chart draws: its measures and its x column", () => {
+    expect(checkboxes(html(chart))).toEqual([
+      { name: "id", checked: false },
+      { name: "region", checked: true },
+      { name: "revenue", checked: true },
+    ]);
+  });
+
+  it("marks the measure being edited, and only that row", () => {
+    const markup = renderToStaticMarkup(
+      createElement(FieldTreeView, { tree, widget: chart, isOpen: () => true, onToggle: () => undefined, onActivate: () => undefined, onMenu: () => undefined, selectedMeasure: "revenue", onSelectMeasure: () => undefined }),
+    );
+    expect(markup.match(/aria-current="true"/g)).toHaveLength(1);
   });
 
   it("checks the columns a table shows", () => {

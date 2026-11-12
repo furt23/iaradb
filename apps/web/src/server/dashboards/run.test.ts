@@ -689,10 +689,57 @@ describe("measure charts", () => {
 
   it("leaves a chart with an empty list of measures to the kernel", async () => {
     const k = measureKernel();
-    const r = await renderModel([{ ...byRegion, measures: [] }], deps(k.request));
+    const r = await renderModel([{ ...byRegion, measures: [], spec: { ...byRegion.spec, y: ["amount"] } }], deps(k.request));
     expect(k.calls.some((c) => c.method === "result.chart")).toBe(true);
     expect(r.widgets.measure1.kind).toBe("chart");
     expect(modelMock.query).not.toHaveBeenCalled();
+  });
+});
+
+describe("charts with values of their own", () => {
+  const sales: Dataset = { name: "sales", sql: "SELECT * FROM sales", params: {} };
+  const value = { name: "Sum of amount", dataset: "sales", column: "amount", agg: "sum" as const };
+  const byRegion: ChartWidget = { ...chart, id: "values01", values: [value], spec: { kind: "bar", x: "region", y: [], agg: "sum" } };
+  const render = (w: Widget[], d: RunDeps) => renderDashboard({ datasets: [sales], widgets: w, model: MODEL }, {}, d);
+
+  it("asks the model for the value, as a measure of its name, without the kernel's aggregation", async () => {
+    const k = measureKernel();
+    await render([byRegion], deps(k.request));
+    const [asked, q] = modelMock.query.mock.calls.at(-1)!;
+    expect(q.measures).toEqual(["Sum of amount"]);
+    expect(asked.measures[0]).toMatchObject({ name: "Sum of amount", datasets: ["sales"], atoms: [{ sql: 'SUM("amount")', agg: "sum" }] });
+    expect(k.calls.some((c) => c.method === "result.chart")).toBe(false);
+  });
+
+  it("draws measures first, then values", async () => {
+    await render([{ ...byRegion, measures: ["revenue"] }], deps(measureKernel().request));
+    expect(modelMock.query.mock.calls.at(-1)![1].measures).toEqual(["revenue", "Sum of amount"]);
+  });
+
+  it("orders as the chart says", async () => {
+    await render([{ ...byRegion, sort: "x_desc" }], deps(measureKernel().request));
+    expect(modelMock.query.mock.calls.at(-1)![1].order).toBe("x_desc");
+  });
+
+  it("reads more rows for a legend or a matrix", async () => {
+    await render([{ ...byRegion, spec: { ...byRegion.spec, group: "year" } }], deps(measureKernel().request));
+    expect(modelMock.query.mock.calls.at(-1)![1].limit).toBe(2501);
+    await render([{ ...byRegion, style: { look: "matrix" } }], deps(measureKernel().request));
+    expect(modelMock.query.mock.calls.at(-1)![1].limit).toBe(2501);
+  });
+
+  it("keeps the first categories for a top", async () => {
+    const k = measureKernel([["a", 3], ["b", 2], ["c", 1]], [{ name: "region", type: "string" }, { name: "Sum of amount", type: "double" }]);
+    const r = await render([{ ...byRegion, top: 2 }], deps(k.request));
+    const shown = r.widgets.values01;
+    expect(shown.kind === "chart" && shown.data.rows.map((row) => row[0])).toEqual(["a", "b"]);
+  });
+
+  it("runs nothing for a chart still missing its fields, and reports no failure", async () => {
+    const k = measureKernel();
+    const r = await render([{ ...byRegion, values: undefined }, { ...byRegion, id: "values02", spec: { ...byRegion.spec, x: "" } }], deps(k.request));
+    expect(r.widgets).toEqual({});
+    expect(k.calls).toEqual([]);
   });
 });
 

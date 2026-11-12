@@ -7,13 +7,15 @@ import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 
 import { formatNumber, numberLocale } from "@/lib/dashboards/numberFormat";
-import type { ChartStyle, PickValue } from "@/lib/dashboards/types";
+import type { ChartStyle, NumberFormat, PickValue } from "@/lib/dashboards/types";
 import { formatCompact } from "@/lib/format";
 
-import { pickOf, toCategorical, toPoints } from "./chartSpec";
+import { numberOf, pickOf, toCategorical, toPoints } from "./chartSpec";
 import { EChart } from "./echarts/EChart";
-import { chartOption } from "./echarts/options";
+import { gaugeOption } from "./echarts/looks";
+import { chartOption, pickModeOf } from "./echarts/options";
 import { useChartColors } from "./echarts/palette";
+import { ownColor, seriesColors } from "./echarts/parts";
 
 /** the line under a counter's number */
 const COUNTER_CAPTIONS: Record<ChartAgg, string> = {
@@ -48,6 +50,7 @@ export function ChartCanvas({
   onPick,
   picked,
   caption,
+  formats,
 }: {
   data: ChartData;
   spec: ChartSpec;
@@ -57,25 +60,33 @@ export function ChartCanvas({
   onPick?(value: PickValue | undefined): void;
   picked?: PickValue;
   caption?: string;
+  /** each series' number format, where it has its own: its tooltip and labels use it */
+  formats?: Record<string, NumberFormat>;
 }) {
   const { t, i18n } = useTranslation();
   const locale = numberLocale(i18n.language);
   const colors = useChartColors();
   const counter = spec.kind === "counter";
+  const gauge = counter && style?.look === "gauge";
   const categorical = useMemo(() => (counter || spec.kind === "scatter" ? null : toCategorical(data, spec)), [data, spec, counter]);
   const points = useMemo(() => (spec.kind === "scatter" ? toPoints(data, spec) : null), [data, spec]);
   const pickable = onPick !== undefined && categorical !== null && spec.kind !== "histogram";
   const at = pickable && picked !== undefined ? categorical.raw.indexOf(picked) : -1;
-  const option = useMemo(
-    () => (counter ? null : chartOption({ spec, categorical, points, xType, style, colors, picked: at, locale })),
-    [counter, spec, categorical, points, xType, style, colors, at, locale],
-  );
+  const option = useMemo(() => {
+    if (gauge) {
+      const [value, target] = data.rows[0] ?? [];
+      return gaugeOption({ value: numberOf(value), target: numberOf(target), name: caption ?? spec.y[0] ?? "", style, colors, palette: seriesColors({ style, colors }), locale });
+    }
+    return counter ? null : chartOption({ spec, categorical, points, xType, style, colors, picked: at, locale, formats });
+  }, [gauge, counter, data, caption, spec, categorical, points, xType, style, colors, at, locale, formats]);
 
   if (!option) {
-    const value = data.rows[0]?.[0] ?? null;
+    const raw = data.rows[0]?.[0] ?? null;
+    const value = numberOf(raw) ?? raw;
+    const own = caption ? ownColor(style, caption)?.color : undefined;
     return (
       <Box sx={{ height, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 0.5 }}>
-        <Typography sx={{ fontSize: 48, fontWeight: 600, lineHeight: 1.1, fontVariantNumeric: "tabular-nums" }}>
+        <Typography sx={{ fontSize: 48, fontWeight: 600, lineHeight: 1.1, fontVariantNumeric: "tabular-nums", ...(own && { color: own }) }}>
           {typeof value === "number" && style?.format ? formatNumber(value, style.format, locale) : counterText(value)}
         </Typography>
         <Typography sx={{ fontSize: 12, color: "text.secondary" }}>{caption ?? t(COUNTER_CAPTIONS[spec.agg], { column: spec.y[0] })}</Typography>
@@ -86,7 +97,7 @@ export function ChartCanvas({
     <EChart
       option={option}
       height={height}
-      pickBy={spec.kind === "pie" ? "item" : "axis"}
+      pickBy={pickModeOf(spec.kind, style?.look)}
       onPick={
         pickable
           ? (i) => {

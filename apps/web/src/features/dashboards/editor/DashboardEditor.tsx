@@ -9,13 +9,19 @@ import type { ColumnInfo } from "@iara/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { IaraPanel } from "@/features/iara/IaraPanel";
+import type { IaraAdapter } from "@/features/iara/types";
+import { drafts } from "@/features/queries/drafts";
 import { ErrorState } from "@/features/shell/PageHeader";
 import { useNotify } from "@/features/shell/notify";
+import { useShell } from "@/features/shell/ShellProvider";
+import type { ModelLayout } from "@/lib/dashboards/modelLayout";
 import { pickableIds } from "@/lib/dashboards/query";
 import type { CrossPicks, DashboardConfig, Dataset, FilterValues, LayoutItem, Recipe, Widget } from "@/lib/dashboards/types";
 import { newWidgetId } from "@/lib/dashboards/widgets";
 import { checkModel } from "@/lib/model/check";
 import { catalogSchema } from "@/server/actions/catalog";
+import type { ActionResult } from "@/server/result";
 import {
   deleteDatasetAction,
   deleteWidgetAction,
@@ -25,22 +31,23 @@ import {
   saveDatasetAction,
   saveLayoutAction,
   saveModelAction,
+  saveModelLayoutAction,
   saveRecipeAction,
   saveWidgetAction,
   type OpenedDashboard,
 } from "@/server/actions/dashboards";
 
 import { useDashboardData } from "../canvas/useDashboardData";
-import { AskDialog } from "./AskDialog";
 import { CanvasTab } from "./CanvasTab";
+import { applyDashboardOps, dashboardContext, outcomeOf, type DashboardIo } from "./dashboardIara";
 import { DataTab } from "./DataTab";
 import { EditorHeader } from "./EditorHeader";
-import { ModelTab } from "./ModelTab";
+import { ModelDiagram } from "./ModelDiagram";
 import { newLayoutItem, newWidget, sameLayout, type NewKind } from "./newWidget";
 import { PublishDialog } from "./PublishDialog";
 import { RefreshDialog } from "./RefreshDialog";
 import { SettingsDialog } from "./SettingsDialog";
-import { useDatasetColumns } from "./useDatasetColumns";
+import { useDatasetColumns, useReadColumns } from "./useDatasetColumns";
 import { useDebouncedSave } from "./useDebouncedSave";
 import { ModelContext, modelSchema } from "./useModel";
 
@@ -51,10 +58,27 @@ const WIDGET_SAVE_MS = 400;
 const LAYOUT_SAVE_MS = 500;
 const LAYOUT = "layout";
 const MODEL = "model";
-/** the Model tab's editor saves 800 ms after the last keystroke, as the Data tab's does */
+/** a change to the model is saved 800 ms after the last one */
 const MODEL_SAVE_MS = 800;
 /** the Data tab's editor saves 800 ms after the last keystroke: datasets are read back once it has */
 const DATASET_SAVE_SETTLE_MS = 1000;
+
+/** The dashboard's files, for an approved change: each step throws with the reason it could not be done. */
+function iaraIo(slug: string): DashboardIo {
+  const done = async (r: Promise<ActionResult<unknown>>) => {
+    const out = await r;
+    if (!out.ok) throw new Error(out.error.message);
+  };
+  return {
+    saveDataset: (name, text) => done(saveDatasetAction(slug, name, text)),
+    deleteDataset: (name) => done(deleteDatasetAction(slug, name)),
+    saveModel: (source) => done(saveModelAction(slug, source)),
+    saveWidget: (widget) => done(saveWidgetAction(slug, widget)),
+    deleteWidget: (id) => done(deleteWidgetAction(slug, id)),
+    saveLayout: (items) => done(saveLayoutAction(slug, items)),
+    newId: newWidgetId,
+  };
+}
 
 function Editor({ slug, opened }: { slug: string; opened: OpenedDashboard }) {
   const { t } = useTranslation();
@@ -66,7 +90,10 @@ function Editor({ slug, opened }: { slug: string; opened: OpenedDashboard }) {
   const [model, setModel] = useState(opened.dashboard.model);
   const [tab, setTab] = useState<Tab>("canvas");
   const [selected, setSelected] = useState<string | null>(null);
-  const [dialog, setDialog] = useState<"settings" | "schedule" | "publish" | "ask" | null>(null);
+  const [dialog, setDialog] = useState<"settings" | "schedule" | "publish" | null>(null);
+  const { iaraOpen, setIaraOpen } = useShell();
+  const [modelLayout, setModelLayout] = useState(opened.dashboard.modelLayout ?? {});
+  const [datasetsVersion, setDatasetsVersion] = useState(0);
   const [schema, setSchema] = useState<Schema | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const latest = useRef(dashboard);
@@ -108,7 +135,15 @@ function Editor({ slug, opened }: { slug: string; opened: OpenedDashboard }) {
       rerun();
     }
   }, MODEL_SAVE_MS);
-  const flushSaves = () => Promise.all([widgetSaver.flush(), layoutSaver.flush(), modelSaver.flush()]);
+  const modelLayoutSaver = useDebouncedSave<ModelLayout>(async (_key, places) => {
+    const r = await saveModelLayoutAction(slug, places);
+    if (!r.ok) toast(r.error.message);
+  }, LAYOUT_SAVE_MS);
+  const changeModelLayout = (places: ModelLayout) => {
+    setModelLayout(places);
+    modelLayoutSaver.schedule(LAYOUT, places);
+  };
+  const flushSaves = () => Promise.all([widgetSaver.flush(), layoutSaver.flush(), modelSaver.flush(), modelLayoutSaver.flush()]);
 
   // the catalog's tables, for the SQL editor and "From a table", the first time the Data tab is shown
   useEffect(() => {
@@ -123,6 +158,7 @@ function Editor({ slug, opened }: { slug: string; opened: OpenedDashboard }) {
     setDashboard(r.data.dashboard);
     setPublished(r.data.published);
     setModel(r.data.dashboard.model);
+    setModelLayout(r.data.dashboard.modelLayout ?? {});
     rerun();
   };
 
@@ -282,6 +318,43 @@ function Editor({ slug, opened }: { slug: string; opened: OpenedDashboard }) {
   };
 
   const problems = dashboard.problems;
+
+  // Iara reads the editor as it is at each message, and an approved change goes to the files, which are then read back
+  const live = useRef({ dashboard, model, found: columns.found, tab, selected, result: data.result, reload, flushSaves });
+  useEffect(() => {
+    live.current = { dashboard, model, found: columns.found, tab, selected, result: data.result, reload, flushSaves };
+  });
+  // the columns she is told about
+  useReadColumns(dashboard.datasets, columns.found, columns.load, iaraOpen);
+  const iara = useMemo(() => {
+    const getContext = () => {
+      const now = live.current;
+      return dashboardContext({ dashboard: now.dashboard, model: now.model, found: now.found, view: now.tab, selected: now.selected, result: now.result });
+    };
+    const adapter: IaraAdapter = {
+      async apply(change, run) {
+        if (change.action !== "edit_dashboard") throw new Error("not possible in a dashboard");
+        const now = live.current;
+        await now.flushSaves();
+        const before = now.result;
+        // what the SQL editor holds of a dataset would write over the new query
+        for (const op of change.operations) if (op.op === "set_dataset") drafts.delete(`dashboards/${slug}/datasets/${op.name}.sql`);
+        try {
+          await applyDashboardOps(change.operations, { datasets: now.dashboard.datasets, layout: now.dashboard.layout, model: now.model }, iaraIo(slug));
+        } finally {
+          setDatasetsVersion((n) => n + 1);
+          await live.current.reload();
+        }
+        if (!run) return { applied: true, ran: false };
+        const opened = await openDashboard(slug);
+        const rendered = await runDraft(slug, {}, []);
+        if (!opened.ok || !rendered.ok) return { applied: true, ran: false };
+        return outcomeOf(opened.data.dashboard.widgets, before, rendered.data);
+      },
+    };
+    return { getContext, adapter };
+  }, [slug]);
+
   return (
     <Box sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       <EditorHeader
@@ -292,45 +365,67 @@ function Editor({ slug, opened }: { slug: string; opened: OpenedDashboard }) {
         onRefresh={() => void refresh()}
         onSettings={() => setDialog("settings")}
         onSchedule={() => setDialog("schedule")}
-        onAsk={() => setDialog("ask")}
+        iaraOpen={iaraOpen}
+        onIara={() => setIaraOpen(!iaraOpen)}
         // the copy is made from the files: what is waiting to be saved goes first
         onPublish={() => void flushSaves().then(() => setDialog("publish"))}
       />
-      <Box sx={{ px: 2, borderBottom: 1, borderColor: "divider", bgcolor: "background.paper", flexShrink: 0 }}>
-        <Tabs value={tab} onChange={(_, next: Tab) => changeTab(next)} aria-label={t("Dashboard sections")}>
-          <Tab value="canvas" label={t("Canvas")} />
-          <Tab value="data" label={t("Data")} />
-          <Tab value="model" label={t("Model")} />
-        </Tabs>
+      <Box sx={{ display: "flex", flex: 1, minHeight: 0 }}>
+        <Box sx={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, minHeight: 0 }}>
+          <Box sx={{ px: 2, borderBottom: 1, borderColor: "divider", bgcolor: "background.paper", flexShrink: 0 }}>
+            <Tabs value={tab} onChange={(_, next: Tab) => changeTab(next)} aria-label={t("Dashboard sections")}>
+              <Tab value="canvas" label={t("Canvas")} />
+              <Tab value="data" label={t("Data")} />
+              <Tab value="model" label={t("Model")} />
+            </Tabs>
+          </Box>
+          {problems.length > 0 && (
+            <Alert severity="warning" sx={{ borderRadius: 0, flexShrink: 0 }}>
+              {problems.map((p) => (
+                <div key={p.file}>
+                  {p.file}: {p.error}
+                </div>
+              ))}
+            </Alert>
+          )}
+          <ModelContext.Provider value={modelState}>
+            {tab === "canvas" && (
+              <CanvasTab
+                dashboard={dashboard}
+                data={data}
+                selected={selected}
+                found={columns.found}
+                load={columns.load}
+                onSelect={setSelected}
+                onAdd={(kind) => void addWidget(kind)}
+                onChange={changeWidget}
+                onLayout={changeLayout}
+                onRemove={(id) => void removeWidget(id)}
+              />
+            )}
+            {tab === "model" && (
+              <ModelDiagram slug={slug} datasets={dashboard.datasets} found={columns.found} load={columns.load} layout={modelLayout} onLayout={changeModelLayout} />
+            )}
+            <DataTab
+              slug={slug}
+              kernelKey={`dashboard:${dashboard.config.id}`}
+              datasets={dashboard.datasets}
+              widgets={dashboard.widgets}
+              found={columns.found}
+              load={columns.load}
+              shown={tab === "data"}
+              schema={schema}
+              onAdd={addDataset}
+              onSaveRecipe={saveRecipe}
+              onDelete={(name) => void removeDataset(name)}
+              onDatasetSaved={putDataset}
+              onWidget={changeWidget}
+              version={datasetsVersion}
+            />
+          </ModelContext.Provider>
+        </Box>
+        {iaraOpen && <IaraPanel fileId={`dashboard:${dashboard.config.id}`} surface="dashboard" getContext={iara.getContext} adapter={iara.adapter} onClose={() => setIaraOpen(false)} />}
       </Box>
-      {problems.length > 0 && (
-        <Alert severity="warning" sx={{ borderRadius: 0, flexShrink: 0 }}>
-          {problems.map((p) => (
-            <div key={p.file}>
-              {p.file}: {p.error}
-            </div>
-          ))}
-        </Alert>
-      )}
-      {tab === "canvas" && (
-        <ModelContext.Provider value={modelState}>
-          <CanvasTab
-            dashboard={dashboard}
-            data={data}
-            selected={selected}
-            found={columns.found}
-            load={columns.load}
-            onSelect={setSelected}
-            onAdd={(kind) => void addWidget(kind)}
-            onChange={changeWidget}
-            onLayout={changeLayout}
-            onRemove={(id) => void removeWidget(id)}
-          />
-        </ModelContext.Provider>
-      )}
-      {tab === "model" && <ModelTab source={model} checked={checked} datasets={dashboard.datasets} found={columns.found} load={columns.load} onChange={(source) => void changeModel(source)} />}
-      <DataTab slug={slug} kernelKey={`dashboard:${dashboard.config.id}`} datasets={dashboard.datasets} shown={tab === "data"} schema={schema} onAdd={addDataset} onSaveRecipe={saveRecipe} onDelete={(name) => void removeDataset(name)} onDatasetSaved={putDataset} />
-      <AskDialog open={dialog === "ask"} slug={slug} onClose={() => setDialog(null)} onSaved={() => void reload()} />
       <SettingsDialog open={dialog === "settings"} config={dashboard.config} onSave={(config) => void changeConfig(config)} onClose={() => setDialog(null)} />
       <RefreshDialog open={dialog === "schedule"} slug={slug} config={dashboard.config} published={published !== null} onSave={(config) => void changeConfig(config)} onClose={() => setDialog(null)} />
       <PublishDialog open={dialog === "publish"} slug={slug} published={published} onChange={setPublished} onClose={() => setDialog(null)} />

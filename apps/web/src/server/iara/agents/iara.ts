@@ -6,7 +6,7 @@ import type { IaraMemory } from "@/lib/iara/protocol";
 
 import { CODE_MODEL, FAST_MODEL } from "../../ai/models";
 import { addMemory, removeMemory } from "../memory";
-import { contextText, NOTEBOOK_API, resultStep, userStep } from "../prompt";
+import { contextText, DASHBOARD_API, NOTEBOOK_API, resultStep, userStep } from "../prompt";
 import { addUsage, emit, MAX_STEPS, type ChatReply, type ChatUsage, type FunctionDecl, type Handoff, type IaraDeps, type IaraGraphState, type IaraUpdate, type Step } from "../state";
 import { COMPACT_AT, CONTEXT_BUDGET, countSteps, cutToTokens } from "../tokens";
 
@@ -33,7 +33,7 @@ export const IARA_TOOLS: FunctionDecl[] = [
   ),
   fn(
     "propose_change",
-    "Have a change written for the open file: add or edit a notebook cell, run a cell, or edit the SQL editor's query. The user approves it before anything happens and you get the outcome back.",
+    "Have a change written for the open file: add or edit a notebook cell, run a cell, edit the SQL editor's query, or change a dashboard (its datasets, measures, relationships, charts, tables, filters and layout, together in one change). The user approves it before anything happens and you get the outcome back.",
     "task",
     "what to build, with the tables and columns to use (from the analyst) and whether to run it; the author does not see this conversation",
   ),
@@ -44,13 +44,13 @@ export const IARA_TOOLS: FunctionDecl[] = [
 const SUMMARY_SYSTEM = "Summarize this conversation for yourself, keeping facts, decisions, table and column names and open questions.";
 const OUT_OF_STEPS = "You are out of steps for this message. Tell the user briefly where things stand.";
 
-const SYSTEM = `You are Iara, the data assistant of Iara Studio: a workspace of notebooks and a SQL editor on the Iara engine.
+const SYSTEM = `You are Iara, the data assistant of Iara Studio: a workspace of notebooks, a SQL editor and dashboards on the Iara engine.
 SQL is Apache DataFusion with DuckDB-style syntax. Python cells use the \`iara\` DataFrame API, close to polars (below).
 Answer in the user's language. Be concise; markdown is fine.
 
 You never read data yourself, so never guess a table, a column or a value:
 - ask_analyst for anything about the user's tables, columns, values or other notebooks and SQL files you do not know yet. What the analyst answered earlier in this conversation still holds: reuse it, and ask only for what is new.
-- propose_change to add or edit a notebook cell, run a cell, or edit the SQL editor's query. The user approves every change, and you get back what happened. Describe the task completely.
+- propose_change to add or edit a notebook cell, run a cell, edit the SQL editor's query, or change a dashboard. The user approves every change, and you get back what happened. Describe the task completely.
 - remember for lasting facts or preferences the user states, not one-off details. forget when they ask you to.
 Never say you did something you did not do: a change is done only when its outcome says so.
 
@@ -93,9 +93,9 @@ async function compact(deps: IaraDeps, history: Step[], summary: string | null, 
   return reply.text.trim() ? { history: history.slice(cut), summary: reply.text.trim(), usage: reply.usage } : { ...same, usage: reply.usage };
 }
 
-async function systemPrompt(memories: IaraMemory[], summary: string | null, file: string): Promise<string> {
+async function systemPrompt(memories: IaraMemory[], summary: string | null, file: string, dashboard: boolean): Promise<string> {
   const known = await cutToTokens(memories.map((m) => `- [${m.id}] ${m.text}`).join("\n"), MEMORY_TOKENS);
-  return [SYSTEM, `What you remember about this user:\n${known || "(nothing yet)"}`, summary && `Earlier in this conversation (summarized):\n${summary}`, `The open file:\n${file}`]
+  return [SYSTEM, dashboard && DASHBOARD_API, `What you remember about this user:\n${known || "(nothing yet)"}`, summary && `Earlier in this conversation (summarized):\n${summary}`, `The open file:\n${file}`]
     .filter(Boolean)
     .join("\n\n");
 }
@@ -118,7 +118,7 @@ export function iaraNode(deps: IaraDeps) {
       let started = false;
       const r = await deps.chat({
         model: CODE_MODEL,
-        system: await systemPrompt(memories, summary, file),
+        system: await systemPrompt(memories, summary, file, s.context.surface === "dashboard"),
         steps: [...history, ...extra],
         tools,
         onText: (d) => {

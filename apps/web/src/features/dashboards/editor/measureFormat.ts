@@ -16,6 +16,10 @@ export function withStyle(current: NumberFormat | undefined, style: FormatStyle)
   return clean({ style, decimals: current?.decimals, compact: current?.compact, currency: style === "currency" ? (current?.currency ?? "BRL") : undefined });
 }
 
+export const withCurrency = (current: NumberFormat, currency: string): NumberFormat => clean({ ...current, currency });
+
+export const withCompact = (current: NumberFormat, compact: boolean): NumberFormat => clean({ ...current, compact: compact || undefined });
+
 /** The format after the decimals are typed: empty is as many as come; 0 to 10 otherwise. Null while automatic. */
 export function withDecimals(current: NumberFormat | undefined, typed: string): NumberFormat | null {
   if (!current) return null;

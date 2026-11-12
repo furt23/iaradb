@@ -241,7 +241,7 @@ export function notebookAdapter(live: Live, canRun: boolean, setReview: Dispatch
       return () => setReview((r) => (r?.change === change ? null : r));
     },
     async apply(change, run) {
-      if (change.action === "edit_query") throw new Error("not possible in a notebook");
+      if (change.action === "edit_query" || change.action === "edit_dashboard") throw new Error("not possible in a notebook");
       if (change.action === "run_cell") return canRun ? runCell(live, change.cellId) : { applied: false, ran: false, error: "the cluster is not running" };
       const cellId = await showChange(live, change, changeCode(live, change), () => setReview(null));
       return run && canRun ? runCell(live, cellId) : { applied: true, cellId, ran: false };

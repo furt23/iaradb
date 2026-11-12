@@ -50,8 +50,8 @@ function withKind(spec: ChartSpec, kind: ChartKind, columns: ColumnInfo[]): Char
   return { ...spec, kind, agg, x: spec.x || (columns[0]?.name ?? ""), group: kind === "pie" ? null : spec.group };
 }
 
-/** What to draw: chart kind, axes, aggregation, series split. `hideValues`: the values come from elsewhere (a widget's measures), so no value columns or aggregation are picked here. */
-export function ChartControls({ spec, columns, onChange, hideValues }: { spec: ChartSpec; columns: ColumnInfo[]; onChange(spec: ChartSpec): void; hideValues?: boolean }) {
+/** What to draw: chart kind, axes, aggregation, series split. `hideKinds`: the kind is picked elsewhere (a dashboard's gallery of visuals). */
+export function ChartControls({ spec, columns, onChange, hideKinds }: { spec: ChartSpec; columns: ColumnInfo[]; onChange(spec: ChartSpec): void; hideKinds?: boolean }) {
   const { t } = useTranslation();
   const set = (patch: Partial<ChartSpec>) => onChange({ ...spec, ...patch });
   const numeric = columns.filter((c) => isNumericType(c.type));
@@ -62,15 +62,17 @@ export function ChartControls({ spec, columns, onChange, hideValues }: { spec: C
   const aggs = counter || spec.kind === "pie" ? AGGS.filter((a) => a.agg !== "none") : AGGS;
   return (
     <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: 1.5, px: 1.5, py: 1, borderBottom: 1, borderColor: "divider" }}>
-      <ToggleButtonGroup size="small" exclusive value={spec.kind} onChange={(_, kind: ChartKind | null) => kind && onChange(withKind(spec, kind, columns))} aria-label="chart kind">
-        {KINDS.map((k) => (
-          <Tooltip key={k.kind} title={t(k.label)}>
-            <ToggleButton value={k.kind} aria-label={t(k.label)}>
-              {k.icon}
-            </ToggleButton>
-          </Tooltip>
-        ))}
-      </ToggleButtonGroup>
+      {!hideKinds && (
+        <ToggleButtonGroup size="small" exclusive value={spec.kind} onChange={(_, kind: ChartKind | null) => kind && onChange(withKind(spec, kind, columns))} aria-label="chart kind">
+          {KINDS.map((k) => (
+            <Tooltip key={k.kind} title={t(k.label)}>
+              <ToggleButton value={k.kind} aria-label={t(k.label)}>
+                {k.icon}
+              </ToggleButton>
+            </Tooltip>
+          ))}
+        </ToggleButtonGroup>
+      )}
       {!counter && (
         <TextField {...FIELD} select label={histogram ? t("Column") : t("X axis")} value={spec.x} onChange={(e) => set({ x: e.target.value })}>
           {(histogram ? numeric : columns).map((c) => (
@@ -89,7 +91,7 @@ export function ChartControls({ spec, columns, onChange, hideValues }: { spec: C
           onChange={(e) => set({ bins: Math.max(1, Math.min(200, Number(e.target.value) || 30)) })}
           sx={{ width: 100 }}
         />
-      ) : hideValues ? null : (
+      ) : (
         <>
           <TextField {...FIELD} select label={t("Aggregation")} value={spec.agg} onChange={(e) => set({ agg: e.target.value as ChartAgg })}>
             {aggs.map((a) => (

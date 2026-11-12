@@ -128,7 +128,7 @@ export function planFacts(model: Pick<Model, "relationships" | "calendars">, mea
 export const keyName = (i: number) => `"__k${i}"`;
 
 /** the many side of a step, compared as a DATE when the relationship says so */
-const manyOf = (step: Relationship, owner: string) => {
+export const manyOf = (step: Relationship, owner: string) => {
   const column = `${owner}.${quoteIdent(step.many.column)}`;
   return step.cast === "date" ? `CAST(${column} AS DATE)` : column;
 };

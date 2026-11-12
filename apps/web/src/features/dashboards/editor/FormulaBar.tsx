@@ -24,6 +24,7 @@ import { modelSchema, useModel, useModelSource } from "./useModel";
 import { useModelComplete } from "./useModelComplete";
 
 const MESSAGE_DELAY_MS = 600;
+const FORMAT_SAVE_MS = 500;
 
 /** One line: a break is a space (shortcut: a `#` comment inside a measure written over several lines would swallow what follows it). */
 const flatten = (value: string) => value.replace(/\s*[\r\n]+\s*/g, " ");
@@ -133,12 +134,26 @@ export function FormulaBar({
     if (valid(result) && !busy) void commit(text, result.name!);
   };
 
+  // a format picked for a measure that exists applies at once, as a chart's does; the bar stays open. A pause first: decimals are typed digit by digit
+  const formatSave = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(formatSave.current), []);
   const setFormat = (format: NumberFormat | null) => {
+    let next: string;
     try {
-      setLine(withFormat(line.trim(), format));
+      next = withFormat(line.trim(), format);
     } catch {
       // not one `name = expression` line (the control is off then)
+      return;
     }
+    setLine(next);
+    clearTimeout(formatSave.current);
+    const result = check(next);
+    // a new name waits for the check mark: saving it would rename what the bar is editing
+    if (!edit || !valid(result) || result.name !== edit.name) return;
+    formatSave.current = setTimeout(() => {
+      setFailure(undefined);
+      actions.save(edit.name, next).catch((e: Error) => setFailure(e.message));
+    }, FORMAT_SAVE_MS);
   };
 
   // the message waits for a pause in the typing: a formula half written is not an error to shout about

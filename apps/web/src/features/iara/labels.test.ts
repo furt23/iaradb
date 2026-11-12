@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { IaraProposalRecord } from "@/lib/iara/protocol";
 
-import { changeDiff, changeLanguage, changeTitle, recordStatus, thoughtParts, toolLabel } from "./labels";
+import { changeDiff, changeLanguage, changeTitle, opLabel, recordStatus, thoughtParts, toolLabel } from "./labels";
 
 const record = (over: Partial<IaraProposalRecord>): IaraProposalRecord => ({
   id: "p",
@@ -12,6 +12,18 @@ const record = (over: Partial<IaraProposalRecord>): IaraProposalRecord => ({
   attempt: 1,
   decision: "approved",
   ...over,
+});
+
+describe("opLabel", () => {
+  it("says what each step of a change to a dashboard does, with its code", () => {
+    expect(opLabel({ op: "set_dataset", name: "orders", sql: "SELECT 1" })).toEqual({ key: "Dataset {{name}}", values: { name: "orders" }, code: { language: "sql", text: "SELECT 1" } });
+    expect(opLabel({ op: "add_model_lines", lines: ["a = 1", "b = 2"] }).code?.text).toBe("a = 1\nb = 2");
+    expect(opLabel({ op: "set_widget", id: null, widget: { kind: "chart", title: "Sales" } })).toEqual({ key: "New widget {{name}}", values: { name: "Sales" } });
+    expect(opLabel({ op: "set_widget", id: "w1", widget: { kind: "table" } })).toEqual({ key: "Change the widget {{name}}", values: { name: "table" } });
+    expect(opLabel({ op: "remove_widget", id: "w1" }).key).toBe("Remove the widget {{name}}");
+    expect(changeTitle({ action: "edit_dashboard", operations: [{ op: "remove_widget", id: "w1" }] }).key).toBe("Change the dashboard");
+    expect(changeDiff({ action: "edit_dashboard", operations: [{ op: "remove_widget", id: "w1" }] }, { surface: "sql", path: "q", query: "" })).toBeNull();
+  });
 });
 
 describe("toolLabel", () => {

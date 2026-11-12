@@ -8,6 +8,7 @@ import type { NumberFormat } from "@/lib/dashboards/types";
 import type { AssignStmt, Call } from "@/lib/model/ast";
 import { lex, type Token } from "@/lib/model/lex";
 import { parse } from "@/lib/model/parse";
+import type { Relationship } from "@/lib/model/types";
 
 /** The keyword arguments of `measure()` that describe its number format. */
 const FORMAT_KEYS = new Set(["format", "decimals", "currency", "compact"]);
@@ -58,6 +59,11 @@ export function removeMeasure(source: string, name: string): string {
   const at = definitionOf(source, name);
   if (!at) throw new Error(`no measure named \`${name}\` in the model`);
   return source.slice(0, at.from) + source.slice(lineEnd(source, at.to) + 1);
+}
+
+/** The source without the line of a `relate(...)`. */
+export function removeRelationship(source: string, rel: Pick<Relationship, "span">): string {
+  return source.slice(0, rel.span.from) + source.slice(lineEnd(source, rel.span.to) + 1);
 }
 
 const isOp = (t: Token | undefined, text: string) => t?.kind === "op" && t.text === text;

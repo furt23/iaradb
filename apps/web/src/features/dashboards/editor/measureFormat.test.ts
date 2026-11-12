@@ -1,5 +1,18 @@
 import { describe, expect, it } from "vitest";
 
+import { withCompact, withCurrency } from "./measureFormat";
+
+describe("the format's currency and compact notation", () => {
+  it("sets the currency, keeping the rest", () => {
+    expect(withCurrency({ style: "currency", currency: "BRL", decimals: 2 }, "USD")).toEqual({ style: "currency", currency: "USD", decimals: 2 });
+  });
+
+  it("drops the key when compact goes off", () => {
+    expect(withCompact({ style: "number" }, true)).toEqual({ style: "number", compact: true });
+    expect(withCompact({ style: "number", compact: true }, false)).toEqual({ style: "number" });
+  });
+});
+
 import { styleOf, withDecimals, withStyle } from "./measureFormat";
 
 describe("measureFormat", () => {

@@ -9,7 +9,7 @@ import DialogTitle from "@mui/material/DialogTitle";
 import IconButton from "@mui/material/IconButton";
 import Typography from "@mui/material/Typography";
 import type { ColumnInfo } from "@iara/protocol";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { canPick } from "@/lib/dashboards/query";
@@ -28,6 +28,8 @@ import { FieldsPane } from "./FieldsPane";
 import { FormulaBar } from "./FormulaBar";
 import type { NewKind } from "./newWidget";
 import { widgetLabel } from "./newWidget";
+import { missingLink } from "./relationships";
+import { RelationshipsDialog } from "./RelationshipsDialog";
 import { columnsIn, type FoundColumns } from "./useDatasetColumns";
 import { useFormulaBar } from "./useFormulaBar";
 import { useMeasureActions } from "./useMeasureActions";
@@ -69,14 +71,30 @@ export function CanvasTab({
   const current = selected ? byId.get(selected) : undefined;
   const formula = useFormulaBar();
   const measures = useMeasureActions(dashboard.widgets, current, onChange);
+  const [relating, setRelating] = useState<string[] | null>(null);
+  // a pair of datasets is offered once: changing the chart again must not keep asking
+  const offered = useRef<string | null>(null);
+  const names = dashboard.datasets.map((d) => d.name);
+
+  /** A change to what a widget reads: when it now uses two datasets nothing connects, offers to connect them. */
+  const changeFields = (w: Widget, reload?: boolean) => {
+    onChange(w, reload);
+    if (reload === false) return;
+    const link = missingLink(model, w, names);
+    if (link && offered.current !== link.join()) {
+      offered.current = link.join();
+      setRelating(link);
+    }
+  };
 
   /** A field dropped on a widget does what checking it for that widget does, and selects the widget. */
   const dropOn = (w: Widget) => (field: FieldRef) => {
     const columns = w.kind === "table" ? columnsIn(found, w.dataset).map((c) => c.name) : [];
-    const next = dropField(w, field, columns);
+    const next = dropField(w, field, columns, (key, vars) => t(key, vars));
     onSelect(w.id);
-    if (next) onChange(next);
+    if (next) changeFields(next);
   };
+
 
   const renderWidget = (id: string) => {
     const w = byId.get(id);
@@ -137,8 +155,14 @@ export function CanvasTab({
           onClearAll={data.clearPicks}
           sx={{ px: 2, py: 1, borderBottom: 1, borderColor: "divider", flexShrink: 0 }}
         />
-        {/* a click on the empty canvas deselects */}
-        <Box onClick={(e) => e.target === e.currentTarget && onSelect(null)} sx={{ flex: 1, overflow: "auto", p: 2 }}>
+        {/* a click anywhere on the canvas but a widget deselects (a widget's menus open outside this box, and their clicks still bubble here) */}
+        <Box
+          onClick={(e) => {
+            const at = e.target as Element;
+            if (e.currentTarget.contains(at) && !at.closest(".react-grid-item")) onSelect(null);
+          }}
+          sx={{ flex: 1, overflow: "auto", p: 2 }}
+        >
           {!dashboard.widgets.length && (
             <Typography sx={{ textAlign: "center", color: "text.secondary", py: 8 }}>
               {t("No widgets yet")}
@@ -147,8 +171,17 @@ export function CanvasTab({
           <DashboardGrid layout={dashboard.layout} editable onLayout={onLayout} renderWidget={renderWidget} />
         </Box>
       </Box>
-      {current && <WidgetPanel key={current.id} widget={current} datasets={dashboard.datasets} found={found} load={load} onChange={onChange} onClose={() => onSelect(null)} />}
-      <FieldsPane datasets={dashboard.datasets} found={found} load={load} widget={current} onChange={onChange} formula={formula} actions={measures} />
+      {current && <WidgetPanel key={current.id} widget={current} data={selected ? data.result?.widgets[selected] : undefined} datasets={dashboard.datasets} found={found} load={load} onChange={changeFields} onMeasure={formula.select} onClose={() => onSelect(null)} />}
+      <FieldsPane
+        datasets={dashboard.datasets}
+        found={found}
+        load={load}
+        widget={current}
+        onChange={changeFields}
+        formula={formula}
+        actions={measures}
+      />
+      <RelationshipsDialog open={relating !== null} slug={dashboard.slug} focus={relating ?? []} datasets={dashboard.datasets} found={found} load={load} onClose={() => setRelating(null)} />
       <Dialog open={deleting !== null} onClose={() => setDeleting(null)} maxWidth="xs" fullWidth>
         <DialogTitle>{t("Delete this widget?")}</DialogTitle>
         <DialogActions>

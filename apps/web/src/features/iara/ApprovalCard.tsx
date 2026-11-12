@@ -13,7 +13,7 @@ import { CodeEditor } from "@/features/editor/CodeEditor";
 import { useTranslation } from "@/i18n";
 import { MAX_MESSAGE, type IaraFileContext, type IaraProposal } from "@/lib/iara/protocol";
 
-import { changeDiff, changeLanguage, changeTitle } from "./labels";
+import { changeDiff, changeLanguage, changeTitle, opLabel } from "./labels";
 
 /** A change Iara proposes, waiting for the user: what it does, its code, and Keep and run / Keep / Reject. */
 export function ApprovalCard({
@@ -61,6 +61,25 @@ export function ApprovalCard({
           <CodeEditor value={diff.after} original={diff.before ?? undefined} language={language} readOnly maxHeight={260} />
         </Paper>
       )}
+      {change.action === "edit_dashboard" && (
+        <Box component="ul" sx={{ m: 0, p: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 0.75 }}>
+          {change.operations.map((op, i) => {
+            const label = opLabel(op);
+            return (
+              <Box component="li" key={i} sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
+                <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                  {t(label.key, label.values)}
+                </Typography>
+                {label.code && (
+                  <Paper variant="outlined" sx={{ overflow: "hidden" }}>
+                    <CodeEditor value={label.code.text} language={label.code.language} readOnly maxHeight={160} />
+                  </Paper>
+                )}
+              </Box>
+            );
+          })}
+        </Box>
+      )}
       {stale && (
         <Alert severity="warning" sx={{ py: 0 }}>
           {t("The code changed since Iara read it. Reject the change and ask again.")}
@@ -72,7 +91,11 @@ export function ApprovalCard({
         </Alert>
       )}
       <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
-        {change.action === "run_cell" ? (
+        {change.action === "edit_dashboard" ? (
+          <Button variant="contained" color="secondary" disabled={busy} onClick={() => onApprove(true)}>
+            {t("Apply")}
+          </Button>
+        ) : change.action === "run_cell" ? (
           canRun && (
             <Button variant="contained" color="secondary" disabled={busy} onClick={() => onApprove(true)}>
               {t("Run")}

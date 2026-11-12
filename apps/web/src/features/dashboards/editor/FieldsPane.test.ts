@@ -7,7 +7,7 @@ import { FormulaBar } from "./FormulaBar";
 import type { MeasureActions } from "./useMeasureActions";
 
 const actions: MeasureActions = { usedBy: () => [], add: () => Promise.resolve(), save: () => Promise.resolve(), remove: () => Promise.resolve() };
-const formula = { target: null, openNew: () => undefined, openEdit: () => undefined, close: () => undefined };
+const formula = { target: null, openNew: () => undefined, openEdit: () => undefined, select: () => undefined, close: () => undefined };
 const datasets = [{ name: "orders", sql: "", params: {} }];
 
 describe("the Fields pane and the formula bar", () => {

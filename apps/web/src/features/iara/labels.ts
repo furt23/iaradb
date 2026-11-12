@@ -1,5 +1,5 @@
 import { applyEdits } from "@/lib/iara/edits";
-import type { ContextCell, IaraAgent, IaraChange, IaraFileContext, IaraProposalRecord, IaraToolUse } from "@/lib/iara/protocol";
+import type { ContextCell, DashboardOp, IaraAgent, IaraChange, IaraFileContext, IaraProposalRecord, IaraToolUse } from "@/lib/iara/protocol";
 
 /** A translation key and its values: the component runs it through `t`. */
 export interface Label {
@@ -61,6 +61,31 @@ export function changeTitle(change: IaraChange): Label {
       return { key: "Run cell" };
     case "edit_query":
       return { key: "Edit the query" };
+    case "edit_dashboard":
+      return { key: "Change the dashboard" };
+  }
+}
+
+/** What a step of a change to a dashboard does, and its code when it has any. */
+export function opLabel(op: DashboardOp): Label & { code?: { language: "sql" | "python"; text: string } } {
+  switch (op.op) {
+    case "set_dataset":
+      return { key: "Dataset {{name}}", values: { name: op.name }, code: { language: "sql", text: op.sql } };
+    case "remove_dataset":
+      return { key: "Remove the dataset {{name}}", values: { name: op.name } };
+    case "add_model_lines":
+      return { key: "Measures and relationships", code: { language: "python", text: op.lines.join("\n") } };
+    case "edit_model":
+      return { key: "Change the model", code: { language: "python", text: op.edits.map((e) => e.new).join("\n") } };
+    case "set_widget": {
+      const { kind, title } = op.widget as { kind?: unknown; title?: unknown };
+      const name = typeof title === "string" && title ? title : String(kind ?? "");
+      return op.id ? { key: "Change the widget {{name}}", values: { name } } : { key: "New widget {{name}}", values: { name } };
+    }
+    case "remove_widget":
+      return { key: "Remove the widget {{name}}", values: { name: op.id } };
+    case "move_widget":
+      return { key: "Move the widget {{name}}", values: { name: op.id } };
   }
 }
 
@@ -82,6 +107,7 @@ export function changeDiff(change: IaraChange, context: IaraFileContext): { befo
       if (context.surface !== "sql") throw new Error("not possible in a notebook");
       return { before: context.query, after: applyEdits(context.query, change.edits) };
     case "run_cell":
+    case "edit_dashboard":
       return null;
   }
 }

@@ -11,7 +11,7 @@ export const MAX_MESSAGE = 4000;
 const MAX_CODE = 20_000;
 const MAX_CONTEXT_TEXT = 200_000;
 
-export type IaraSurface = "notebook" | "sql";
+export type IaraSurface = "notebook" | "sql" | "dashboard";
 export type IaraAgent = "iara" | "analyst" | "author" | "reviewer" | "observer";
 
 const id = z.string().min(1).max(128);
@@ -47,6 +47,31 @@ export const FileContext = z.discriminatedUnion("surface", [
     /** the last result (columns and first rows) or error, as text */
     result: text(8000).optional(),
   }),
+  z.object({
+    surface: z.literal("dashboard"),
+    path: text(1024),
+    title: text(200),
+    /** the tab the user is on */
+    view: z.enum(["canvas", "data", "model"]),
+    selectedWidgetId: id.nullable().optional(),
+    datasets: z
+      .array(
+        z.object({
+          name: text(64),
+          sql: text(MAX_CODE),
+          /** made of cleaning steps: its SQL cannot be rewritten */
+          recipe: z.boolean().optional(),
+          /** null: not read yet */
+          columns: z.array(z.object({ name: text(256), type: text(256) })).max(1000).nullable(),
+        }),
+      )
+      .max(300),
+    /** the semantic model's source */
+    model: text(MAX_CONTEXT_TEXT),
+    /** each widget's file, and how it drew last ("ok", or why not) */
+    widgets: z.array(z.object({ id, json: text(MAX_CODE), status: text(1000).optional() })).max(300),
+    layout: z.array(z.object({ widget: id, x: z.number(), y: z.number(), w: z.number(), h: z.number() })).max(300),
+  }),
 ]);
 export type IaraFileContext = z.infer<typeof FileContext>;
 
@@ -55,6 +80,23 @@ export const Edit = z.object({ old: text(MAX_CODE), new: text(MAX_CODE) });
 export type IaraEdit = z.infer<typeof Edit>;
 const edits = z.array(Edit).min(1).max(50);
 
+const place = z.object({ x: z.number().int(), y: z.number().int(), w: z.number().int(), h: z.number().int() });
+
+/** One step of a change to a dashboard. The widget is checked against the widget files' format before the user sees it. */
+export const DashboardOp = z.discriminatedUnion("op", [
+  /** adds the dataset, or replaces the query of the one of that name */
+  z.object({ op: z.literal("set_dataset"), name: text(64), sql: text(MAX_CODE) }),
+  z.object({ op: z.literal("remove_dataset"), name: text(64) }),
+  /** lines of the model: measures (`name = expression`), `relate(many.column, one.column)`, `calendar`, `param` */
+  z.object({ op: z.literal("add_model_lines"), lines: z.array(text(2000)).min(1).max(50) }),
+  z.object({ op: z.literal("edit_model"), edits }),
+  /** id null: a new widget; `place`: where it sits (absent: below everything, or where it is) */
+  z.object({ op: z.literal("set_widget"), id: id.nullable(), widget: z.record(z.string(), z.unknown()), place: place.optional() }),
+  z.object({ op: z.literal("remove_widget"), id }),
+  z.object({ op: z.literal("move_widget"), id, ...place.shape }),
+]);
+export type DashboardOp = z.infer<typeof DashboardOp>;
+
 /** A change the author proposes; the browser shows it as a diff in the file and applies it once the user keeps it. */
 export const Change = z.discriminatedUnion("action", [
   /** afterCellId null: at the end of the notebook */
@@ -62,6 +104,8 @@ export const Change = z.discriminatedUnion("action", [
   z.object({ action: z.literal("edit_cell"), cellId: id, edits, run: z.boolean() }),
   z.object({ action: z.literal("run_cell"), cellId: id }),
   z.object({ action: z.literal("edit_query"), edits, run: z.boolean() }),
+  /** several steps that only make sense together, approved and applied as one */
+  z.object({ action: z.literal("edit_dashboard"), operations: z.array(DashboardOp).min(1).max(30) }),
 ]);
 export type IaraChange = z.infer<typeof Change>;
 

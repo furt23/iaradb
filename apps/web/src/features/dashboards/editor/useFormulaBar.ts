@@ -14,6 +14,8 @@ export function useFormulaBar() {
       target,
       openNew: () => setTarget({ mode: "new", key: ++opened.current }),
       openEdit: (name: string, select: "end" | "name" = "end") => setTarget({ mode: "edit", name, select, key: ++opened.current }),
+      /** Edits the measure, unless it is the one being edited: what is typed there stays. */
+      select: (name: string) => setTarget((t) => (t?.mode === "edit" && t.name === name ? t : { mode: "edit", name, select: "end", key: ++opened.current })),
       close: () => setTarget(null),
     }),
     [target],

@@ -4,12 +4,15 @@ import type { CellValue, KernelMethod, ParamsOf, QueryParams, ResultOf } from "@
 
 import type { ParamSpec } from "@/features/queries/queryHeader";
 import { coerce, detectParams, mergeSpecs, shown, type ParamRaw } from "@/features/queries/queryParams";
+import { chartMissing, drawnNames, firstCategories, isModelChart } from "@/lib/dashboards/chartFields";
 import { freshEntry, uncovered, wantsExtract, type ExtractManifest } from "@/lib/dashboards/extracts";
 import { groupField, narrower, type Form, type PickOn } from "@/lib/dashboards/narrow";
 import { checkPicks, datasetQuery, filterValueProblem, MAX_LIST, mergeParams, paramValuesOf, type DatasetQuery } from "@/lib/dashboards/query";
 import { checkModel } from "@/lib/model/check";
 import { modelQuery } from "@/lib/model/compile";
+import { tableRowsSql } from "@/lib/model/tableRows";
 import type { Model } from "@/lib/model/types";
+import { withValues } from "@/lib/model/values";
 import type { ChartWidget, CrossPicks, Dataset, FilterValues, FilterWidget, RenderResult, TableWidget, Widget, WidgetData } from "@/lib/dashboards/types";
 
 import { datasetHash } from "./extractStore";
@@ -18,6 +21,8 @@ import { datasetHash } from "./extractStore";
 const TABLE_ROWS = 100;
 /** The kinds a model's measures can draw, with the most points the kernel's chart sends for each (MAX_BARS and MAX_LINE in runtime/charts.py). */
 const MEASURE_LIMITS: Record<string, number> = { bar: 100, pie: 100, counter: 100, line: 5000, area: 5000 };
+/** A chart with a point per x and series, or a matrix' rows. */
+const GRID_LIMIT = 2500;
 /** What a viewer reads in place of a widget's error. */
 export const HIDDEN_ERROR = "This tile could not be loaded.";
 
@@ -116,9 +121,15 @@ function checkValues(widgets: Widget[], values: FilterValues): void {
   }
 }
 
-/** A chart that draws measures of the model instead of aggregating a column. */
-function isMeasureChart(w: Widget): w is ChartWidget & { measures: string[] } {
-  return w.kind === "chart" && !!w.measures?.length;
+/** A table with a column of another dataset (`dataset.column`) joins it, so it runs a query of its own. */
+function isRelatedTable(w: Widget, names: () => string[]): w is TableWidget & { columns: string[] } {
+  // the names cost a check of the model: only a column that can be another dataset's asks for them
+  return w.kind === "table" && !!w.columns?.some((c) => c.includes(".") && groupField(w.dataset, c, names()).dataset !== w.dataset);
+}
+
+/** The most rows a chart's query reads. */
+function rowsLimit(w: ChartWidget, base: number): number {
+  return w.spec.group || w.style?.look === "matrix" ? Math.max(base, GRID_LIMIT) : base;
 }
 
 /** The query itself; throws when a placeholder has no value. */
@@ -249,25 +260,27 @@ export async function renderDashboard(input: { datasets: Dataset[]; widgets: Wid
     .sort((a, b) => (a.widget < b.widget ? -1 : 1))
     .map((p, id) => {
       const c = charts.get(p.widget)!;
-      const { dataset, column } = isMeasureChart(c) ? groupField(c.dataset, c.spec.x, groupNames()) : { dataset: c.dataset, column: c.spec.x };
+      const { dataset, column } = isModelChart(c) ? groupField(c.dataset, c.spec.x, groupNames()) : { dataset: c.dataset, column: c.spec.x };
       return { id, widget: p.widget, dataset, column, value: p.value };
     });
   /** the picks that narrow a widget: all but its own */
   const othersOf = (w: Widget) => picks.filter((p) => p.widget !== w.id);
 
-  /** The data of a chart that draws measures: one query over the narrowed rows of each dataset the measures read, whose points the kernel's chart would send. */
-  async function measureChart(w: ChartWidget & { measures: string[] }): Promise<WidgetData> {
+  /** The data of a chart with fields of its own: one query over the narrowed rows of each dataset they read, whose points the kernel's chart would send. */
+  async function measureChart(w: ChartWidget): Promise<WidgetData> {
     const { kind, x, group } = w.spec;
-    const limit = MEASURE_LIMITS[kind];
-    if (!limit) throw new Error("measures work with bar, line, area, pie and counter charts");
-    const model = modelOf();
+    const base = MEASURE_LIMITS[kind];
+    if (!base) throw new Error("measures work with bar, line, area, pie and counter charts");
+    const limit = rowsLimit(w, base);
+    const model = withValues(modelOf(), w.values);
+    const names = drawnNames(w);
     const others = othersOf(w);
     const known = groupNames();
     const ask = {
       x: kind === "counter" ? null : groupField(w.dataset, x, known),
       group: group ? groupField(w.dataset, group, known) : null,
-      measures: w.measures,
-      order: kind === "line" || kind === "area" ? ("x" as const) : ("value" as const),
+      measures: names,
+      order: w.sort ?? (kind === "line" || kind === "area" ? ("x" as const) : ("value" as const)),
       limit: limit + 1,
     };
     // the first compile only learns which datasets are read (a measure can ask for a dataset without some filters): the query runs on one kernel, so every source must be read in the form that kernel takes
@@ -297,17 +310,19 @@ export async function renderDashboard(input: { datasets: Dataset[]; widgets: Wid
       if (value === undefined) throw new Error(`:${p.name} must be ${type === "number" ? "a number" : "text"}`);
       params = mergeParams(params, { params: { [p.name]: value }, param_types: { [p.name]: type } });
     }
-    const drawn = w.measures.flatMap((name) => model.measures.filter((m) => m.name === name));
+    const drawn = names.flatMap((name) => model.measures.filter((m) => m.name === name));
     const result = await run(r, { query: sql, params });
     const { rows } = await call(r, "result.page", { result_id: result.id, offset: 0, limit: limit + 1 });
-    for (const name of w.measures) {
+    for (const name of names) {
       const i = result.columns.findIndex((c) => c.name === name);
       if (i >= 0 && rows.some((row) => notFinite(row[i], result.columns[i].type))) throw new Error(`division by zero in ${name}`);
     }
     const formats = Object.fromEntries(drawn.flatMap((m) => (m.format ? [[m.name, m.format] as const] : [])));
+    const xAt = result.columns.findIndex((c) => c.name === x);
+    const kept = rows.slice(0, limit);
     return {
       kind: "chart",
-      data: { columns: result.columns.map((c) => c.name), rows: rows.slice(0, limit), truncated: rows.length > limit },
+      data: { columns: result.columns.map((c) => c.name), rows: w.top && xAt >= 0 ? firstCategories(kept, xAt, w.top) : kept, truncated: rows.length > limit },
       columns: result.columns,
       ...(Object.keys(formats).length && { formats }),
       // what the author should know; a viewer is told nothing about the model
@@ -315,10 +330,33 @@ export async function renderDashboard(input: { datasets: Dataset[]; widgets: Wid
     };
   }
 
+  /** The first rows of a table with columns of the datasets it points at, each dataset narrowed as usual. */
+  async function relatedTable(w: TableWidget & { columns: string[] }): Promise<WidgetData> {
+    const { relationships } = modelOf();
+    const others = othersOf(w);
+    const fields = w.columns.map((c) => groupField(w.dataset, c, groupNames()));
+    const read: string[] = [];
+    tableRowsSql(relationships, w.dataset, fields, (d) => {
+      read.push(...nar.reads(nar.plan(d, others)));
+      return "SELECT 1";
+    });
+    const r = await route([...new Set(read)]);
+    let params: QueryParams = {};
+    const query = tableRowsSql(relationships, w.dataset, fields, (d) => {
+      const q = ready(nar.query(nar.plan(d, others), r.form));
+      params = mergeParams(params, q.params);
+      return q.query;
+    });
+    const result = await run(r, { query, params });
+    return tableData(w, result.columns, await call(r, "result.page", { result_id: result.id, offset: 0, limit: TABLE_ROWS }));
+  }
+
   // chart and table widgets by dataset and the picks that narrow it (a chart's own never does), in the order they first appear
   const groups = new Map<string, { name: string; picks: Picked[]; widgets: (ChartWidget | TableWidget)[] }>();
+  // a chart still missing its fields draws nothing yet: that is no failure, and the canvas says what to add
+  const incomplete = (w: Widget) => w.kind === "chart" && chartMissing(w) !== null;
   for (const w of input.widgets) {
-    if ((w.kind !== "chart" && w.kind !== "table") || isMeasureChart(w)) continue;
+    if ((w.kind !== "chart" && w.kind !== "table") || (w.kind === "chart" && isModelChart(w)) || incomplete(w) || isRelatedTable(w, groupNames)) continue;
     const mine = nar.relevant(w.dataset, othersOf(w));
     const key = JSON.stringify([w.dataset, mine.map((p) => p.id)]);
     if (!groups.has(key)) groups.set(key, { name: w.dataset, picks: mine, widgets: [] });
@@ -350,9 +388,19 @@ export async function renderDashboard(input: { datasets: Dataset[]; widgets: Wid
   }
 
   // a measure chart runs a query of its own, so a dataset that only they use is not run as is
-  for (const w of input.widgets.filter(isMeasureChart)) {
+  for (const w of input.widgets.filter((x): x is ChartWidget => x.kind === "chart" && isModelChart(x))) {
+    if (incomplete(w)) continue;
     try {
       out[w.id] = await measureChart(w);
+    } catch (e) {
+      fail(w.id, e);
+    }
+  }
+
+  for (const w of input.widgets) {
+    if (!isRelatedTable(w, groupNames)) continue;
+    try {
+      out[w.id] = await relatedTable(w);
     } catch (e) {
       fail(w.id, e);
     }

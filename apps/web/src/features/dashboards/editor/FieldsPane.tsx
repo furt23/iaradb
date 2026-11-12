@@ -91,7 +91,7 @@ export function FieldsPane({
   const activate = (field: FieldRef) => {
     if (!widget) return;
     const columns = widget.kind === "table" ? columnsIn(found, widget.dataset).map((c) => c.name) : [];
-    const next = toggleField(widget, field, columns);
+    const next = toggleField(widget, field, columns, (key, vars) => t(key, vars));
     if (next) onChange(next);
   };
 
@@ -158,6 +158,8 @@ export function FieldsPane({
             onToggle={toggle}
             onActivate={activate}
             onMenu={(target, anchor) => setMenu({ target, anchor })}
+            selectedMeasure={formula.target?.mode === "edit" ? formula.target.name : undefined}
+            onSelectMeasure={(name) => formula.select(name)}
           />
         )}
       </Box>

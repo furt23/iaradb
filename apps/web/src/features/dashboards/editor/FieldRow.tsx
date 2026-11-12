@@ -14,6 +14,7 @@ import type { FieldState } from "./fieldActions";
 /** Where a menu opens: under an element (the ⋮ button, the row for the keyboard) or at the pointer. */
 export type MenuAnchor = { el: HTMLElement } | { top: number; left: number };
 
+const ROW = { display: "flex", justifyContent: "flex-start", alignItems: "center", gap: 0.5, flex: 1, minWidth: 0, py: 0.25 } as const;
 const MARK = { fontFamily: "var(--font-mono, monospace)", fontSize: 10.5, minWidth: 22, textAlign: "center", flexShrink: 0 } as const;
 
 /** The mark before a column's name: a short word for its type. */
@@ -61,8 +62,9 @@ export function MoreButton({ label, onMenu }: { label: string; onMenu(anchor: Me
 }
 
 /**
- * A measure or a column in the tree. Draggable onto a widget. With a checkbox when the selected widget takes it
- * (`check`), a button that sets the chart's x (`pick`), else plain text. Its menu opens like any other.
+ * A measure or a column in the tree. Draggable onto a widget. Its checkbox, shown when the selected widget takes it, is
+ * the only thing that puts it on the widget or takes it off. `onSelect`: a click anywhere else on the row picks it
+ * (`selected`: it is the one picked). Its menu opens like any other.
  */
 export function FieldRow({
   name,
@@ -70,6 +72,8 @@ export function FieldRow({
   field,
   state,
   onActivate,
+  selected,
+  onSelect,
   onMenu,
 }: {
   name: string;
@@ -77,19 +81,19 @@ export function FieldRow({
   field: FieldRef;
   state: FieldState;
   onActivate?(): void;
+  selected?: boolean;
+  onSelect?(): void;
   onMenu?(anchor: MenuAnchor): void;
 }) {
   const menu = useMenuHandlers(onMenu);
-  const picked = state?.control === "pick" && state.picked;
   const label = (
     <>
       {mark}
-      <Box component="span" sx={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13, textAlign: "left", fontWeight: picked ? 650 : 400, color: picked ? "primary.main" : "text.primary" }}>
+      <Box component="span" sx={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13, textAlign: "left", fontWeight: selected ? 650 : 400 }}>
         {name}
       </Box>
     </>
   );
-  const row = { display: "flex", alignItems: "center", gap: 0.5, flex: 1, minWidth: 0, py: 0.25 } as const;
   return (
     <Box
       component="li"
@@ -100,21 +104,17 @@ export function FieldRow({
         e.dataTransfer.effectAllowed = "copy";
       }}
       {...menu}
-      sx={{ display: "flex", alignItems: "center", pl: 2.5, pr: 0.5, borderRadius: 1, cursor: "grab", "&:hover": { bgcolor: "action.hover" } }}
+      aria-current={selected ? "true" : undefined}
+      sx={{ display: "flex", alignItems: "center", pl: 2.5, pr: 0.5, borderRadius: 1, cursor: "grab", bgcolor: selected ? "action.selected" : undefined, "&:hover": { bgcolor: selected ? "action.selected" : "action.hover" } }}
     >
-      {state?.control === "check" && (
-        <Checkbox size="small" checked={state.checked} onChange={() => onActivate?.()} slotProps={{ input: { "aria-label": name } }} sx={{ p: 0.5, mr: 0.5 }} />
-      )}
+      {state && <Checkbox size="small" checked={state.checked} onChange={() => onActivate?.()} slotProps={{ input: { "aria-label": name } }} sx={{ p: 0.5, mr: 0.5 }} />}
       {/* not a <button>: a drag cannot start on one in every browser */}
-      {state?.control === "pick" ? (
-        <ButtonBase component="div" onClick={onActivate} aria-pressed={picked} sx={{ ...row, borderRadius: 1 }}>
+      {onSelect ? (
+        <ButtonBase component="div" onClick={onSelect} sx={{ ...ROW, borderRadius: 1 }}>
           {label}
         </ButtonBase>
       ) : (
-        // the checkbox is the control; the name only follows it with the pointer
-        <Box onClick={state?.control === "check" ? onActivate : undefined} sx={row}>
-          {label}
-        </Box>
+        <Box sx={ROW}>{label}</Box>
       )}
       {onMenu && <MoreButton label={name} onMenu={onMenu} />}
     </Box>

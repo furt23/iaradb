@@ -45,6 +45,7 @@ function NodeHeader({ node, open, onToggle, onMenu }: { node: FieldNode; open: b
 /**
  * The Fields pane's tree: each dataset (its columns, then its measures), each calendar, the measures that read
  * no dataset, and the model's parameters. `widget`: the selected one, whose checkboxes the rows show.
+ * `selectedMeasure`: the one being edited; a click on a measure's name picks it (`onSelectMeasure`).
  */
 export function FieldTreeView({
   tree,
@@ -53,7 +54,11 @@ export function FieldTreeView({
   onToggle,
   onActivate,
   onMenu,
+  selectedMeasure,
+  onSelectMeasure,
 }: {
+  selectedMeasure?: string;
+  onSelectMeasure?(name: string): void;
   tree: FieldTree;
   widget: Widget | undefined;
   isOpen(node: FieldNode): boolean;
@@ -65,7 +70,7 @@ export function FieldTreeView({
 
   const measureRow = (m: Measure) => {
     const field = measureField(m);
-    return <FieldRow key={m.name} name={m.name} mark={<MeasureMark title={t("Measure")} />} field={field} state={fieldState(widget, field)} onActivate={() => onActivate(field)} onMenu={(a) => onMenu({ kind: "measure", name: m.name }, a)} />;
+    return <FieldRow key={m.name} name={m.name} mark={<MeasureMark title={t("Measure")} />} field={field} state={fieldState(widget, field)} onActivate={() => onActivate(field)} selected={m.name === selectedMeasure} onSelect={onSelectMeasure && (() => onSelectMeasure(m.name))} onMenu={(a) => onMenu({ kind: "measure", name: m.name }, a)} />;
   };
 
   const body = (node: FieldNode): ReactNode => {
@@ -84,7 +89,8 @@ export function FieldTreeView({
         )}
         {Array.isArray(columns) &&
           columns.map((c) => {
-            const field: FieldRef = { kind: "column", dataset: node.name, name: c.name };
+            // a calendar's columns (a year, a month) are for the axes: they never go on a chart as a value by themselves
+            const field: FieldRef = { kind: "column", dataset: node.name, name: c.name, ...(node.kind === "dataset" && { type: c.type }) };
             return (
               <FieldRow
                 key={c.name}

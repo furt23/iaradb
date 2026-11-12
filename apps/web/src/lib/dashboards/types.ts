@@ -9,6 +9,8 @@
  *       widgets/<id>.json     ChartWidget | TableWidget | FilterWidget
  *       widgets/<id>.md       TextWidget (the file is the markdown)
  *       layout.json           LayoutItem[]
+ *       model.py              the semantic model
+ *       model_layout.json     where the model's diagram places each table
  *
  * A published dashboard is a compiled copy in the Studio's data folder
  * (`PublishedDashboard`): drafts never reach viewers.
@@ -17,6 +19,8 @@
 import type { CellValue, ChartData, ChartSpec, ColumnInfo, QueryParamType, WrangleStep } from "@iara/protocol";
 
 import type { ParamSpecs } from "@/features/queries/queryHeader";
+
+import type { ModelLayout } from "./modelLayout";
 
 /** `dashboard.toml` */
 export interface DashboardConfig {
@@ -103,8 +107,48 @@ export interface SeriesStyle {
   as?: "bar" | "line";
 }
 
+/**
+ * How a chart's data is drawn when not in its kind's plain form. The data has the shape of `spec.kind`:
+ * bar (stacked, percent, hbar*, combo, waterfall, heatmap, matrix), area (area_stacked),
+ * pie (donut, treemap, funnel), counter (gauge).
+ */
+export type ChartLook =
+  | "stacked"
+  | "percent"
+  | "hbar"
+  | "hbar_stacked"
+  | "hbar_percent"
+  | "combo"
+  | "area_stacked"
+  | "donut"
+  | "treemap"
+  | "funnel"
+  | "waterfall"
+  | "heatmap"
+  | "matrix"
+  | "gauge";
+
+export type ChartPalette = "ocean" | "sunset" | "forest" | "berry" | "earth" | "mono";
+export type LegendPosition = "top" | "bottom" | "left" | "right" | "none";
+
 /** how a chart is drawn, on top of what its spec asks the kernel for */
 export interface ChartStyle {
+  look?: ChartLook;
+  /** the colors series and categories take in turn (absent: the app's) */
+  palette?: ChartPalette;
+  /** `#rrggbb` by series or category label; wins over the palette */
+  colors?: Record<string, string>;
+  /** where the legend goes (absent: on top) */
+  legend?: LegendPosition;
+  /** false: no lines across the plot */
+  gridlines?: boolean;
+  /** lines are curved */
+  smooth?: boolean;
+  /** the axes' titles: absent is the x column's name and none for y, "" is none */
+  x_title?: string;
+  y_title?: string;
+  /** a gauge's top value (absent: a second value on the gauge, else a round number above its value) */
+  gauge_max?: number;
   /** by value column */
   series?: Record<string, SeriesStyle>;
   /** the value next to each bar, point or slice */
@@ -114,6 +158,22 @@ export interface ChartStyle {
   /** the right axis and its series */
   right_format?: NumberFormat;
 }
+
+export type ValueAgg = "sum" | "avg" | "count" | "count_distinct" | "min" | "max";
+
+/** a column of any dataset aggregated on the chart itself, without a measure in the model; no `column`: the dataset's rows are counted */
+export interface ValueField {
+  /** the name it is drawn under (legend, series style, colors) */
+  name: string;
+  dataset: string;
+  column?: string;
+  agg: ValueAgg;
+  /** how its numbers are written */
+  format?: NumberFormat;
+}
+
+/** how a chart's categories are ordered */
+export type ChartSort = "x" | "x_desc" | "value" | "value_asc";
 
 /** a chart over a dataset; `spec.kind` "counter" is a single number, "pie" a pie */
 export interface ChartWidget {
@@ -125,11 +185,17 @@ export interface ChartWidget {
   style?: ChartStyle;
   /**
    * Measures of the model (`model.py`), drawn by `spec.x` and `spec.group` (a
-   * counter: one measure, no x); when set, `spec.y` and `spec.agg` are not
-   * used, and `spec.x` / `spec.group` may name a related dataset's column as
-   * `dataset.column` (a bare name is a column of `dataset`).
+   * counter: one measure, no x); with `measures` or `values`, `spec.y` and
+   * `spec.agg` are not used, and `spec.x` / `spec.group` may name a related
+   * dataset's column as `dataset.column` (a bare name is a column of `dataset`).
    */
   measures?: string[];
+  /** columns aggregated on the chart, drawn after `measures` */
+  values?: ValueField[];
+  /** with `measures` or `values` (absent: a line or area by x, the rest by value, largest first) */
+  sort?: ChartSort;
+  /** with `measures` or `values`: only the first this many categories */
+  top?: number;
 }
 
 /** the first rows of a dataset */
@@ -138,7 +204,7 @@ export interface TableWidget {
   kind: "table";
   title?: string;
   dataset: string;
-  /** the columns shown, in order (absent: all) */
+  /** the columns shown, in order (absent: all); `dataset.column` is a column of a related dataset */
   columns?: string[];
   /** by column name */
   formats?: Record<string, ColumnFormat>;
@@ -194,6 +260,8 @@ export interface Dashboard {
   layout: LayoutItem[];
   /** `model.py`: the semantic model's source ("" when the dashboard has none) */
   model: string;
+  /** `model_layout.json`: where the model's diagram places each table (absent: nothing placed yet) */
+  modelLayout?: ModelLayout;
   /** files of the folder that could not be read, with why (the rest still loads) */
   problems: { file: string; error: string }[];
 }
