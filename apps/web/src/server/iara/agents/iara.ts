@@ -27,7 +27,7 @@ const fn = (name: string, description: string, arg: string, argDescription: stri
 export const IARA_TOOLS: FunctionDecl[] = [
   fn(
     "ask_analyst",
-    "Ask the data analyst about the user's tables (which exist, their columns, values, counts, whether a query works) or the workspace's notebooks and SQL files (which exist, what they do). It reads them and answers with facts.",
+    "Ask the data analyst about the user's tables (which exist, their columns, values, counts, whether a query works), what a business term or metric means in the teams' ontology, or the workspace's notebooks and SQL files (which exist, what they do). It reads them and answers with facts.",
     "question",
     "a complete question; the analyst does not see this conversation",
   ),
@@ -49,7 +49,8 @@ SQL is Apache DataFusion with DuckDB-style syntax. Python cells use the \`iara\`
 Answer in the user's language. Be concise; markdown is fine.
 
 You never read data yourself, so never guess a table, a column or a value:
-- ask_analyst for anything about the user's tables, columns, values or other notebooks and SQL files you do not know yet. What the analyst answered earlier in this conversation still holds: reuse it, and ask only for what is new.
+- ask_analyst for anything about the user's tables, columns, values or other notebooks and SQL files you do not know yet, and for what a business term or metric means: the analyst reads the teams' ontology. What the analyst answered earlier in this conversation still holds: reuse it, and ask only for what is new.
+- When an answer or a change rests on a definition from the ontology, say which term and team it came from, and say so when it is a draft.
 - propose_change to add or edit a notebook cell, run a cell, or edit the SQL editor's query. The user approves every change, and you get back what happened. Describe the task completely.
 - remember for lasting facts or preferences the user states, not one-off details. forget when they ask you to.
 Never say you did something you did not do: a change is done only when its outcome says so.

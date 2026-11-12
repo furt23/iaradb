@@ -1,5 +1,5 @@
 import { applyEdits } from "@/lib/iara/edits";
-import type { ContextCell, IaraAgent, IaraChange, IaraFileContext, IaraProposalRecord, IaraToolUse } from "@/lib/iara/protocol";
+import type { ContextCell, IaraAgent, IaraChange, IaraFileContext, IaraKnowledge, IaraProposalRecord, IaraStep, IaraToolUse } from "@/lib/iara/protocol";
 
 /** A translation key and its values: the component runs it through `t`. */
 export interface Label {
@@ -39,9 +39,21 @@ export function toolLabel({ tool, target }: IaraToolUse): Label {
       return { key: "Looking at the files" };
     case "read_file":
       return target ? { key: "Reading {{target}}", values: { target } } : { key: "Reading a file" };
+    case "search_ontology":
+      return target ? { key: "Looking up “{{target}}” in the ontology", values: { target } } : { key: "Reading the ontology" };
     default:
       return { key: "Looking at the data" };
   }
+}
+
+/** The ontology terms the steps of a message read, each once: by team, the certified ones before the drafts, then by name. */
+export function knowledgeOf(steps: IaraStep[] | undefined): IaraKnowledge[] {
+  const seen = new Map<string, IaraKnowledge>();
+  for (const step of steps ?? []) {
+    if (step.kind !== "tool") continue;
+    for (const k of step.knowledge ?? []) seen.set(`${k.team}\n${k.term}`, k);
+  }
+  return [...seen.values()].sort((a, b) => a.team.localeCompare(b.team) || Number(b.certified) - Number(a.certified) || a.term.localeCompare(b.term));
 }
 
 /** A thought's heading (a leading `**line**`, without the asterisks) and the rest; a thought still streaming its heading has none. */

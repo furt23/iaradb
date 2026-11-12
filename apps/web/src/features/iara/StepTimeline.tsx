@@ -21,6 +21,7 @@ import type { IaraAgent, IaraStep } from "@/lib/iara/protocol";
 
 import { ChatMarkdown } from "./ChatMarkdown";
 import { AGENT_LABEL, AGENT_NAME, thoughtParts, toolLabel } from "./labels";
+import { OntologyIcon } from "./OntologyIcon";
 
 // one line of body2 text: the dot sits on its middle
 const LINE = 20;
@@ -41,6 +42,8 @@ function ToolIcon({ tool }: { tool: string }) {
       return <FolderOutlined sx={sx} />;
     case "read_file":
       return <DescriptionOutlined sx={sx} />;
+    case "search_ontology":
+      return <OntologyIcon sx={sx} />;
     default:
       return <SearchRounded sx={sx} />;
   }

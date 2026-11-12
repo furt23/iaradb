@@ -119,7 +119,7 @@ export type IaraEvent =
   | { event: "agent"; data: { agent: IaraAgent } }
   /** Iara's reply, streamed */
   | { event: "text"; data: { delta: string } }
-  /** a tool an agent used: a data tool name (list_tables, describe_table, explain_sql, run_sql) and its table, if any */
+  /** a tool an agent used: a data tool name (list_tables, describe_table, explain_sql, run_sql, search_ontology, ...), its table or file, if any, and the ontology terms it gave */
   | { event: "tool"; data: IaraToolUse }
   /** a piece of an agent's reasoning summary; deltas with the same id are one thought */
   | { event: "thought"; data: { agent: IaraAgent; id: string; delta: string } }
@@ -130,10 +130,23 @@ export type IaraEvent =
   | { event: "done"; data: { messageId: string } }
   | { event: "failed"; data: { message: string } };
 
+/** A term of a team's ontology an agent read (search_ontology gave it). */
+export interface IaraKnowledge {
+  /** the team's name */
+  team: string;
+  term: string;
+  /** false: a draft nobody reviewed */
+  certified: boolean;
+  /** the start of the term's description */
+  description: string;
+}
+
 export interface IaraToolUse {
   agent: IaraAgent;
   tool: string;
   target?: string;
+  /** search_ontology: the terms it gave */
+  knowledge?: IaraKnowledge[];
 }
 
 /** One step of Iara's work on a message, in order: a data tool an agent used, or what an agent thought (the model's reasoning summary). */

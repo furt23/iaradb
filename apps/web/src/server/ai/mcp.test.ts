@@ -33,7 +33,7 @@ describe("MCP handshake", () => {
 describe("tools/list", () => {
   it("lists the read-only tools with closed input schemas", async () => {
     const res = (await handleMcp({ jsonrpc: "2.0", id: 4, method: "tools/list" }, ctx())) as { result: { tools: { name: string; description: string; inputSchema: { additionalProperties: boolean } }[] } };
-    expect(res.result.tools.map((t) => t.name)).toEqual(["list_tables", "describe_table", "explain_sql", "run_sql", "list_files", "read_file"]);
+    expect(res.result.tools.map((t) => t.name)).toEqual(["list_tables", "describe_table", "explain_sql", "run_sql", "list_files", "read_file", "search_ontology"]);
     for (const t of res.result.tools) {
       expect(t.description).toMatch(/read-only/i);
       expect(t.inputSchema.additionalProperties).toBe(false);

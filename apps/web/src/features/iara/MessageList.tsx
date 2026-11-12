@@ -14,6 +14,7 @@ import type { IaraFileContext, IaraMessage, IaraProposalRecord, IaraSurface } fr
 import { ApprovalCard } from "./ApprovalCard";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { EmptyState } from "./EmptyState";
+import { KnowledgeSources } from "./KnowledgeSources";
 import { AGENT_LABEL, changeTitle, recordStatus } from "./labels";
 import { StepTimeline } from "./StepTimeline";
 import type { IaraChat } from "./useIaraChat";
@@ -56,6 +57,7 @@ function IaraBubble({ message, chat, getContext, isLast }: { message: IaraMessag
     <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
       {!!steps?.length && <StepTimeline steps={steps} live={chat.busy && isLast} agent={chat.agent} />}
       {message.text && <ChatMarkdown text={message.text} />}
+      <KnowledgeSources steps={steps} />
       {!!memories?.length && (
         <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
           {memories.map((m, i) => (

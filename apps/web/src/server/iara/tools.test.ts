@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { parseOntology } from "@/lib/ontology";
+
 import type { ToolContext } from "../ai/tools";
 import { DATA_TOOLS, dataTools, runDataTool } from "./tools";
 
@@ -27,7 +29,7 @@ function fake(fails: Record<string, string> = {}): ToolContext {
 
 describe("DATA_TOOLS", () => {
   it("declares the data tools with JSON Schema parameters", () => {
-    expect(DATA_TOOLS.map((t) => t.name)).toEqual(["list_tables", "describe_table", "explain_sql", "run_sql", "list_files", "read_file"]);
+    expect(DATA_TOOLS.map((t) => t.name)).toEqual(["list_tables", "describe_table", "explain_sql", "run_sql", "list_files", "read_file", "search_ontology"]);
     for (const t of DATA_TOOLS) {
       expect(t.type).toBe("function");
       expect(t.description).toMatch(/\S/);
@@ -74,6 +76,29 @@ describe("runDataTool", () => {
     const out = await runDataTool(fake({ "sql.run": "no read grant on table x" }), "run_sql", { sql: "SELECT * FROM x" });
     expect(out).toEqual({ text: "Plan: no read grant on table x", isError: true, use: { tool: "run_sql" } });
     expect((await runDataTool(fake(), "describe_table", { name: "nope" })).text).toBe("there is no table nope you can read");
+  });
+
+  it("gives the terms search_ontology found as knowledge, within the user's grants", async () => {
+    const finance = parseOntology(
+      "finance",
+      `[ontology]\nname = "Finance"\n[[term]]\nname = "Net revenue"\ndescription = "${"after discounts ".repeat(30)}"\ncertified = true\ncolumns = ["main.sales.orders.amount"]\n[[term]]\nname = "Gross revenue"\ndescription = "before discounts"\ncolumns = ["main.secret.ledger.amount"]`,
+    );
+    const ctx = (allow: string[] | null): ToolContext => ({ ...fake(), allow, ontologies: async () => ({ ontologies: [finance], problems: [] }) });
+
+    const out = await runDataTool(ctx(["main.sales"]), "search_ontology", { query: " revenue " });
+    expect(out.isError).toBe(false);
+    expect(JSON.parse(out.text).terms.map((t: { name: string }) => t.name)).toEqual(["Net revenue"]);
+    expect(out.use).toEqual({ tool: "search_ontology", target: "revenue", knowledge: [{ team: "Finance", term: "Net revenue", certified: true, description: "after discounts ".repeat(30).trim().slice(0, 240) }] });
+
+    expect(JSON.parse((await runDataTool(ctx(null), "search_ontology", { query: "revenue" })).text).terms).toHaveLength(2);
+    // nothing found, and no ontology at all: no knowledge, no target for an empty query
+    expect((await runDataTool(ctx(null), "search_ontology", { query: "weather" })).use).toEqual({ tool: "search_ontology", target: "weather" });
+    expect(await runDataTool(fake(), "search_ontology", { query: "" })).toEqual({ text: JSON.stringify({ terms: [], joins: [], more: 0 }), isError: false, use: { tool: "search_ontology" } });
+  });
+
+  it("tells of the ontology files that are broken when the context gives them", async () => {
+    const ctx: ToolContext = { ...fake(), ontologies: async () => ({ ontologies: [], problems: [{ team: "ops", message: "not valid TOML" }] }) };
+    expect(JSON.parse((await runDataTool(ctx, "search_ontology", { query: "x" })).text).problems).toEqual(["ops.toml could not be read: not valid TOML"]);
   });
 
   it("gives an unknown tool back as an error result", async () => {
