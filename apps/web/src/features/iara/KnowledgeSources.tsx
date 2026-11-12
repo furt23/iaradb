@@ -9,7 +9,7 @@ import { useTranslation } from "@/i18n";
 import type { IaraKnowledge, IaraStep } from "@/lib/iara/protocol";
 
 import { knowledgeOf } from "./labels";
-import { OntologyIcon } from "./OntologyIcon";
+import { OntologyIcon } from "@/features/ontology/OntologyIcon";
 
 function TermChip({ item }: { item: IaraKnowledge }) {
   const { t } = useTranslation();

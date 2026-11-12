@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { mayReadOntology, parseOntology, searchOntologies, termTables } from "./ontology";
+import { mayDraftOntology, mayReadOntology, parseOntology, readableOntology, sameJoin, scopeOptions, searchOntologies, termTables } from "./ontology";
 
 const FINANCE = `
 [ontology]
 name = "Finance"
 description = "Revenue and billing."
 readers = ["editors", "Ana@Example.com"]
+owners = ["Bia@Example.com"]
 
 [[term]]
 name = "Net revenue"
@@ -39,7 +40,7 @@ const everything = () => true;
 describe("parseOntology", () => {
   it("reads a team's terms and joins, with tables in lowercase and columns as written", () => {
     const o = parseOntology("finance", FINANCE);
-    expect(o).toMatchObject({ team: "finance", name: "Finance", description: "Revenue and billing.", readers: ["editors", "ana@example.com"] });
+    expect(o).toMatchObject({ team: "finance", name: "Finance", description: "Revenue and billing.", readers: ["editors", "ana@example.com"], owners: ["bia@example.com"] });
     expect(o.terms[0]).toEqual({
       name: "Net revenue",
       description: "Revenue after discounts, before tax.",
@@ -54,7 +55,8 @@ describe("parseOntology", () => {
   });
 
   it("names an empty file after its team, for editors", () => {
-    expect(parseOntology("ops", "")).toEqual({ team: "ops", name: "ops", description: null, readers: ["editors"], terms: [], joins: [] });
+    expect(parseOntology("ops", "")).toEqual({ team: "ops", name: "ops", description: null, readers: ["editors"], owners: [], terms: [], joins: [] });
+    expect(parseOntology("ops", '[ontology]\nname = "Ops"')).toMatchObject({ name: "Ops", readers: ["editors"], owners: [] });
   });
 
   it("refuses what it does not understand, so a typo never hides a definition", () => {
@@ -62,6 +64,7 @@ describe("parseOntology", () => {
     expect(() => parseOntology("finance", '[[term]]\nname = "A"\ndescription = "b"\ncolumns = ["orders.amount"]')).toThrow(/catalog\.schema\.table\.column/);
     expect(() => parseOntology("finance", '[[term]]\nname = "A"\ndescription = "b"\ntables = ["sales.orders"]')).toThrow(/catalog\.schema\.table/);
     expect(() => parseOntology("finance", '[ontology]\nreaders = ["viewers"]')).toThrow(/email or editors/);
+    expect(() => parseOntology("finance", '[ontology]\nowners = ["editors"]')).toThrow(/owner is an email/);
     expect(() => parseOntology("finance", '[[term]]\nname = "Receita"\ndescription = "a"\n[[term]]\nname = "receita"\ndescription = "b"')).toThrow(/defined twice/);
     expect(() => parseOntology("finance", "[[term")).toThrow(/not valid TOML/);
     expect(() => parseOntology("../x", "")).toThrow(/not a team id/);
@@ -84,6 +87,41 @@ describe("mayReadOntology", () => {
   it("never lets a viewer read one, nor a user without an email be named", () => {
     expect(mayReadOntology(viewer, { readers: ["editors", "bia@example.com"] })).toBe(false);
     expect(mayReadOntology({ email: "", admin: false }, { readers: [""] })).toBe(false);
+  });
+});
+
+describe("mayDraftOntology", () => {
+  it("lets admins draft for any team, a new one included, and owners for theirs", () => {
+    expect(mayDraftOntology({ email: "boss@example.com", admin: true }, null)).toBe(true);
+    expect(mayDraftOntology({ email: "Bia@example.com", admin: false }, { owners: ["bia@example.com"] })).toBe(true);
+    expect(mayDraftOntology({ email: "ana@example.com", admin: false }, { owners: ["bia@example.com"] })).toBe(false);
+    expect(mayDraftOntology({ email: "bia@example.com", admin: false }, null)).toBe(false);
+    expect(mayDraftOntology({ email: "bia@example.com", admin: false, viewer: true }, { owners: ["bia@example.com"] })).toBe(false);
+    expect(mayDraftOntology({ email: "", admin: false }, { owners: [] })).toBe(false);
+  });
+});
+
+describe("readableOntology", () => {
+  it("leaves out the terms and joins over a table that may not be read", () => {
+    const o = readableOntology(parseOntology("finance", FINANCE), (t) => t === "main.sales.orders");
+    expect(o.terms.map((t) => t.name)).toEqual(["Net revenue", "Fiscal year"]);
+    expect(o.joins).toEqual([]);
+    expect(o.name).toBe("Finance");
+  });
+});
+
+describe("sameJoin", () => {
+  it("is the same pair of columns in either direction", () => {
+    const j = { left: "a.b.c.x", right: "a.b.d.y" };
+    expect(sameJoin(j, { left: "a.b.d.y", right: "A.B.C.X" })).toBe(true);
+    expect(sameJoin(j, { left: "a.b.c.x", right: "a.b.d.z" })).toBe(false);
+  });
+});
+
+describe("scopeOptions", () => {
+  it("lists the catalogs, then the schemas, then the tables", () => {
+    expect(scopeOptions(["main.sales.orders", "main.sales.customers", "lake.raw.events"])).toEqual(["lake", "main", "lake.raw", "main.sales", "lake.raw.events", "main.sales.customers", "main.sales.orders"]);
+    expect(scopeOptions([])).toEqual([]);
   });
 });
 

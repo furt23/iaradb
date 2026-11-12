@@ -5,6 +5,7 @@
  *     [ontology]
  *     name = "Finance"
  *     readers = ["editors"]            # or emails; admins read every ontology
+ *     owners = ["ana@example.com"]     # may have drafts written into the file, besides admins
  *
  *     [[term]]
  *     name = "Net revenue"
@@ -62,6 +63,8 @@ export interface Ontology {
   description: string | null;
   /** lowercase emails or `editors` */
   readers: string[];
+  /** lowercase emails of those who may have drafts written into the file (admins always may) */
+  owners: string[];
   terms: OntologyTerm[];
   joins: OntologyJoin[];
 }
@@ -92,6 +95,10 @@ const Reader = line(320)
   .transform((s) => s.toLowerCase())
   .refine((s) => s === "editors" || EMAIL.test(s), "a reader is an email or editors");
 
+const Owner = line(320)
+  .transform((s) => s.toLowerCase())
+  .refine((s) => EMAIL.test(s), "an owner is an email");
+
 const Term = z.strictObject({
   name: line(200),
   description: line(2000),
@@ -115,8 +122,9 @@ const File = z.strictObject({
       name: line(200).optional(),
       description: line(2000).optional(),
       readers: z.array(Reader).max(500).default(["editors"]),
+      owners: z.array(Owner).max(500).default([]),
     })
-    .default({ readers: ["editors"] }),
+    .default({ readers: ["editors"], owners: [] }),
   term: z.array(Term).max(MAX_TERMS).default([]),
   join: z.array(Join).max(MAX_TERMS).default([]),
 });
@@ -147,6 +155,7 @@ export function parseOntology(team: string, text: string): Ontology {
     name: ontology.name ?? team,
     description: ontology.description ?? null,
     readers: ontology.readers,
+    owners: ontology.owners,
     terms: term.map((t) => ({ ...t, sql: t.sql ?? null })),
     joins: join.map((j) => ({ ...j, description: j.description ?? null })),
   };
@@ -159,15 +168,37 @@ export function mayReadOntology(user: { email: string; admin: boolean; viewer?: 
   return o.readers.includes("editors") || (!!user.email && o.readers.includes(user.email.toLowerCase()));
 }
 
+/** Whether a user may have drafts written into a team's file (null: the team has none yet): admins, and the owners the file names. */
+export function mayDraftOntology(user: { email: string; admin: boolean; viewer?: boolean }, o: Pick<Ontology, "owners"> | null): boolean {
+  if (user.admin) return true;
+  if (user.viewer || !o) return false;
+  return !!user.email && o.owners.includes(user.email.toLowerCase());
+}
+
 /** Every table a term names: those of its columns and those its SQL reads. */
 export function termTables(t: Pick<OntologyTerm, "columns" | "tables">): string[] {
   return [...new Set([...t.columns.map(tableOf), ...t.tables])];
 }
 
+/** The ontology as someone reads it: without the terms and joins over a table they may not read. */
+export function readableOntology(o: Ontology, canRead: (table: string) => boolean): Ontology {
+  return {
+    ...o,
+    terms: o.terms.filter((t) => termTables(t).every(canRead)),
+    joins: o.joins.filter((j) => canRead(tableOf(j.left)) && canRead(tableOf(j.right))),
+  };
+}
+
+/** Whether two joins link the same columns, in either direction. */
+export function sameJoin(a: Pick<OntologyJoin, "left" | "right">, b: Pick<OntologyJoin, "left" | "right">): boolean {
+  const [al, ar, bl, br] = [a.left, a.right, b.left, b.right].map((c) => c.toLowerCase());
+  return (al === bl && ar === br) || (al === br && ar === bl);
+}
+
 // ---- search ----
 
-/** Lowercase without accents, so "receita líquida" finds "Receita Liquida". */
-function fold(s: string): string {
+/** Lowercase without accents, so "receita líquida" finds "Receita Liquida": how two names of a term are compared. */
+export function fold(s: string): string {
   return s
     .normalize("NFD")
     .replace(/\p{M}/gu, "")
@@ -231,10 +262,10 @@ export function searchOntologies(ontologies: Ontology[], query: string, canRead:
   const q = words(query);
   const phrase = q.length > 1 ? fold(query).trim().replace(/\s+/g, " ") : "";
   const found: { term: FoundTerm; tables: string[]; score: number }[] = [];
-  for (const o of ontologies) {
+  const readable = ontologies.map((o) => readableOntology(o, canRead));
+  for (const o of readable) {
     for (const t of o.terms) {
       const tables = termTables(t);
-      if (!tables.every(canRead)) continue;
       const s = q.length ? score(t, q, phrase) : 1;
       if (!s) continue;
       const { tables: _reads, ...term } = t;
@@ -246,14 +277,43 @@ export function searchOntologies(ontologies: Ontology[], query: string, canRead:
 
   const wanted = new Set(top.flatMap((f) => f.tables));
   const joins: FoundJoin[] = [];
-  for (const o of ontologies) {
+  for (const o of readable) {
     for (const j of o.joins) {
       const [l, r] = [tableOf(j.left), tableOf(j.right)];
-      if (!canRead(l) || !canRead(r)) continue;
       const named = q.length > 0 && hits(q, words(`${l.split(".").slice(1).join(" ")} ${r.split(".").slice(1).join(" ")} ${j.description ?? ""}`)) > 0;
       if (wanted.has(l) || wanted.has(r) || named) joins.push({ team: o.name, ...j });
     }
   }
   joins.sort((a, b) => Number(b.certified) - Number(a.certified));
   return { terms: top.map((f) => f.term), joins: joins.slice(0, JOIN_LIMIT), more: found.length - top.length };
+}
+
+// ---- what the Ontology page shows ----
+
+/** A team's ontology as one user sees it. */
+export interface OntologyTeamView extends Ontology {
+  /** the user may have drafts written into it */
+  canDraft: boolean;
+}
+
+export interface OntologyOverview {
+  teams: OntologyTeamView[];
+  /** the files that could not be read (admins only) */
+  problems: { team: string; message: string }[];
+  /** the user may start a new team's file */
+  canCreate: boolean;
+  /** the tables the user may read, by full name: what a draft can be made from */
+  tables: string[];
+  /** why the tables could not be listed (the terms are shown all the same) */
+  tablesError: string | null;
+  /** where the files are kept, as people would look for them */
+  where: string;
+}
+
+/** What a draft can read, widest first: each catalog, each schema, then each table. */
+export function scopeOptions(tables: string[]): string[] {
+  const parts = tables.map((t) => t.toLowerCase().split("."));
+  const catalogs = new Set(parts.map((p) => p[0]));
+  const schemas = new Set(parts.map((p) => p.slice(0, 2).join(".")));
+  return [...[...catalogs].sort(), ...[...schemas].sort(), ...[...new Set(tables.map((t) => t.toLowerCase()))].sort()];
 }

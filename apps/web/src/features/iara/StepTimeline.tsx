@@ -21,7 +21,7 @@ import type { IaraAgent, IaraStep } from "@/lib/iara/protocol";
 
 import { ChatMarkdown } from "./ChatMarkdown";
 import { AGENT_LABEL, AGENT_NAME, thoughtParts, toolLabel } from "./labels";
-import { OntologyIcon } from "./OntologyIcon";
+import { OntologyIcon } from "@/features/ontology/OntologyIcon";
 
 // one line of body2 text: the dot sits on its middle
 const LINE = 20;
