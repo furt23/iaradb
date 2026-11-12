@@ -1,6 +1,6 @@
 # Iara
 
-A parallel query engine for analytics on a single machine. The core is written in Rust on Apache Arrow. It is used from Python, through a lazy DataFrame API and SQL, and from Iara Studio, a web workspace for notebooks and SQL.
+A parallel query engine for analytics on a single machine. The core is written in Rust on Apache Arrow. It is used from Python and Node.js, through a lazy DataFrame API and SQL, and from Iara Studio, a web workspace for notebooks and SQL.
 
 ```python
 import iara

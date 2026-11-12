@@ -36,6 +36,7 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'index' },
             { label: 'Quickstart Guide', slug: 'quickstart' },
+            { label: 'TypeScript', slug: 'typescript' },
           ],
         },
         {

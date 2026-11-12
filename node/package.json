@@ -1,0 +1,38 @@
+{
+  "name": "iara",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*",
+    "!dist/testutil.*",
+    "native"
+  ],
+  "napi": {
+    "binaryName": "iara"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "tsc && node --test \"dist/**/*.test.js\"",
+    "build:native": "node --import ./scripts/win-stat-dev.mjs ./node_modules/@napi-rs/cli/dist/cli.js build --manifest-path ../crates/iara-node/Cargo.toml --output-dir native --platform --profile fast --esm",
+    "build:native:release": "node --import ./scripts/win-stat-dev.mjs ./node_modules/@napi-rs/cli/dist/cli.js build --manifest-path ../crates/iara-node/Cargo.toml --output-dir native --platform --release --esm"
+  },
+  "dependencies": {
+    "apache-arrow": "21.2.0"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "3.10.12",
+    "@types/node": "22.20.5",
+    "typescript": "5.9.3"
+  }
+}

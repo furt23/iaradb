@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/iara-core", "crates/iara-python", "crates/iara-s3-proxy"]
+members = ["crates/iara-core", "crates/iara-python", "crates/iara-node", "crates/iara-s3-proxy"]
 
 [workspace.package]
 version = "0.1.0"

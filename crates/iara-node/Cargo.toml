@@ -1,0 +1,33 @@
+[package]
+name = "iara-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "iara_node"
+crate-type = ["cdylib"]
+
+[dependencies]
+iara-core = { path = "../iara-core" }
+arrow.workspace = true
+chrono.workspace = true
+parking_lot.workspace = true
+napi = { version = "3", default-features = false, features = ["napi9", "async", "tokio_rt"] }
+napi-derive = "3"
+
+# the global allocator: jemalloc on Linux and macOS (as Polars and DuckDB),
+# mimalloc on Windows; jemalloc's TLS model must allow loading by dlopen
+[target.'cfg(unix)'.dependencies]
+tikv-jemallocator = { version = "0.6", features = ["disable_initial_exec_tls"] }
+tikv-jemalloc-sys = { version = "0.6", features = ["stats"] }
+
+[target.'cfg(not(unix))'.dependencies]
+mimalloc = { version = "0.1", default-features = false }
+
+[build-dependencies]
+napi-build = "2"
+
+[features]
+default = ["s3"]
+s3 = ["iara-core/s3"]
