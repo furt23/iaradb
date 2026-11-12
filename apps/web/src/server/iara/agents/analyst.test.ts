@@ -97,7 +97,7 @@ describe("analystNode", () => {
     const first = requests[0].steps[0] as Extract<Step, { type: "user_input" }>;
     expect(first.content[0].text).toContain("which table has the orders?");
     expect(first.content[0].text).toContain("SELECT 1");
-    expect(requests[0].tools?.map((t) => t.name)).toEqual(["list_tables", "describe_table", "explain_sql", "run_sql", "list_files", "read_file"]);
+    expect(requests[0].tools?.map((t) => t.name)).toEqual(["list_tables", "describe_table", "explain_sql", "run_sql", "list_files", "read_file", "search_ontology"]);
     expect(requests[1].steps.at(-1)).toMatchObject({ type: "function_result", call_id: "c1", name: "describe_table" });
   });
 

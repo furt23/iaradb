@@ -1,11 +1,13 @@
 import "server-only";
 
 import { datasetStatement } from "@/lib/dashboards/query";
+import { searchOntologies, type Ontology, type OntologySearch } from "@/lib/ontology";
 
 import type { StudioUser } from "../auth/access";
 import type { RunDeps } from "../dashboards/run";
 import { canRead } from "../governance/grants";
 import { userAllow } from "../governance/store";
+import { ontologiesFor } from "../ontology/store";
 import { normalizeRelative } from "../kernel/keys";
 import { kernels, METADATA_METHODS, type MetadataMethod } from "../kernel/manager";
 import { type FileKind, type FileNode, listTree, readText } from "../workspace/files";
@@ -14,6 +16,8 @@ import { type FileKind, type FileNode, listTree, readText } from "../workspace/f
 export interface ToolContext {
   request: RunDeps["request"];
   allow: string[] | null;
+  /** the teams' ontologies the user may read, with the files that are broken (absent: there are none) */
+  ontologies?: () => Promise<{ ontologies: Ontology[]; problems: { team: string; message: string }[] }>;
 }
 
 export const MAX_ROWS = 500;
@@ -46,6 +50,16 @@ export async function describeTable(ctx: ToolContext, name: string): Promise<{ n
   if (!t || !canRead(ctx.allow, t.full)) throw new Error(`there is no table ${name} you can read`);
   const info = await ctx.request("catalog.table", { name: t.name });
   return { name: info.name, full: info.full, columns: info.columns.map(({ name, type }) => ({ name, type })), num_rows: info.num_rows };
+}
+
+/**
+ * The business terms that answer `query` (every term when it is empty) and the joins between their tables, from the
+ * ontologies the user may read. A term over a table the user may not read is left out.
+ */
+export async function searchOntology(ctx: ToolContext, query: string): Promise<OntologySearch & { problems?: string[] }> {
+  const { ontologies, problems } = (await ctx.ontologies?.()) ?? { ontologies: [], problems: [] };
+  const found = searchOntologies(ontologies, query, (table) => canRead(ctx.allow, table));
+  return problems.length ? { ...found, problems: problems.map((p) => `${p.team}.toml could not be read: ${p.message}`) } : found;
 }
 
 /** The workspace's notebooks, SQL and text files, by path. */
@@ -108,5 +122,5 @@ export function assistantContext(user: StudioUser): ToolContext {
   // catalog reads and plans need no cluster; queries run on the assistant's kernel
   const request: ToolContext["request"] = (method, params) =>
     (METADATA_METHODS as readonly string[]).includes(method) ? kernels.metadata(method as MetadataMethod, params as never) : kernels.forAssistant().request(method, params);
-  return { request, allow: userAllow(user) };
+  return { request, allow: userAllow(user), ontologies: () => ontologiesFor(user) };
 }

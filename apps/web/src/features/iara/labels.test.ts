@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { IaraProposalRecord } from "@/lib/iara/protocol";
 
-import { changeDiff, changeLanguage, changeTitle, opLabel, recordStatus, thoughtParts, toolLabel } from "./labels";
+import { changeDiff, changeLanguage, changeTitle, knowledgeOf, opLabel, recordStatus, thoughtParts, toolLabel } from "./labels";
 
 const record = (over: Partial<IaraProposalRecord>): IaraProposalRecord => ({
   id: "p",
@@ -31,6 +31,26 @@ describe("toolLabel", () => {
     expect(toolLabel({ agent: "analyst", tool: "describe_table", target: "sales" })).toEqual({ key: "Reading {{target}}", values: { target: "sales" } });
     expect(toolLabel({ agent: "analyst", tool: "describe_table" }).key).toBe("Reading a table");
     expect(toolLabel({ agent: "analyst", tool: "something_new" }).key).toBe("Looking at the data");
+  });
+});
+
+describe("the ontology", () => {
+  it("says what was looked up", () => {
+    expect(toolLabel({ agent: "analyst", tool: "search_ontology", target: "churn" })).toEqual({ key: "Looking up “{{target}}” in the ontology", values: { target: "churn" } });
+    expect(toolLabel({ agent: "analyst", tool: "search_ontology" }).key).toBe("Reading the ontology");
+  });
+
+  it("collects the terms the steps read, each once, by team, certified first", () => {
+    const k = (team: string, term: string, certified = true) => ({ team, term, certified, description: "d" });
+    const steps = [
+      { kind: "tool" as const, agent: "analyst" as const, tool: "search_ontology", knowledge: [k("Ops", "SLA"), k("Finance", "Net revenue")] },
+      { kind: "thought" as const, agent: "analyst" as const, id: "t", text: "hm" },
+      { kind: "tool" as const, agent: "analyst" as const, tool: "run_sql" },
+      { kind: "tool" as const, agent: "analyst" as const, tool: "search_ontology", knowledge: [k("Finance", "Net revenue"), k("Finance", "Churn", false)] },
+    ];
+    expect(knowledgeOf(steps)).toEqual([k("Finance", "Net revenue"), k("Finance", "Churn", false), k("Ops", "SLA")]);
+    expect(knowledgeOf(undefined)).toEqual([]);
+    expect(knowledgeOf([steps[2]])).toEqual([]);
   });
 });
 

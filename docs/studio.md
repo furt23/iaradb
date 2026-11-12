@@ -182,7 +182,8 @@ Grants apply wherever Studio runs the query on someone's behalf:
 - a dashboard, in the editor and when published: each viewer's own grants apply, and two viewers with different grants never share cached results;
 - publishing: refused when a dataset reads a table the publisher has no grant on;
 - Iara;
-- the MCP server.
+- the MCP server;
+- the [ontology](#ontology): a term over a table you may not read is not shown to you.
 
 They do not apply yet to notebooks, the SQL editor or the Data panel's previews: an editor running code there reads what the team bucket allows. With the Local cluster on, notebook code runs as Studio's user and can change `grants.json` itself.
 
@@ -192,13 +193,14 @@ Iara is a chat panel in notebooks, in the SQL editor and in the dashboard editor
 
 In a dashboard the button is in the page's header, and Iara sees the whole dashboard. One proposal can add or change datasets, measures, relationships, charts, tables, filters and their places on the canvas; the panel lists its steps, and Apply writes them together. Iara then reads how the widgets draw, and proposes a fix when one that worked stops working. Table names and columns she reads are sent to OpenAI (requests are sent with `store: false`); rows are sent only when she runs a query on your behalf.
 
-- **Reading:** Iara reads on its own, with your grants. It uses the same tools as the [MCP server](#mcp-server) (`list_tables`, `describe_table`, `explain_sql`, `run_sql`, `list_files`, `read_file`), called in-process. It is not exposed through MCP.
+- **Reading:** Iara reads on its own, with your grants. It uses the same tools as the [MCP server](#mcp-server) (`list_tables`, `describe_table`, `explain_sql`, `run_sql`, `list_files`, `read_file`, `search_ontology`), called in-process. It is not exposed through MCP.
 - **Changing:** every new or edited cell, every SQL edit and every run needs your approval. A proposal appears in the file as an inline diff with Keep and run, Keep and Reject. Nothing is written or saved until you keep it, and Undo after keeping reverts it. If the code changed since Iara read it, the proposal is refused; reject it and ask again.
 - **Steps:** an analyst reads the data, an author writes the change, a reviewer checks it before you see it, and an observer reports what happened after you decide (rejected, applied, ran with an error). A run that failed goes back to the author for a fix, a limited number of times. The Steps list under each answer shows what was done.
+- **Ontology:** when a question uses a business term or a metric, the analyst looks it up in the teams' [ontology](#ontology). The terms it read are listed under the answer, beside the ontology icon, with their team; a draft is marked as one. They are the terms the search gave, which is not always every term the answer used.
 - **Memories:** Iara saves things you tell it to remember. They are kept per user, listed under Memories in the panel menu, and can be added or deleted there.
 - **Conversations:** earlier conversations are kept and listed in the panel. The panel shows how many tokens the conversation has used.
 
-Iara needs `OPENAI_API_KEY` (model `gpt-6-luna`; requests use `store: false`). Your questions, the code it reads, table names and columns, and the rows of the queries it runs (at most 500) are sent to OpenAI. Kernels never receive the key. Conversations and memories are kept in Studio's data folder, per user.
+Iara needs `OPENAI_API_KEY` (model `gpt-6-luna`; requests use `store: false`). Your questions, the code it reads, table names and columns, the ontology terms it finds, and the rows of the queries it runs (at most 500) are sent to OpenAI. Kernels never receive the key. Conversations and memories are kept in Studio's data folder, per user.
 
 ## MCP server
 
@@ -212,6 +214,7 @@ Studio serves the Model Context Protocol at `/api/mcp` (Streamable HTTP, JSON re
 | `run_sql` | Runs one query: at most 500 rows, 30 seconds. |
 | `list_files` | The workspace's notebooks, SQL files and text files. |
 | `read_file` | The text of one of them (a notebook as its Python source). |
+| `search_ontology` | What a business term means in the teams' [ontology](#ontology): its columns, its SQL and the joins between its tables. |
 
 Only `run_sql` needs a cluster: it runs on its own kernel on the default cluster, with your grants. The other tools are answered by Studio. Each query must be a single SELECT: Studio wraps it as a subquery, so any other statement fails to parse.
 
@@ -222,6 +225,64 @@ claude mcp add --transport http iara https://studio-<team>.example.com/api/mcp -
 ```
 
 Tokens are kept as SHA-256 hashes in `tokens.json` in Studio's data folder, and can be revoked from the same dialog. A token stops working as soon as its email leaves `IARA_ALLOWED_EMAILS`; viewers cannot use the MCP server. With sign-in off, no token is needed.
+
+## Ontology
+
+The ontology is what the teams' business words mean in the data: a term, the columns it maps to, the SQL that computes it, and how tables join. Iara's analyst and the MCP server search it, so a question about "net revenue" is answered with the team's definition, not a guess.
+
+Each team has one file, `<team>.toml` (lowercase letters, digits, `-` and `_`):
+
+- team mode: objects under `_iara/ontology/` of `IARA_BUCKET`;
+- local mode: files in the workspace's `.iara/ontology/` folder.
+
+```toml
+[ontology]
+name = "Finance"
+readers = ["editors"]          # or a list of emails
+owners = ["ana@example.com"]   # may have drafts generated into this file
+
+[[term]]
+name = "Net revenue"
+description = "Revenue after discounts, before tax."
+synonyms = ["receita líquida", "net sales"]
+certified = true
+columns = ["main.sales.orders.amount", "main.sales.orders.discount"]
+sql = "sum(amount * (1 - discount))"
+
+[[term]]
+name = "Churned customer"
+description = "A customer with no order in the last 90 days."
+columns = ["main.sales.customers.id"]
+tables = ["main.sales.orders"]   # tables the definition reads besides those of columns
+
+[[join]]
+left = "main.sales.orders.customer_id"
+right = "main.sales.customers.id"
+description = "Each order has one customer."
+certified = true
+```
+
+- **Terms:** `name` and `description` are required. `columns` are written `catalog.schema.table.column`. A term with no column and no table is plain knowledge ("the fiscal year starts in April").
+- **Drafts:** a term or join is a draft until it has `certified = true`. The analyst is told to use a certified definition as written and to check a draft against the data.
+- **Who reads it:** `readers` lists emails, or `editors` (the default) for everyone who may use the Studio. Admins read every team's file. A term or join over a table you have no [grant](#data-permissions) on is left out for you, as if it did not exist. Like grants, this holds for Iara and the MCP server only: an editor running notebook code reads what the team bucket allows, these files included.
+- **Editing:** write the files in the bucket or the folder; Studio itself only adds drafts at their end (below). A change is picked up within a minute. A file with an unknown key or a bad name is not used at all, and admins are told why in the search's result; the other teams' files still work.
+
+The Ontology page lists each team's terms and joins as you may read them, with drafts marked, and shows admins the files that are broken.
+
+### Drafts
+
+"Generate draft" on the Ontology page has a model write a first version of a team's terms, so nobody starts from an empty file. Admins may do it for any team and start a new team's file; the `owners` a file names may do it for that team.
+
+1. You pick the team and what to read: catalogs, schemas or tables, at most 40 tables in one draft. Only tables you have a grant on are read.
+2. Studio gives the model each table's columns and types, three rows of each when "Read a few rows" is on and a cluster runs, the notebooks and SQL files of the workspace that name those tables, and the names of the terms the team already has. Without a running cluster the draft is made from the columns alone, and the result says so.
+3. What the model answers is checked: a column no table has is dropped, and so is a term left with none of the columns it named, and a join with a column that does not exist.
+4. The rest is written at the end of the team's file with `certified = false`, under a comment with the date. Nothing that was in the file changes. A term whose name the file already has (ignoring case and accents) and a join it already has are not written again, so generating twice does not duplicate.
+
+A draft takes a few minutes; the dialog shows where it is, and Cancel stops it before anything is written.
+
+A draft is a guess to review: read each one, fix it in the file, then set `certified = true`. In the team bucket the write is refused if the file changed while the draft was being made; generate again. Drafts need `OPENAI_API_KEY`; the columns, the rows read and the queries are sent to OpenAI (`store: false`).
+
+Search matches the words of the question with a term's name, synonyms, columns and description, ignoring case and accents. There are no embeddings: nothing but the question and the terms found is sent to the model.
 
 ## Dashboards
 

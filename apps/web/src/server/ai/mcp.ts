@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { describeTable, explainSql, listFiles, listTables, MAX_ROWS, readFile, runSql, type ToolContext } from "./tools";
+import { describeTable, explainSql, listFiles, listTables, MAX_ROWS, readFile, runSql, searchOntology, type ToolContext } from "./tools";
 
 /**
  * The MCP server's JSON-RPC handler (pure; unit tested): stateless, JSON
@@ -10,7 +10,7 @@ import { describeTable, explainSql, listFiles, listTables, MAX_ROWS, readFile, r
 
 const VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
 const LATEST = VERSIONS[0];
-const INSTRUCTIONS = `Read-only SQL over the tables you are granted, at most ${MAX_ROWS} rows per query, and the workspace's notebooks and SQL files. Start with list_tables or list_files.`;
+const INSTRUCTIONS = `Read-only SQL over the tables you are granted, at most ${MAX_ROWS} rows per query, and the workspace's notebooks and SQL files. Start with list_tables or list_files; search_ontology gives what the teams' business terms mean.`;
 
 type Id = string | number | null;
 
@@ -40,6 +40,12 @@ export const TOOLS: Tool[] = [
   defineTool("list_files", "List the workspace's notebooks, SQL files and text files. Read-only.", z.strictObject({}), () => listFiles()),
   defineTool("read_file", "The text of a notebook, SQL file or text file from list_files (a notebook as its Python source). Read-only.", z.strictObject({ path: z.string() }), (_ctx, a) =>
     readFile(a.path),
+  ),
+  defineTool(
+    "search_ontology",
+    "Search the teams' ontology: what a business term or metric means, the columns it maps to, the SQL that computes it, and how tables join. An empty query lists the terms. certified: false marks a draft nobody reviewed. Read-only.",
+    z.strictObject({ query: z.string().max(500) }),
+    (ctx, a) => searchOntology(ctx, a.query),
   ),
 ];
 
