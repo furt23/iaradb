@@ -239,7 +239,7 @@ Each team has one file, `<team>.toml` (lowercase letters, digits, `-` and `_`):
 [ontology]
 name = "Finance"
 readers = ["editors"]          # or a list of emails
-owners = ["ana@example.com"]   # may have drafts generated into this file
+owners = ["ana@example.com"]   # Iara writes what they teach her into this file
 
 [[term]]
 name = "Net revenue"
@@ -265,22 +265,17 @@ certified = true
 - **Terms:** `name` and `description` are required. `columns` are written `catalog.schema.table.column`. A term with no column and no table is plain knowledge ("the fiscal year starts in April").
 - **Drafts:** a term or join is a draft until it has `certified = true`. The analyst is told to use a certified definition as written and to check a draft against the data.
 - **Who reads it:** `readers` lists emails, or `editors` (the default) for everyone who may use the Studio. Admins read every team's file. A term or join over a table you have no [grant](#data-permissions) on is left out for you, as if it did not exist. Like grants, this holds for Iara and the MCP server only: an editor running notebook code reads what the team bucket allows, these files included.
-- **Editing:** write the files in the bucket or the folder; Studio itself only adds drafts at their end (below). A change is picked up within a minute. A file with an unknown key or a bad name is not used at all, and admins are told why in the search's result; the other teams' files still work.
+- **Editing:** write the files in the bucket or the folder; Iara itself only adds at their end what owners teach her (below). A change is picked up within a minute. A file with an unknown key or a bad name is not used at all, and admins are told why in the search's result; the other teams' files still work.
 
-The Ontology page lists each team's terms and joins as you may read them, with drafts marked, and shows admins the files that are broken.
+### How the ontology grows
 
-### Drafts
+There is no page to fill the ontology. Iara decides what goes into it while she talks with the people who own it: admins, for any team (they may start a new team's file), and the `owners` a file names, for that team.
 
-"Generate draft" on the Ontology page has a model write a first version of a team's terms, so nobody starts from an empty file. Admins may do it for any team and start a new team's file; the `owners` a file names may do it for that team.
+1. When one of them states a lasting business rule of their team (what a term or metric means, how it is computed, which columns hold it, how two tables join), Iara writes it with `learn_ontology`, without asking, and says so in one line. One-off requests, personal preferences (those are [memories](#iara)) and her own guesses are not written.
+2. The columns are checked against the tables that person may read: a column no table has is dropped, and so is a term left with none of the columns it named, and a join with a column that does not exist.
+3. The rest is written at the end of the team's file with `certified = true`, under a comment with who taught it and the date. Nothing that was in the file changes. A term whose name the file already has (ignoring case and accents) and a join it already has are not written again; to change one, edit the file. In the team bucket the write is refused if the file changed meanwhile.
 
-1. You pick the team and what to read: catalogs, schemas or tables, at most 40 tables in one draft. Only tables you have a grant on are read.
-2. Studio gives the model each table's columns and types, three rows of each when "Read a few rows" is on and a cluster runs, the notebooks and SQL files of the workspace that name those tables, and the names of the terms the team already has. Without a running cluster the draft is made from the columns alone, and the result says so.
-3. What the model answers is checked: a column no table has is dropped, and so is a term left with none of the columns it named, and a join with a column that does not exist.
-4. The rest is written at the end of the team's file with `certified = false`, under a comment with the date. Nothing that was in the file changes. A term whose name the file already has (ignoring case and accents) and a join it already has are not written again, so generating twice does not duplicate.
-
-A draft takes a few minutes; the dialog shows where it is, and Cancel stops it before anything is written.
-
-A draft is a guess to review: read each one, fix it in the file, then set `certified = true`. In the team bucket the write is refused if the file changed while the draft was being made; generate again. Drafts need `OPENAI_API_KEY`; the columns, the rows read and the queries are sent to OpenAI (`store: false`).
+Everyone else's conversations never write to the ontology.
 
 Search matches the words of the question with a term's name, synonyms, columns and description, ignoring case and accents. There are no embeddings: nothing but the question and the terms found is sent to the model.
 

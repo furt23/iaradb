@@ -5,7 +5,7 @@
  *     [ontology]
  *     name = "Finance"
  *     readers = ["editors"]            # or emails; admins read every ontology
- *     owners = ["ana@example.com"]     # may have drafts written into the file, besides admins
+ *     owners = ["ana@example.com"]     # Iara writes what they teach her into the file, besides admins
  *
  *     [[term]]
  *     name = "Net revenue"
@@ -63,7 +63,7 @@ export interface Ontology {
   description: string | null;
   /** lowercase emails or `editors` */
   readers: string[];
-  /** lowercase emails of those who may have drafts written into the file (admins always may) */
+  /** lowercase emails of those whose rules Iara writes into the file (admins always) */
   owners: string[];
   terms: OntologyTerm[];
   joins: OntologyJoin[];
@@ -168,8 +168,8 @@ export function mayReadOntology(user: { email: string; admin: boolean; viewer?: 
   return o.readers.includes("editors") || (!!user.email && o.readers.includes(user.email.toLowerCase()));
 }
 
-/** Whether a user may have drafts written into a team's file (null: the team has none yet): admins, and the owners the file names. */
-export function mayDraftOntology(user: { email: string; admin: boolean; viewer?: boolean }, o: Pick<Ontology, "owners"> | null): boolean {
+/** Whether what a user tells Iara may be written into a team's file (null: the team has none yet): admins, and the owners the file names. */
+export function mayTeachOntology(user: { email: string; admin: boolean; viewer?: boolean }, o: Pick<Ontology, "owners"> | null): boolean {
   if (user.admin) return true;
   if (user.viewer || !o) return false;
   return !!user.email && o.owners.includes(user.email.toLowerCase());
@@ -286,34 +286,4 @@ export function searchOntologies(ontologies: Ontology[], query: string, canRead:
   }
   joins.sort((a, b) => Number(b.certified) - Number(a.certified));
   return { terms: top.map((f) => f.term), joins: joins.slice(0, JOIN_LIMIT), more: found.length - top.length };
-}
-
-// ---- what the Ontology page shows ----
-
-/** A team's ontology as one user sees it. */
-export interface OntologyTeamView extends Ontology {
-  /** the user may have drafts written into it */
-  canDraft: boolean;
-}
-
-export interface OntologyOverview {
-  teams: OntologyTeamView[];
-  /** the files that could not be read (admins only) */
-  problems: { team: string; message: string }[];
-  /** the user may start a new team's file */
-  canCreate: boolean;
-  /** the tables the user may read, by full name: what a draft can be made from */
-  tables: string[];
-  /** why the tables could not be listed (the terms are shown all the same) */
-  tablesError: string | null;
-  /** where the files are kept, as people would look for them */
-  where: string;
-}
-
-/** What a draft can read, widest first: each catalog, each schema, then each table. */
-export function scopeOptions(tables: string[]): string[] {
-  const parts = tables.map((t) => t.toLowerCase().split("."));
-  const catalogs = new Set(parts.map((p) => p[0]));
-  const schemas = new Set(parts.map((p) => p.slice(0, 2).join(".")));
-  return [...[...catalogs].sort(), ...[...schemas].sort(), ...[...new Set(tables.map((t) => t.toLowerCase()))].sort()];
 }

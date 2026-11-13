@@ -5,6 +5,7 @@ import type { LangGraphRunnableConfig } from "@langchain/langgraph";
 import type { IaraMemory } from "@/lib/iara/protocol";
 
 import { CODE_MODEL, FAST_MODEL } from "../../ai/models";
+import { learnOntology, teachableTeams, type Teachable } from "../../ontology/learn";
 import { addMemory, removeMemory } from "../memory";
 import { contextText, DASHBOARD_API, NOTEBOOK_API, resultStep, userStep } from "../prompt";
 import { addUsage, emit, MAX_STEPS, type ChatReply, type ChatUsage, type FunctionDecl, type Handoff, type IaraDeps, type IaraGraphState, type IaraUpdate, type Step } from "../state";
@@ -40,6 +41,55 @@ export const IARA_TOOLS: FunctionDecl[] = [
   fn("remember", "Save a lasting fact or preference the user stated, for future conversations.", "text", "one short sentence"),
   fn("forget", "Forget something you remembered, when the user asks.", "id", "the id shown before the memory"),
 ];
+
+const STRING_LIST = { type: "array", items: { type: "string" } };
+
+/** Offered only to users whose rules may go into a team's ontology (see teachingText). */
+export const LEARN_TOOL: FunctionDecl = {
+  type: "function",
+  name: "learn_ontology",
+  description:
+    "Write a business rule the user stated into their team's ontology, so every assistant and teammate uses it: what a term or metric means, how it is computed, which columns hold it, how two tables join. Written at once, no approval.",
+  parameters: {
+    type: "object",
+    properties: {
+      team: { type: "string", description: "the team id, from the list you were given" },
+      team_name: { type: "string", description: "the team's name as people read it, only for a new team" },
+      terms: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+            description: { type: "string", description: "the rule, as the user stated it" },
+            synonyms: STRING_LIST,
+            columns: { ...STRING_LIST, description: "catalog.schema.table.column, exactly as the analyst gave them; empty when the rule names none" },
+            sql: { type: "string", description: "the expression that computes it, or empty" },
+          },
+          required: ["name", "description", "synonyms", "columns", "sql"],
+        },
+      },
+      joins: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: { left: { type: "string" }, right: { type: "string" }, description: { type: "string" } },
+          required: ["left", "right", "description"],
+        },
+      },
+    },
+    required: ["team", "terms", "joins"],
+  },
+};
+
+/** What iara is told about learn_ontology for this user; null when nothing they say may go into an ontology. */
+export function teachingText(t: Teachable): string | null {
+  if (!t.teams.length && !t.anyTeam) return null;
+  const teams = t.teams.map((x) => `${x.team} (${x.name})`).join(", ");
+  const where = t.anyTeam ? `any team (${teams ? `these exist: ${teams}; ` : ""}a new one gets a new id)` : teams;
+  return `This user owns the ontology of ${where}.
+You decide what goes into it, with learn_ontology, without asking: when they state a lasting business rule of their team (what a term or metric means, how it is computed, which columns hold it, how tables join) that someone else asking the same question would need. Not one-off requests, personal preferences (remember those), nor your own guesses or inferences. Check the columns with the analyst first, unless the rule names none. Pick the team the rule belongs to. Then say in one short line that you added it.`;
+}
 
 const SUMMARY_SYSTEM = "Summarize this conversation for yourself, keeping facts, decisions, table and column names and open questions.";
 const OUT_OF_STEPS = "You are out of steps for this message. Tell the user briefly where things stand.";
@@ -94,9 +144,9 @@ async function compact(deps: IaraDeps, history: Step[], summary: string | null, 
   return reply.text.trim() ? { history: history.slice(cut), summary: reply.text.trim(), usage: reply.usage } : { ...same, usage: reply.usage };
 }
 
-async function systemPrompt(memories: IaraMemory[], summary: string | null, file: string, dashboard: boolean): Promise<string> {
+async function systemPrompt(memories: IaraMemory[], summary: string | null, file: string, dashboard: boolean, teaching: string | null): Promise<string> {
   const known = await cutToTokens(memories.map((m) => `- [${m.id}] ${m.text}`).join("\n"), MEMORY_TOKENS);
-  return [SYSTEM, dashboard && DASHBOARD_API, `What you remember about this user:\n${known || "(nothing yet)"}`, summary && `Earlier in this conversation (summarized):\n${summary}`, `The open file:\n${file}`]
+  return [SYSTEM, dashboard && DASHBOARD_API, teaching, `What you remember about this user:\n${known || "(nothing yet)"}`, summary && `Earlier in this conversation (summarized):\n${summary}`, `The open file:\n${file}`]
     .filter(Boolean)
     .join("\n\n");
 }
@@ -113,13 +163,15 @@ export function iaraNode(deps: IaraDeps) {
     let calls = 0;
     let used: ChatUsage = { input: 0, output: 0 };
     const file = await contextText(s.context, 30_000);
+    const teaching = teachingText(await teachableTeams(deps.user, deps.tools));
+    const tools = teaching ? [...IARA_TOOLS, LEARN_TOOL] : IARA_TOOLS;
 
     /** One model call; `extra` steps are asked about but not kept in the history. */
     async function ask(tools: FunctionDecl[] | undefined, extra: Step[] = []): Promise<ChatReply> {
       let started = false;
       const r = await deps.chat({
         model: CODE_MODEL,
-        system: await systemPrompt(memories, summary, file, s.context.surface === "dashboard"),
+        system: await systemPrompt(memories, summary, file, s.context.surface === "dashboard", teaching),
         steps: [...history, ...extra],
         tools,
         onText: (d) => {
@@ -158,7 +210,7 @@ export function iaraNode(deps: IaraDeps) {
       ...more,
     });
 
-    /** remember and forget run here; an error is a result the model reads. */
+    /** remember, forget and learn_ontology run here; an error is a result the model reads. */
     async function memoryCall(call: Extract<Step, { type: "function_call" }>): Promise<Step> {
       try {
         if (call.name === "remember") {
@@ -174,6 +226,8 @@ export function iaraNode(deps: IaraDeps) {
           emit(config, { type: "memory", action: "forgotten", memory });
           return resultStep(call, "forgotten");
         }
+        // never offered to a user who may not teach; learnOntology checks again against the file
+        if (call.name === "learn_ontology" && teaching) return resultStep(call, await learnOntology(deps.user, call.arguments, { tools: deps.tools }));
         return resultStep(call, `unknown tool: ${call.name}`, true);
       } catch (e) {
         return resultStep(call, (e as Error).message, true);
@@ -185,7 +239,7 @@ export function iaraNode(deps: IaraDeps) {
       ({ history, summary } = compacted);
       used = addUsage(used, compacted.usage);
 
-      const r = await ask(IARA_TOOLS);
+      const r = await ask(tools);
       if (!r.calls.length) return finish();
 
       const results: Step[] = [];

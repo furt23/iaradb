@@ -1,14 +1,15 @@
 /**
- * Drafts of a team's ontology (pure): what a model proposed is checked
- * against the tables' real columns, then written at the end of the team's
- * file as drafts (`certified` is never set), leaving every line that was
- * there as it was. A term whose name the file already has, and a join it
- * already has, are not written again.
+ * What a team's owner taught Iara in a conversation (pure): the terms and
+ * joins she decided belong in the ontology are checked against the tables'
+ * real columns, then written at the end of the team's file as certified (an
+ * owner or an admin said so), leaving every line that was there as it was. A
+ * term whose name the file already has, and a join it already has, are not
+ * written again.
  */
 
 import { fold, parseOntology, sameJoin, type Ontology } from "./ontology";
 
-export interface DraftTerm {
+export interface LessonTerm {
   name: string;
   description: string;
   synonyms: string[];
@@ -17,52 +18,22 @@ export interface DraftTerm {
   sql: string | null;
 }
 
-export interface DraftJoin {
+export interface LessonJoin {
   left: string;
   right: string;
   description: string | null;
 }
 
-export interface Draft {
-  terms: DraftTerm[];
-  joins: DraftJoin[];
+export interface Lesson {
+  terms: LessonTerm[];
+  joins: LessonJoin[];
 }
 
-/** A table the draft was made from: its full name and the names of its columns. */
-export interface DraftTable {
+/** A table the lesson names: its full name and the names of its columns. */
+export interface LessonTable {
   full: string;
   columns: string[];
 }
-
-/** JSON Schema of what the model answers with. */
-export const DRAFT_SCHEMA = {
-  type: "object",
-  properties: {
-    terms: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          name: { type: "string" },
-          description: { type: "string" },
-          synonyms: { type: "array", items: { type: "string" } },
-          columns: { type: "array", items: { type: "string" }, description: "catalog.schema.table.column, exactly as listed" },
-          sql: { type: "string", description: "the expression that computes the term, or empty" },
-        },
-        required: ["name", "description", "synonyms", "columns", "sql"],
-      },
-    },
-    joins: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: { left: { type: "string" }, right: { type: "string" }, description: { type: "string" } },
-        required: ["left", "right", "description"],
-      },
-    },
-  },
-  required: ["terms", "joins"],
-};
 
 const text = (v: unknown, max: number): string => (typeof v === "string" ? v.replace(/\s+/g, " ").trim().slice(0, max) : "");
 const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
@@ -73,13 +44,13 @@ const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
  * it named and a join with a column that does not exist. `dropped` counts
  * the terms and joins that went.
  */
-export function checkDraft(raw: unknown, tables: DraftTable[]): Draft & { dropped: number } {
+export function checkLesson(raw: unknown, tables: LessonTable[]): Lesson & { dropped: number } {
   // by lowercase name, to the column as the table writes it
   const known = new Map<string, string>();
   for (const t of tables) for (const c of t.columns) known.set(`${t.full}.${c}`.toLowerCase(), `${t.full.toLowerCase()}.${c}`);
   const column = (v: unknown) => (typeof v === "string" ? known.get(v.trim().toLowerCase()) : undefined);
   const { terms, joins } = (raw ?? {}) as { terms?: unknown; joins?: unknown };
-  const out: Draft & { dropped: number } = { terms: [], joins: [], dropped: 0 };
+  const out: Lesson & { dropped: number } = { terms: [], joins: [], dropped: 0 };
 
   const names = new Set<string>();
   for (const item of list(terms)) {
@@ -119,24 +90,24 @@ function tomlString(s: string): string {
 
 const tomlList = (items: string[]): string => `[${items.map((s) => JSON.stringify(s)).join(", ")}]`;
 
-function termBlock(t: DraftTerm): string {
+function termBlock(t: LessonTerm): string {
   const lines = ["[[term]]", `name = ${JSON.stringify(t.name)}`, `description = ${JSON.stringify(t.description)}`];
   if (t.synonyms.length) lines.push(`synonyms = ${tomlList(t.synonyms)}`);
-  lines.push("certified = false");
+  lines.push("certified = true");
   if (t.columns.length) lines.push(`columns = ${tomlList(t.columns)}`);
   if (t.sql) lines.push(`sql = ${tomlString(t.sql)}`);
   return lines.join("\n");
 }
 
-function joinBlock(j: DraftJoin): string {
+function joinBlock(j: LessonJoin): string {
   const lines = ["[[join]]", `left = ${JSON.stringify(j.left)}`, `right = ${JSON.stringify(j.right)}`];
   if (j.description) lines.push(`description = ${JSON.stringify(j.description)}`);
-  lines.push("certified = false");
+  lines.push("certified = true");
   return lines.join("\n");
 }
 
-export interface MergedDraft {
-  /** the team's file with the draft at its end */
+export interface MergedLesson {
+  /** the team's file with the lesson at its end */
   text: string;
   /** the terms and joins written */
   terms: number;
@@ -146,53 +117,22 @@ export interface MergedDraft {
 }
 
 /**
- * The team's file with the draft written at its end. `existing` is the file's
+ * The team's file with the lesson written at its end. `existing` is the file's
  * text (null: the team has none, and the file starts with `name`). Nothing
  * that was there changes. Throws when the result would not be read as an
- * ontology, so a draft never breaks a team's file.
+ * ontology, so a lesson never breaks a team's file.
  */
-export function mergeDraft(team: string, existing: string | null, draft: Draft, opts: { name?: string; date: string }): MergedDraft {
+export function mergeLesson(team: string, existing: string | null, lesson: Lesson, opts: { name?: string; by: string; date: string }): MergedLesson {
   const current: Ontology | null = existing === null ? null : parseOntology(team, existing);
   const names = new Set(current?.terms.map((t) => fold(t.name)));
-  const terms = draft.terms.filter((t) => !names.has(fold(t.name)));
-  const joins = draft.joins.filter((j) => !current?.joins.some((k) => sameJoin(k, j)));
-  const known = draft.terms.length - terms.length + (draft.joins.length - joins.length);
+  const terms = lesson.terms.filter((t) => !names.has(fold(t.name)));
+  const joins = lesson.joins.filter((j) => !current?.joins.some((k) => sameJoin(k, j)));
+  const known = lesson.terms.length - terms.length + (lesson.joins.length - joins.length);
 
   const head = existing === null ? `[ontology]\nname = ${JSON.stringify(opts.name?.trim() || team)}\nreaders = ["editors"]` : existing.replace(/\s+$/, "");
   if (!terms.length && !joins.length) return { text: existing ?? `${head}\n`, terms: 0, joins: 0, known };
-  const note = `# Drafts written by Iara on ${opts.date}. Review each one, fix it, then set certified = true.`;
+  const note = `# Taught to Iara by ${opts.by} on ${opts.date}.`;
   const result = [head, note, ...terms.map(termBlock), ...joins.map(joinBlock)].join("\n\n") + "\n";
   parseOntology(team, result);
   return { text: result, terms: terms.length, joins: joins.length, known };
 }
-
-/** Where a draft being made is: the tables described, the tables whose rows were read, or the model's answers received. */
-export interface DraftProgress {
-  step: "tables" | "rows" | "terms";
-  done: number;
-  total: number;
-}
-
-/** What a finished draft did to the team's file. */
-export interface DraftOutcome {
-  team: string;
-  /** written into the team's file as drafts */
-  terms: number;
-  joins: number;
-  /** left out: the file already had them */
-  known: number;
-  /** left out: the tables do not support them */
-  dropped: number;
-  /** the tables read */
-  tables: number;
-  sampled: boolean;
-  /** why no rows were read, when they were asked for */
-  sampleError: string | null;
-}
-
-/** The server-sent events of POST /api/ontology/draft: progress (and pings that keep the connection open), then done or failed. */
-export type DraftEvent =
-  | { event: "progress"; data: DraftProgress }
-  | { event: "ping"; data: null }
-  | { event: "done"; data: DraftOutcome }
-  | { event: "failed"; data: { message: string } };

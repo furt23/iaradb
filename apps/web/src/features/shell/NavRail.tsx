@@ -14,7 +14,6 @@ import useMediaQuery from "@mui/material/useMediaQuery";
 import { usePathname } from "next/navigation";
 import { Fragment, useState, type ReactNode } from "react";
 
-import { OntologyIcon } from "@/features/ontology/OntologyIcon";
 import { useTranslation } from "@/i18n";
 import { NavItem } from "./NavItem";
 import { RailToggle } from "./RailToggle";
@@ -25,7 +24,6 @@ const ICONS: Record<SectionId, ReactNode> = {
   workspace: <FolderOutlined />,
   data: <StorageOutlined />,
   wrangle: <AutoFixHighOutlined />,
-  ontology: <OntologyIcon />,
   dashboards: <SpaceDashboardOutlined />,
   sql: <TerminalOutlined />,
   history: <HistoryOutlined />,

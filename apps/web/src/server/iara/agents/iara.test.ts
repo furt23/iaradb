@@ -5,12 +5,14 @@ import path from "node:path";
 import type { LangGraphRunnableConfig } from "@langchain/langgraph";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { parseOntology } from "@/lib/ontology";
+
 import { LOCAL_USER } from "../../auth/access";
 import { answering, callStep, calling, fakeDeps, SQL_CONTEXT } from "../fakes";
 import { addMemory, listMemories } from "../memory";
 import { userStep } from "../prompt";
 import { MAX_STEPS, type IaraGraphState, type Step } from "../state";
-import { compactionCut, IARA_TOOLS, iaraNode } from "./iara";
+import { compactionCut, IARA_TOOLS, iaraNode, LEARN_TOOL } from "./iara";
 
 // chars / 4, and a token count the tests can raise
 const tokens = vi.hoisted(() => ({ steps: 0 }));
@@ -115,6 +117,20 @@ describe("iaraNode", () => {
     expect(system).toContain("Earlier in this conversation (summarized):\ntalked about orders");
     expect(system).toContain("The open file:\nSQL editor q.sql");
     expect(tools).toBe(IARA_TOOLS);
+    expect(system).not.toContain("learn_ontology");
+  });
+
+  it("offers learn_ontology only to those whose rules may go into an ontology", async () => {
+    const admin = fakeDeps({ iara: [answering("ok")] }, { email: "boss@example.com", name: "Boss", admin: true });
+    admin.deps.tools.ontologies = async () => ({ ontologies: [{ ...parseOntology("finance", '[ontology]\nname = "Finance"'), owners: [] }], problems: [] });
+    await iaraNode(admin.deps)(state(), config().config);
+    expect(admin.requests[0].tools).toEqual([...IARA_TOOLS, LEARN_TOOL]);
+    expect(admin.requests[0].system).toContain("This user owns the ontology of any team (these exist: finance (Finance); a new one gets a new id).");
+
+    const owner = fakeDeps({ iara: [answering("ok")] }, { email: "ana@example.com", name: "Ana", admin: false });
+    owner.deps.tools.ontologies = async () => ({ ontologies: [parseOntology("finance", '[ontology]\nowners = ["ana@example.com"]'), parseOntology("ops", "")], problems: [] });
+    await iaraNode(owner.deps)(state(), config().config);
+    expect(owner.requests[0].system).toContain("This user owns the ontology of finance (finance).");
   });
 
   it("starts a new paragraph when the reply goes on after a tool call", async () => {

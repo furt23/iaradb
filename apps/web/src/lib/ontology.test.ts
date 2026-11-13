@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { mayDraftOntology, mayReadOntology, parseOntology, readableOntology, sameJoin, scopeOptions, searchOntologies, termTables } from "./ontology";
+import { mayTeachOntology, mayReadOntology, parseOntology, readableOntology, sameJoin, searchOntologies, termTables } from "./ontology";
 
 const FINANCE = `
 [ontology]
@@ -90,14 +90,14 @@ describe("mayReadOntology", () => {
   });
 });
 
-describe("mayDraftOntology", () => {
-  it("lets admins draft for any team, a new one included, and owners for theirs", () => {
-    expect(mayDraftOntology({ email: "boss@example.com", admin: true }, null)).toBe(true);
-    expect(mayDraftOntology({ email: "Bia@example.com", admin: false }, { owners: ["bia@example.com"] })).toBe(true);
-    expect(mayDraftOntology({ email: "ana@example.com", admin: false }, { owners: ["bia@example.com"] })).toBe(false);
-    expect(mayDraftOntology({ email: "bia@example.com", admin: false }, null)).toBe(false);
-    expect(mayDraftOntology({ email: "bia@example.com", admin: false, viewer: true }, { owners: ["bia@example.com"] })).toBe(false);
-    expect(mayDraftOntology({ email: "", admin: false }, { owners: [] })).toBe(false);
+describe("mayTeachOntology", () => {
+  it("lets admins teach any team, a new one included, and owners for theirs", () => {
+    expect(mayTeachOntology({ email: "boss@example.com", admin: true }, null)).toBe(true);
+    expect(mayTeachOntology({ email: "Bia@example.com", admin: false }, { owners: ["bia@example.com"] })).toBe(true);
+    expect(mayTeachOntology({ email: "ana@example.com", admin: false }, { owners: ["bia@example.com"] })).toBe(false);
+    expect(mayTeachOntology({ email: "bia@example.com", admin: false }, null)).toBe(false);
+    expect(mayTeachOntology({ email: "bia@example.com", admin: false, viewer: true }, { owners: ["bia@example.com"] })).toBe(false);
+    expect(mayTeachOntology({ email: "", admin: false }, { owners: [] })).toBe(false);
   });
 });
 
@@ -115,13 +115,6 @@ describe("sameJoin", () => {
     const j = { left: "a.b.c.x", right: "a.b.d.y" };
     expect(sameJoin(j, { left: "a.b.d.y", right: "A.B.C.X" })).toBe(true);
     expect(sameJoin(j, { left: "a.b.c.x", right: "a.b.d.z" })).toBe(false);
-  });
-});
-
-describe("scopeOptions", () => {
-  it("lists the catalogs, then the schemas, then the tables", () => {
-    expect(scopeOptions(["main.sales.orders", "main.sales.customers", "lake.raw.events"])).toEqual(["lake", "main", "lake.raw", "main.sales", "lake.raw.events", "main.sales.customers", "main.sales.orders"]);
-    expect(scopeOptions([])).toEqual([]);
   });
 });
 

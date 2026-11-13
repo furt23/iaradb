@@ -16,7 +16,7 @@ import { catalogRegion } from "../workspace/catalogStore";
  * The teams' ontologies, one `<team>.toml` each: objects under
  * `_iara/ontology/` of the team bucket, or files of the workspace's
  * `.iara/ontology` folder in local mode. People write them there, and the
- * Studio writes drafts at their end, so what was read is kept for a minute,
+ * Iara writes what owners teach her at their end, so what was read is kept for a minute,
  * not forever.
  */
 

@@ -13,7 +13,6 @@ describe("sections", () => {
     expect(sectionOf("/data/lineitem")).toBe("data");
     expect(sectionOf("/wrangle")).toBe("wrangle");
     expect(sectionOf("/wrangle/lineitem")).toBe("wrangle");
-    expect(sectionOf("/ontology")).toBe("ontology");
     expect(sectionOf("/dashboards")).toBe("dashboards");
     expect(sectionOf("/dashboards/sales")).toBe("dashboards");
     expect(sectionOf("/sql")).toBe("sql");
