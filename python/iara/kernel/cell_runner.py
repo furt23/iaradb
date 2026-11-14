@@ -9,7 +9,7 @@ from typing import Any
 
 from iara import widgets
 from iara.kernel.analyze import analyzed_node
-from iara.kernel.history import History
+from iara.kernel.history import History, io_of, take_writes
 from iara.kernel.notebook.analysis import WORKSPACE_VAR, sql_placeholders
 from iara.kernel.notebook.graph import CellDeps
 from iara.kernel.notebook.model import Cell
@@ -56,12 +56,12 @@ def take_plans() -> list[dict[str, Any]]:
     return take() if take else []
 
 
-def queries_of(cell: Cell) -> list[dict[str, Any]]:
-    """The runs recorded since the last call, as ``QueryAnalysis`` dicts: the last ``MAX_QUERIES``."""
+def queries_of(cell: Cell, runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The given query runs as ``QueryAnalysis`` dicts: the last ``MAX_QUERIES``."""
     code = cell.code if cell.kind == "sql" else ""
     now = int(time.time() * 1000)
     out = []
-    for p in take_plans()[-MAX_QUERIES:]:
+    for p in runs[-MAX_QUERIES:]:
         q = {
             "query": code,
             "at": now,
@@ -82,6 +82,7 @@ class CellRunner:
         self.results = results
         self.history = history
         self.interruptor = interruptor
+        self.last_params: dict[str, Any] | None = None
 
     # -- SQL -----------------------------------------------------------------
     def query(
@@ -90,31 +91,23 @@ class CellRunner:
         sql: str,
         tables: dict[str, Any],
         label: str,
-        source: str,
         params: dict[str, Any] | None = None,
         allow: list[str] | None = None,
     ) -> tuple[dict[str, Any], Any]:
         """Run a query with its profile and plan: ``(table output, DataFrame)``."""
-        t0 = time.perf_counter()
         # params and allow go in only when given, so a query without them runs as ever
         bound = {"params": params} if params else {}
         if allow is not None:  # [] grants nothing, so test None, not truthiness
             bound["allow"] = allow
-        try:
-            output, df = run_query(self.results, ws.sql(sql, **bound, **tables), label)
-        except BaseException as e:
-            self.history.record(sql, source, (time.perf_counter() - t0) * 1000, None, f"{type(e).__name__}: {e}", params)
-            raise
-        self.history.record(sql, source, output["profile"]["elapsed_ms"], df.height, params=params)
-        return output, df
+        return run_query(self.results, ws.sql(sql, **bound, **tables), label)
 
-    def _sql(self, cell: Cell, deps: CellDeps, inputs: dict[str, Any], source: str) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    def _sql(self, cell: Cell, deps: CellDeps, inputs: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any]]:
         ws = inputs.get(WORKSPACE_VAR)
         ws = ws if isinstance(ws, Workspace) else self.ws
         tables = {r: inputs[r] for r in deps.refs if r != WORKSPACE_VAR and r in inputs}
         # ``:name`` placeholders take the notebook's widget values
-        params = widgets.active().params(sql_placeholders(cell.code)) or None
-        output, df = self.query(ws, cell.code, tables, cell.output or "result", source, params)
+        self.last_params = widgets.active().params(sql_placeholders(cell.code)) or None
+        output, df = self.query(ws, cell.code, tables, cell.output or "result", self.last_params)
         self.last_frames = frames_of({cell.output: df} if cell.output else {})
         return output, ({cell.output: df} if cell.output else {})
 
@@ -148,6 +141,20 @@ class CellRunner:
             return ({"type": "tables", "tables": tables} if tables else None), res.defs
         return display(res.value, self.results, label), res.defs
 
+    # -- history -------------------------------------------------------------
+    def _record(self, cell: Cell, source: str, runs: list[dict[str, Any]], output: dict[str, Any] | None, elapsed_ms: float, error: str | None) -> None:
+        """One history entry for the run: every SQL cell, a Python cell only when it read or wrote tables."""
+        profile = output.get("profile") if isinstance(output, dict) else None
+        reads, writes = io_of(self.ws, runs, profile)
+        if cell.kind == "sql":
+            is_table = isinstance(output, dict) and output.get("type") == "table"
+            rows = output["result"]["num_rows"] if is_table else None
+            # a statement that writes returns a summary: its profile times that summary, not the write
+            ms = profile["elapsed_ms"] if is_table and profile and not writes else elapsed_ms
+            self.history.record(cell.code, source, ms, rows, error, self.last_params, profile=profile, reads=reads, writes=writes)
+        elif reads or writes:
+            self.history.record(cell.code, source, elapsed_ms, None, error, kind="python", profile=profile, reads=reads, writes=writes)
+
     # -- any cell ------------------------------------------------------------
     def run(self, cell: Cell, deps: CellDeps, defs: frozenset[str], inputs: dict[str, Any], emit: Emit, source: str) -> Outcome:
         if cell.kind == "markdown":
@@ -161,21 +168,28 @@ class CellRunner:
 
         t0 = time.perf_counter()
         self.last_frames: list[dict[str, Any]] = []
-        take_plans()  # runs left over from earlier cells are not this cell's
+        self.last_params = None
+        take_plans()  # runs and writes left over from earlier cells are not this cell's
+        take_writes()
         try:
             with capture(stream), watch(progress), self.interruptor.interruptible():
                 if cell.kind == "sql":
-                    output, values = self._sql(cell, deps, inputs, source)
+                    output, values = self._sql(cell, deps, inputs)
                 else:
                     output, values = self._python(cell, defs, inputs)
         except BaseException as e:  # noqa: BLE001
             elapsed = (time.perf_counter() - t0) * 1000
             exc, filename = (e.exc, e.filename) if isinstance(e, _UserError) else (e, None)
+            runs = take_plans()
+            self._record(cell, source, runs, None, elapsed, f"{type(exc).__name__}: {exc}")
             if is_cancellation(exc):
                 # the user stopped it: not an error, so no traceback (the Studio says it was stopped)
-                return Outcome("cancelled", None, elapsed_ms=elapsed, queries=queries_of(cell))
-            return Outcome("error", error_output(exc, filename), elapsed_ms=elapsed, queries=queries_of(cell))
-        return Outcome("done", output, values, (time.perf_counter() - t0) * 1000, self.last_frames, queries=queries_of(cell))
+                return Outcome("cancelled", None, elapsed_ms=elapsed, queries=queries_of(cell, runs))
+            return Outcome("error", error_output(exc, filename), elapsed_ms=elapsed, queries=queries_of(cell, runs))
+        elapsed = (time.perf_counter() - t0) * 1000
+        runs = take_plans()
+        self._record(cell, source, runs, output, elapsed, None)
+        return Outcome("done", output, values, elapsed, self.last_frames, queries=queries_of(cell, runs))
 
 
 class _UserError(Exception):

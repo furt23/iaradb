@@ -42,6 +42,13 @@ def call(session: KernelSession, method: str, **p: Any) -> Any:
     return session.handlers()[method](p, lambda event, data: None)
 
 
+def call_with_history(session: KernelSession, method: str, **p: Any) -> tuple[Any, list[dict[str, Any]]]:
+    """The result, and the ``history`` events the call emitted."""
+    events: list[dict[str, Any]] = []
+    result = session.handlers()[method](p, lambda event, data: events.append(data) if event == "history" else None)
+    return result, events
+
+
 class Spy:
     """Stands in for ``Workspace.sql``: records the ``params`` it gets, then runs the query without them."""
 
@@ -79,33 +86,34 @@ def test_bind_params_rejects_a_bad_date():
 
 @needs_engine
 def test_run_passes_params_and_records_them(session: KernelSession, spy: Spy):
-    call(session, "sql.run", query="select 1 as one", params={"region": "north", "since": "2026-02-03"}, param_types={"since": "date"})
+    _, events = call_with_history(session, "sql.run", query="select 1 as one", params={"region": "north", "since": "2026-02-03"}, param_types={"since": "date"})
     assert spy.calls == [{"region": "north", "since": dt.date(2026, 2, 3)}]
-    entry = session.history.recent(1)[0]
-    assert entry["params"] == {"region": "north", "since": "2026-02-03"}
+    [entry] = events
+    assert entry["params"] == {"region": "north", "since": dt.date(2026, 2, 3)}
 
 
 @needs_engine
 def test_run_without_params_calls_sql_as_before(session: KernelSession, spy: Spy):
-    call(session, "sql.run", query="select 1 as one")
+    _, events = call_with_history(session, "sql.run", query="select 1 as one")
     assert spy.calls == [None]
-    assert "params" not in session.history.recent(1)[0]
+    assert "params" not in events[0]
 
 
 @needs_engine
 def test_failed_run_records_params_too(session: KernelSession):
+    events: list[dict[str, Any]] = []
     with pytest.raises(Exception):
-        call(session, "sql.run", query="select * from nowhere", params={"n": 1})
-    entry = session.history.recent(1)[0]
+        session.handlers()["sql.run"]({"query": "select * from nowhere", "params": {"n": 1}}, lambda e, d: events.append(d) if e == "history" else None)
+    [entry] = events
     assert entry["error"] and entry["params"] == {"n": 1}
 
 
 @needs_engine
 def test_explain_and_analyze_pass_params(session: KernelSession, spy: Spy):
     call(session, "sql.explain", query="select 1 as one", params={"n": 2})
-    call(session, "sql.analyze", query="select 1 as one", params={"n": 3})
+    _, events = call_with_history(session, "sql.analyze", query="select 1 as one", params={"n": 3})
     assert spy.calls == [{"n": 2}, {"n": 3}]
-    assert session.history.recent(1)[0]["params"] == {"n": 3}
+    assert events[-1]["params"] == {"n": 3}
 
 
 @needs_engine

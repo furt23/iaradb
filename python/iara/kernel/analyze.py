@@ -12,7 +12,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from iara.kernel.history import History
+from iara.kernel.history import History, io_of
 from iara.kernel.runtime.interrupt import Interruptor
 from iara.workspaces import Workspace
 
@@ -54,7 +54,10 @@ def analyze_query(
     except BaseException as e:
         history.record(query, SOURCE, (time.perf_counter() - t0) * 1000, None, f"{type(e).__name__}: {e}", params)
         raise
-    history.record(query, SOURCE, run["profile"]["elapsed_ms"], run["rows"], params=params)
+    reads, writes = io_of(ws, [], run["profile"])
+    history.record(
+        query, SOURCE, run["profile"]["elapsed_ms"], run["rows"], params=params, profile=run["profile"], reads=reads, writes=writes
+    )
     out: dict[str, Any] = {
         "query": query,
         "at": int(time.time() * 1000),

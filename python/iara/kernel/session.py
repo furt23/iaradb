@@ -15,9 +15,9 @@ from typing import Any
 from iara.kernel import PROTOCOL_VERSION, catalog
 from iara.kernel.analyze import analyze_query
 from iara.kernel.assist.service import AssistService
-from iara.kernel.cell_runner import CellRunner, Emit
+from iara.kernel.cell_runner import CellRunner, Emit, take_plans
 from iara.kernel.extract import write_extract
-from iara.kernel.history import History
+from iara.kernel.history import History, io_of, take_writes
 from iara.kernel.notebook import marimo_io
 from iara.kernel.notebook.model import Cell
 from iara.kernel.notebook_service import NotebookService, resolve_in
@@ -25,6 +25,7 @@ from iara.kernel.params import bind_params
 from iara.kernel.runtime.interrupt import Interruptor
 from iara.kernel.runtime.charts import chart_data
 from iara.kernel.runtime.results import ResultStore
+from iara.kernel.system import publish
 from iara.workspaces import Workspace, add_table, load, parse_config, set_active
 
 Handler = Callable[[dict[str, Any], Emit], Any]
@@ -32,7 +33,19 @@ Handler = Callable[[dict[str, Any], Emit], Any]
 #: methods that run user code or mutate the notebook: executed one at a time
 #: on the worker thread (everything else answers immediately)
 QUEUED = frozenset(
-    {"workspace.configure", "notebook.open", "notebook.create", "notebook.run", "widgets.set", "sql.run", "extract.write", "sql.analyze", "catalog.preview", "catalog.add"}
+    {
+        "workspace.configure",
+        "notebook.open",
+        "notebook.create",
+        "notebook.run",
+        "widgets.set",
+        "sql.run",
+        "extract.write",
+        "sql.analyze",
+        "catalog.preview",
+        "catalog.add",
+        "system.publish",
+    }
 )
 #: code assistance: answered on their own thread, newest request per
 #: (method, cell) first (an older pending one is answered with null)
@@ -59,7 +72,7 @@ class KernelSession:
         set_active(self.ws)
         os.chdir(self.ws.root)
         self.results = ResultStore()
-        self.history = History(self.ws.root)
+        self.history = History()
         self.interruptor = Interruptor()
         self.runner = CellRunner(self.ws, self.results, self.history, self.interruptor)
         self.notebook = NotebookService(self.ws, self.runner)
@@ -101,6 +114,10 @@ class KernelSession:
         """Tell the Studio (it owns ``iara.toml``) what statements changed."""
         while self.catalog_changes:
             emit("catalog.changed", self.catalog_changes.pop(0))
+
+    def report_history(self, emit: Emit) -> None:
+        for entry in self.history.drain():
+            emit("history", entry)
 
     def reload(self) -> dict[str, Any]:
         return self._adopt(load(self.ws.root))
@@ -149,6 +166,7 @@ class KernelSession:
             return self.notebook.run(p.get("cells"), p.get("cell_ids"), emit, bool(p.get("autorun")))
         finally:
             self.report_catalog(emit)
+            self.report_history(emit)
 
     def set_widget(self, p: dict[str, Any], emit: Emit) -> dict[str, Any]:
         nb = self.notebook.notebook
@@ -159,22 +177,54 @@ class KernelSession:
             return self.notebook.set_widget(p["name"], p.get("value"), p.get("cells"), emit)
         finally:
             self.report_catalog(emit)
+            self.report_history(emit)
 
     # -- SQL editor ----------------------------------------------------------
     def sql_run(self, p: dict[str, Any], emit: Emit) -> dict[str, Any]:
         from iara.kernel.runtime.progress import watch
 
-        query = p["query"]
+        query, source = p["query"], p.get("source", "sql editor")
         allow = p["allow"] if "allow" in p else None  # [] grants nothing, so test the key, not truthiness
+        params = bind_params(p)
         self.ws.refresh()
+        take_plans()
+        take_writes()
+        t0 = time.perf_counter()
+        output: dict[str, Any] | None = None
+        error: str | None = None
         try:
             with watch(lambda q: emit("progress", {"queries": q})), self.interruptor.interruptible():
-                output, _ = self.runner.query(
-                    self.ws, query, {}, "query", p.get("source", "sql editor"), bind_params(p), allow=allow
-                )
+                output, df = self.runner.query(self.ws, query, {}, "query", params, allow=allow)
+            return output
+        except BaseException as e:
+            error = f"{type(e).__name__}: {e}"
+            raise
         finally:
+            profile = output.get("profile") if output else None
+            # a statement that writes shows a summary: what it read is in the runs it made
+            reads, writes = io_of(self.ws, take_plans(), profile)
+            if not writes:
+                # shortcut: other requests' runs share the recorder, so a query keeps only its own profile's reads; a write statement here can pick up a concurrent preview's reads
+                own = {(r["location"], r.get("version")) for r in (profile or {}).get("reads") or []}
+                reads = [r for r in reads if (r["location"], r["version"]) in own]
+            # a statement that writes returns a summary: its profile times that summary, not the write
+            elapsed = profile["elapsed_ms"] if profile and not writes else (time.perf_counter() - t0) * 1000
+            rows = df.height if output else None
+            self.history.record(query, source, elapsed, rows, error, params, profile=profile, reads=reads, writes=writes)
             self.report_catalog(emit)
-        return output
+            self.report_history(emit)
+
+    def sql_analyze(self, p: dict[str, Any], emit: Emit) -> dict[str, Any]:
+        try:
+            return analyze_query(self.ws, p["query"], self.history, self.interruptor, bind_params(p))
+        finally:
+            self.report_history(emit)
+
+    def extract_write(self, p: dict[str, Any], emit: Emit) -> dict[str, Any]:
+        try:
+            return write_extract(self.ws, self.history, self.interruptor, p, emit)
+        finally:
+            self.report_history(emit)
 
     def sql_explain(self, p: dict[str, Any] | str) -> dict[str, Any]:
         """The plan of a query: a request (with ``params`` and ``allow``) or the query text."""
@@ -235,10 +285,10 @@ class KernelSession:
             "catalog.preview": lambda p, e: self.preview(p["name"], int(p.get("limit", 100))),
             "catalog.add": lambda p, e: self.add_table(p),
             "sql.run": self.sql_run,
-            "extract.write": lambda p, e: write_extract(self.ws, self.history, self.interruptor, p, e),
+            "extract.write": self.extract_write,
             "sql.explain": lambda p, e: self.sql_explain(p),
-            "sql.analyze": lambda p, e: analyze_query(self.ws, p["query"], self.history, self.interruptor, bind_params(p)),
-            "history.list": lambda p, e: self.history.recent(int(p.get("limit", 200))),
+            "sql.analyze": self.sql_analyze,
+            "system.publish": lambda p, e: publish(p),
             "wrangle.preview": lambda p, e: self.wrangle("preview", p),
             "wrangle.profile": lambda p, e: self.wrangle("profile", p),
             "wrangle.sql": lambda p, e: self.wrangle("sql", p),

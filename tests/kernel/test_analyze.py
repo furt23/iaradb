@@ -24,8 +24,13 @@ def session(workspace: Path):
     os.chdir(cwd)
 
 
-def analyze(session: KernelSession, query: str) -> dict[str, Any]:
-    return session.handlers()["sql.analyze"]({"query": query}, lambda event, data: None)
+def analyze(session: KernelSession, query: str, events: list[tuple[str, dict[str, Any]]] | None = None) -> dict[str, Any]:
+    sink = [] if events is None else events
+    return session.handlers()["sql.analyze"]({"query": query}, lambda event, data: sink.append((event, data)))
+
+
+def history_of(events: list[tuple[str, dict[str, Any]]]) -> list[dict[str, Any]]:
+    return [data for name, data in events if name == "history"]
 
 
 def walk(node: dict[str, Any]):
@@ -53,15 +58,18 @@ def test_analyze_counts_rows_of_a_scan(session: KernelSession):
 
 
 def test_analyze_records_history(session: KernelSession):
-    analyze(session, GROUPED)
-    entry = session.history.recent(1)[0]
-    assert entry["source"] == "analyze" and entry["rows"] == 7 and entry["error"] is None
+    events: list[tuple[str, dict[str, Any]]] = []
+    analyze(session, GROUPED, events)
+    [entry] = history_of(events)
+    assert entry["source"] == "analyze" and entry["kind"] == "sql" and entry["rows"] == 7 and entry["error"] is None
+    assert entry["memory_peak"] is None or entry["memory_peak"] >= 0
 
 
 def test_analyze_errors_propagate_and_are_recorded(session: KernelSession):
+    events: list[tuple[str, dict[str, Any]]] = []
     with pytest.raises(Exception, match="nope"):
-        analyze(session, "select nope from sales")
-    entry = session.history.recent(1)[0]
+        analyze(session, "select nope from sales", events)
+    [entry] = history_of(events)
     assert entry["source"] == "analyze" and "nope" in entry["error"]
 
 
@@ -118,7 +126,7 @@ class _FakeWorkspace:
 
 
 def test_analyze_falls_back_to_profile_and_explain_tree(tmp_path: Path):
-    out = analyze_query(_FakeWorkspace(_ProfiledLazy()), "q", History(tmp_path), Interruptor())
+    out = analyze_query(_FakeWorkspace(_ProfiledLazy()), "q", History(), Interruptor())
     assert out["rows"] == 5 and "requests" not in out
     assert out["plan"]["name"] == "Filter" and out["plan"]["metrics"] is None
     assert out["plan"]["children"][0]["name"] == "ParquetScan"
@@ -126,7 +134,7 @@ def test_analyze_falls_back_to_profile_and_explain_tree(tmp_path: Path):
 
 
 def test_analyze_uses_the_engine_analyze_when_offered(tmp_path: Path):
-    out = analyze_query(_FakeWorkspace(_EngineLazy()), "q", History(tmp_path), Interruptor())
+    out = analyze_query(_FakeWorkspace(_EngineLazy()), "q", History(), Interruptor())
     assert out["rows"] == 3
     assert out["plan"]["metrics"] == {"rows_out": 3, "elapsed_ms": 1.5, "batches": 1}
     assert out["requests"] == {"list": 0, "head": 1, "get": 2, "bytes": 4096}

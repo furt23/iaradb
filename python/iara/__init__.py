@@ -38,6 +38,7 @@ from iara._iara import (
     set_memory_limit,
     set_num_threads,
     take_recorded_plans,
+    take_writes,
 )
 from iara import _window
 from iara import widgets
@@ -70,6 +71,7 @@ __all__ = [
     "running_queries",
     "record_plans",
     "take_recorded_plans",
+    "take_writes",
     "Struct",
     "List",
     "scan_parquet",
@@ -1565,6 +1567,10 @@ class SessionContext:
         """The tables and views a restricted session has read so far, as sorted
         ``catalog.schema.table`` names; empty for a session that is not restricted."""
         return self._ctx.tables_read()
+
+    def table_locations(self) -> dict[str, str]:
+        """``{location: catalog.schema.table}`` of the loaded tables that live in storage."""
+        return self._ctx.table_locations()
 
     def set_warehouse(self, path: str | os.PathLike[str] | None, storage_options: StorageOptions | None = None) -> SessionContext:
         """Where ``CREATE TABLE name AS ...`` writes the table: Delta in

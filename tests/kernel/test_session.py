@@ -229,10 +229,12 @@ def test_cells_redefine_names_and_read_the_nearest_definition_above(session: Ker
 
 def test_sql_error_has_message_and_history(session: KernelSession):
     session.notebook.create("notebooks/f.py")
-    run(session, [SETUP, sql("q", "select nope from sales", "q")])
+    rec = Recorder()
+    session.handlers()["notebook.run"]({"cells": [SETUP, sql("q", "select nope from sales", "q")], "cell_ids": None}, rec)
     out = session.notebook.view()["states"]["q"]["output"]
     assert out["type"] == "error" and "nope" in out["evalue"] and out["traceback"] == ""
-    assert session.history.recent(1)[0]["error"]
+    [entry] = [data for name, data in rec.events if name == "history"]
+    assert entry["error"]
 
 
 def _interrupt_soon(session: KernelSession) -> None:

@@ -32,9 +32,17 @@ def out_dir(tmp_path: Path) -> Path:
     return tmp_path / "out"
 
 
-def extract(session: KernelSession, path: Path | str, query: str = BY_GROUP, allow: list[str] | None = None, max_bytes: int = 1 << 20) -> Any:
+def extract(
+    session: KernelSession,
+    path: Path | str,
+    query: str = BY_GROUP,
+    allow: list[str] | None = None,
+    max_bytes: int = 1 << 20,
+    events: list[tuple[str, dict[str, Any]]] | None = None,
+) -> Any:
     params = {"query": query, "path": str(path), "allow": ["demo.main.sales"] if allow is None else allow, "max_bytes": max_bytes}
-    return session.handlers()["extract.write"](params, lambda *a: None)
+    sink = [] if events is None else events
+    return session.handlers()["extract.write"](params, lambda event, data: sink.append((event, data)))
 
 
 def test_writes_one_zstd_parquet_file(session: KernelSession, tmp_path: Path):
@@ -98,10 +106,11 @@ def test_files_and_writes_are_refused_even_with_a_full_grant(session: KernelSess
 
 
 def test_the_run_is_in_the_history(session: KernelSession, out_dir: Path):
-    extract(session, out_dir / "x.parquet")
+    events: list[tuple[str, dict[str, Any]]] = []
+    extract(session, out_dir / "x.parquet", events=events)
     with pytest.raises(ValueError):
-        extract(session, out_dir / "y.parquet", max_bytes=100)
-    failed, done = session.history.recent(2)
+        extract(session, out_dir / "y.parquet", max_bytes=100, events=events)
+    done, failed = [data for name, data in events if name == "history"]
     assert done["source"] == "extract" and done["rows"] == 7 and done["error"] is None
     assert "ValueError" in failed["error"]
 
