@@ -33,6 +33,18 @@ describe("checkManifest", () => {
     expect(checkManifest({ datasets: { orders: first } })).toEqual({ datasets: { orders: first } });
   });
 
+  it("takes the versions of the base tables, and an entry without them", () => {
+    const withVersions = { ...entry, versions: { "tpch.main.orders": 3, "tpch.main.lines": 0 } };
+    expect(checkManifest({ datasets: { orders: withVersions } })).toEqual({ datasets: { orders: withVersions } });
+    expect(checkManifest({ datasets: { orders: entry } }).datasets.orders.versions).toBeUndefined();
+  });
+
+  it("refuses versions that are not an object of whole numbers, 0 or more", () => {
+    for (const bad of [null, [], "3", { "a.b.c": "3" }, { "a.b.c": 1.5 }, { "a.b.c": -1 }, { "a.b.c": null }]) {
+      expect(() => checkManifest({ datasets: { orders: { ...entry, versions: bad } } }), JSON.stringify(bad)).toThrow(/versions/);
+    }
+  });
+
   it("is rebuilt with the known keys only", () => {
     const out = checkManifest({ other: 1, datasets: { orders: { ...entry, extra: "x", columns: [{ name: "a", type: "int64", more: 1 }] } } });
     expect(out).toEqual({ datasets: { orders: { ...entry, columns: [{ name: "a", type: "int64" }] } } });

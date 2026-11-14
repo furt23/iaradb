@@ -19,6 +19,7 @@ export const NOTEBOOK_CONTEXT = { surface: "notebook", path: "n.ipynb", cells: [
 /** The agents a scripted model tells apart by the start of the system prompt. */
 const AGENTS: [prefix: string, agent: string][] = [
   ["You are Iara", "iara"],
+  ["You are a data agent", "iara"],
   ["You explore", "analyst"],
   ["You write exactly one", "author"],
   ["Summarize this", "summary"],

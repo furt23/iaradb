@@ -99,6 +99,7 @@ export function useIaraChat({
     const message = text.trim();
     if (!message || busy || chat.thread?.pending) return;
     setChat((s) => beginTurn(s, { fileId, surface, text: message, at: Date.now() }));
+    await live.current.adapter.beforeSend?.();
     await run({ kind: "message", threadId: chat.thread?.id || null, fileId, text: message, context: live.current.getContext() });
   };
 

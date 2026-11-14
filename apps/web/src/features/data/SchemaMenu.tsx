@@ -12,6 +12,7 @@ import { useTranslation } from "react-i18next";
 import { useAccount } from "@/features/shell/account";
 import { useGuard, useNotify } from "@/features/shell/notify";
 import { unwrap } from "@/lib/action";
+import { SYSTEM_CATALOG } from "@/lib/catalogConfig";
 import { removeSchema } from "@/server/actions/catalog";
 
 import { ActionItem } from "./ActionItem";
@@ -25,7 +26,7 @@ export interface SchemaMenuTarget {
   anchor: MenuAnchor;
 }
 
-/** Actions on a schema: add a table to it, or remove it when it is empty. */
+/** Actions on a schema: add a table to it, or remove it when it is empty. The `system` catalog is read-only. */
 export function SchemaMenu({ target, onClose }: { target: SchemaMenuTarget | null; onClose(): void }) {
   const { t } = useTranslation();
   const [addingTo, setAddingTo] = useState<SchemaGroup | null>(null);
@@ -34,6 +35,7 @@ export function SchemaMenu({ target, onClose }: { target: SchemaMenuTarget | nul
   const guard = useGuard();
   const notify = useNotify();
   const router = useRouter();
+  const system = target?.group.catalog === SYSTEM_CATALOG;
   const anchor = target?.anchor;
   const point = anchor && "x" in anchor ? anchor : null;
   const run = (fn: (g: SchemaGroup) => void | Promise<void>) => () => {
@@ -57,18 +59,22 @@ export function SchemaMenu({ target, onClose }: { target: SchemaMenuTarget | nul
         anchorPosition={point ? { top: point.y, left: point.x } : undefined}
         slotProps={{ list: { dense: true, "aria-label": target ? `actions for schema ${target.group.name}` : undefined } }}
       >
-        <ActionItem icon={<Add fontSize="small" />} label={t("Add table here…")} onClick={run((g) => setAddingTo(g))} />
+        {!system && <ActionItem icon={<Add fontSize="small" />} label={t("Add table here…")} onClick={run((g) => setAddingTo(g))} />}
         {admin && (
           <ActionItem icon={<LockOutlined fontSize="small" />} label={t("Permissions…")} onClick={run((g) => setGranting(`${g.catalog}.${g.schema}`))} />
         )}
-        <Divider />
-        <ActionItem
-          icon={<DeleteOutline fontSize="small" />}
-          label={t("Remove schema")}
-          onClick={run(remove)}
-          danger
-          disabled={!!target && target.group.tables.length > 0}
-        />
+        {!system && (
+          <>
+            <Divider />
+            <ActionItem
+              icon={<DeleteOutline fontSize="small" />}
+              label={t("Remove schema")}
+              onClick={run(remove)}
+              danger
+              disabled={!!target && target.group.tables.length > 0}
+            />
+          </>
+        )}
       </Menu>
       <AddTableDialog
         open={addingTo !== null}

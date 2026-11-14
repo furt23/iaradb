@@ -1,10 +1,13 @@
 "use server";
 
-import type { ExplainResult, HistoryEntry, QueryParams } from "@iara/protocol";
+import type { ExplainResult, QueryParams } from "@iara/protocol";
+
+import type { QueryLogEntry } from "@/lib/system/types";
 
 import { requireUser } from "../auth/session";
 import { kernels } from "../kernel/manager";
 import { attempt, type ActionResult } from "../result";
+import { recentQueries } from "../system/queryLog";
 
 export async function explainSql(query: string, values: QueryParams = {}): Promise<ActionResult<ExplainResult>> {
   return attempt(async () => {
@@ -13,9 +16,9 @@ export async function explainSql(query: string, values: QueryParams = {}): Promi
   });
 }
 
-export async function queryHistory(limit = 200): Promise<ActionResult<HistoryEntry[]>> {
+export async function queryHistory(limit = 200): Promise<ActionResult<QueryLogEntry[]>> {
   return attempt(async () => {
     await requireUser();
-    return kernels.workspace().request("history.list", { limit });
+    return recentQueries(limit);
   });
 }

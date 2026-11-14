@@ -13,6 +13,7 @@ import { useTranslation } from "react-i18next";
 
 import { useGuard, useNotify } from "@/features/shell/notify";
 import { unwrap } from "@/lib/action";
+import { SYSTEM_CATALOG } from "@/lib/catalogConfig";
 import { isIdentifier } from "@/lib/catalogToml";
 import { createCatalog } from "@/server/actions/catalog";
 
@@ -33,10 +34,16 @@ export function NewCatalogDialog({ open, onClose }: { open: boolean; onClose(): 
   }, [open]);
 
   const trimmed = name.trim();
-  const badName = trimmed !== "" && !isIdentifier(trimmed);
+  const reserved = trimmed.toLowerCase() === SYSTEM_CATALOG;
+  const problem =
+    trimmed !== "" && !isIdentifier(trimmed)
+      ? t("Letters, digits and underscores")
+      : reserved
+        ? t("system is the Studio's own catalog")
+        : undefined;
 
   const create = async () => {
-    if (!trimmed || badName || busy) return;
+    if (!trimmed || problem || busy) return;
     setBusy(true);
     const made = await guard(async () => unwrap(await createCatalog(trimmed, description)));
     setBusy(false);
@@ -57,8 +64,8 @@ export function NewCatalogDialog({ open, onClose }: { open: boolean; onClose(): 
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && void create()}
-            error={badName}
-            helperText={badName ? t("Letters, digits and underscores") : undefined}
+            error={!!problem}
+            helperText={problem}
           />
           <TextField label={t("Description (optional)")} value={description} onChange={(e) => setDescription(e.target.value)} />
         </Stack>
@@ -67,7 +74,7 @@ export function NewCatalogDialog({ open, onClose }: { open: boolean; onClose(): 
         <Button onClick={onClose} disabled={busy}>
           {t("Cancel")}
         </Button>
-        <Button variant="contained" onClick={() => void create()} disabled={busy || !trimmed || badName}>
+        <Button variant="contained" onClick={() => void create()} disabled={busy || !trimmed || !!problem}>
           {t("Create")}
         </Button>
       </DialogActions>

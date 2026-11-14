@@ -1,3 +1,4 @@
+import type { ChartData, ChartSpec } from "@iara/protocol";
 import { z } from "zod";
 
 /**
@@ -11,7 +12,7 @@ export const MAX_MESSAGE = 4000;
 const MAX_CODE = 20_000;
 const MAX_CONTEXT_TEXT = 200_000;
 
-export type IaraSurface = "notebook" | "sql" | "dashboard";
+export type IaraSurface = "notebook" | "sql" | "dashboard" | "agent";
 export type IaraAgent = "iara" | "analyst" | "author" | "reviewer" | "observer";
 
 const id = z.string().min(1).max(128);
@@ -72,6 +73,8 @@ export const FileContext = z.discriminatedUnion("surface", [
     widgets: z.array(z.object({ id, json: text(MAX_CODE), status: text(1000).optional() })).max(300),
     layout: z.array(z.object({ widget: id, x: z.number(), y: z.number(), w: z.number(), h: z.number() })).max(300),
   }),
+  /** an agent's test chat: the agent is read on the server by its slug (`path`); it answers, it never changes files */
+  z.object({ surface: z.literal("agent"), path: text(64) }),
 ]);
 export type IaraFileContext = z.infer<typeof FileContext>;
 
@@ -168,6 +171,8 @@ export type IaraEvent =
   /** a piece of an agent's reasoning summary; deltas with the same id are one thought */
   | { event: "thought"; data: { agent: IaraAgent; id: string; delta: string } }
   | { event: "memory"; data: { action: "saved" | "forgotten"; memory: IaraMemory } }
+  /** a chart an agent drew from a query, shown under its answer */
+  | { event: "chart"; data: IaraChart }
   | { event: "usage"; data: IaraUsage }
   /** the turn waits for the user's decision (POST again with kind "decision") */
   | { event: "approval"; data: IaraProposal }
@@ -189,6 +194,8 @@ export interface IaraToolUse {
   agent: IaraAgent;
   tool: string;
   target?: string;
+  /** run_sql: the query */
+  sql?: string;
   /** search_ontology: the terms it gave */
   knowledge?: IaraKnowledge[];
 }
@@ -200,6 +207,17 @@ export interface IaraMemory {
   id: string;
   text: string;
   created: number;
+}
+
+/** A chart drawn from a query's rows: `data` holds the columns `spec` names (x, group, values), already aggregated by the query. */
+export interface IaraChart {
+  id: string;
+  title: string;
+  spec: ChartSpec;
+  /** the x column's type, so dates draw as time */
+  xType: string;
+  data: ChartData;
+  sql: string;
 }
 
 export interface IaraProposalRecord extends IaraProposal {
@@ -216,6 +234,7 @@ export interface IaraMessage {
   steps?: IaraStep[];
   memories?: { action: "saved" | "forgotten"; memory: IaraMemory }[];
   proposals?: IaraProposalRecord[];
+  charts?: IaraChart[];
 }
 
 export interface IaraThreadSummary {

@@ -37,9 +37,9 @@ export async function runDataTool(ctx: ToolContext, name: string, args: unknown)
   if (!tool) return { text: `unknown tool: ${name}`, isError: true, use: { tool: name } };
   const parsed = tool.args.safeParse(args ?? {});
   if (!parsed.success) return { text: z.prettifyError(parsed.error), isError: true, use: { tool: name } };
-  const data = parsed.data as { name?: string; path?: string; query?: string };
+  const data = parsed.data as { name?: string; path?: string; query?: string; sql?: string };
   const target = name === "describe_table" ? data.name : name === "read_file" ? data.path : name === "search_ontology" ? data.query?.trim() || undefined : undefined;
-  const use = { tool: name, ...(target && { target }) };
+  const use = { tool: name, ...(target && { target }), ...(name === "run_sql" && data.sql && { sql: data.sql }) };
   try {
     const out = await tool.run(ctx, parsed.data);
     const knowledge = name === "search_ontology" ? knowledgeOf(out as OntologySearch) : [];

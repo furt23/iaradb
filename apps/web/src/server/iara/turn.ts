@@ -113,6 +113,9 @@ export async function runTurn(req: IaraRequest, deps: IaraDeps, send: Send, sign
         case "memory":
           message.memories?.push({ action: e.action, memory: e.memory });
           return send("memory", { action: e.action, memory: e.memory });
+        case "chart":
+          (message.charts ??= []).push(e.chart);
+          return send("chart", e.chart);
         case "usage":
           thread.usage = e.usage;
           return send("usage", e.usage);

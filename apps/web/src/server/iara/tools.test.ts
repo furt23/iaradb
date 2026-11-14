@@ -74,7 +74,7 @@ describe("runDataTool", () => {
 
   it("gives a refused query back as an error result, never a throw", async () => {
     const out = await runDataTool(fake({ "sql.run": "no read grant on table x" }), "run_sql", { sql: "SELECT * FROM x" });
-    expect(out).toEqual({ text: "Plan: no read grant on table x", isError: true, use: { tool: "run_sql" } });
+    expect(out).toEqual({ text: "Plan: no read grant on table x", isError: true, use: { tool: "run_sql", sql: "SELECT * FROM x" } });
     expect((await runDataTool(fake(), "describe_table", { name: "nope" })).text).toBe("there is no table nope you can read");
   });
 

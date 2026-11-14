@@ -91,6 +91,39 @@ describe("compactionCut", () => {
 });
 
 describe("iaraNode", () => {
+  it("as an agent: follows its brief, only asks the analyst, and ignores memories", async () => {
+    const { deps, requests } = fakeDeps({ iara: [answering("Revenue was 10.")] });
+    const memory = { id: "m1", text: "likes pie charts", created: 1 };
+    await iaraNode({ ...deps, agent: { brief: 'Agent "Sales"\nIts author\'s instructions (follow them):\nanswer in BRL', charts: false } })(
+      state({ context: { surface: "agent", path: "sales" }, memories: [memory] }),
+      config().config,
+    );
+
+    expect(requests[0].tools?.map((t) => t.name)).toEqual(["ask_analyst"]);
+    expect(requests[0].system).toMatch(/^You are a data agent/);
+    expect(requests[0].system).toContain("answer in BRL");
+    expect(requests[0].system).not.toContain("likes pie charts");
+    expect(requests[0].system).not.toContain("The open file");
+  });
+
+  it("as an agent with charts: draws one from a query and sends it to the browser", async () => {
+    const chart = { title: "Revenue by year", kind: "bar", sql: "SELECT y, r FROM t", x: "y", y: ["r"], group: "" };
+    const { deps, requests } = fakeDeps({ iara: [calling(callStep("c1", "show_chart", chart)), answering("Here it is.")] });
+    const request = async (method: string) =>
+      method === "sql.run"
+        ? { type: "table", result: { id: "r1", columns: [{ name: "y", type: "int32" }, { name: "r", type: "decimal128(38, 2)" }], num_rows: 2 } }
+        : { offset: 0, total: 2, rows: [[1992, 10], [1993, 12]] };
+    const tools = { request: request as unknown as typeof deps.tools.request, allow: [] };
+    const { config: c, writer } = config();
+    await iaraNode({ ...deps, tools, agent: { brief: "Agent", charts: true } })(state({ context: { surface: "agent", path: "sales" } }), c);
+
+    expect(requests[0].tools?.map((t) => t.name)).toEqual(["ask_analyst", "show_chart"]);
+    const [drawn] = emitted(writer, "chart");
+    expect(drawn.chart).toMatchObject({ title: "Revenue by year", spec: { kind: "bar", x: "y", y: ["r"], agg: "sum", group: null }, xType: "int32", data: { columns: ["y", "r"], rows: [[1992, 10], [1993, 12]] } });
+    const result = requests[1].steps.find((s) => s.type === "function_result");
+    expect(result).toMatchObject({ result: "shown under your answer (2 rows)" });
+  });
+
   it("answers in plain text, streaming it", async () => {
     const { deps } = fakeDeps({ iara: [answering("Hi!")] });
     const { config: c, writer } = config();

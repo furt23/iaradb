@@ -79,4 +79,19 @@ describe("KernelClient", () => {
     expect(events).toEqual([["cell.state", { cell_id: "a" }]]);
     expect(k.alive).toBe(false);
   });
+
+  it("hands a history event to onHistory with the request's user, and not to the request's listener", async () => {
+    const t = fakeTransport(() => undefined);
+    const runs: unknown[] = [];
+    const k = new KernelClient({ transport: asTransport(t), label: "t", localRoot: null, onHistory: (entry, by) => runs.push([entry.query, by]) });
+    t.announce();
+    const events: unknown[] = [];
+    const run = k.request("sql.run", { query: "SELECT 1" }, (e) => events.push(e), "ana@example.com");
+    await new Promise((r) => setTimeout(r, 0));
+    t.emit({ event: "history", request: t.sent[0].id, data: { query: "SELECT 1" } });
+    t.emit({ id: t.sent[0].id, result: { type: "table" } });
+    await expect(run).resolves.toEqual({ type: "table" });
+    expect(runs).toEqual([["SELECT 1", "ana@example.com"]]);
+    expect(events).toEqual([]);
+  });
 });

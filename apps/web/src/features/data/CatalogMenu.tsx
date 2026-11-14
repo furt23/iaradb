@@ -11,6 +11,7 @@ import { useTranslation } from "react-i18next";
 
 import { useAccount } from "@/features/shell/account";
 import { useGuard, useNotify } from "@/features/shell/notify";
+import { SYSTEM_CATALOG } from "@/lib/catalogConfig";
 import { MAIN_SCHEMA } from "@/lib/catalogToml";
 import { unwrap } from "@/lib/action";
 import { removeCatalog } from "@/server/actions/catalog";
@@ -29,7 +30,7 @@ export interface CatalogMenuTarget {
 /**
  * Actions on a catalog: add a schema to it, or remove it. The default catalog is the
  * workspace's own and stays; a catalog keeps its tables and schemas, so it is removed
- * only when it holds nothing but `main`.
+ * only when it holds nothing but `main`. The `system` catalog is read-only.
  */
 export function CatalogMenu({ target, onClose }: { target: CatalogMenuTarget | null; onClose(): void }) {
   const { t } = useTranslation();
@@ -54,6 +55,7 @@ export function CatalogMenu({ target, onClose }: { target: CatalogMenuTarget | n
     });
   const holds = !!target && target.catalog.schemas.some((s) => s.tables.length > 0 || s.schema !== MAIN_SCHEMA);
   const isDefault = !!target?.catalog.isDefault;
+  const system = target?.catalog.name === SYSTEM_CATALOG;
   return (
     <>
       <Menu
@@ -64,17 +66,21 @@ export function CatalogMenu({ target, onClose }: { target: CatalogMenuTarget | n
         anchorPosition={point ? { top: point.y, left: point.x } : undefined}
         slotProps={{ list: { dense: true, "aria-label": target ? `actions for catalog ${target.catalog.name}` : undefined } }}
       >
-        <ActionItem icon={<CreateNewFolderOutlined fontSize="small" />} label={t("New schema here…")} onClick={run((c) => setCreatingIn(c.name))} />
+        {!system && <ActionItem icon={<CreateNewFolderOutlined fontSize="small" />} label={t("New schema here…")} onClick={run((c) => setCreatingIn(c.name))} />}
         {admin && <ActionItem icon={<LockOutlined fontSize="small" />} label={t("Permissions…")} onClick={run((c) => setGranting(c.name))} />}
-        <Divider />
-        <ActionItem
-          icon={<DeleteOutline fontSize="small" />}
-          label={t("Remove catalog")}
-          onClick={run(remove)}
-          danger
-          disabled={isDefault || holds}
-          hint={!isDefault && holds ? t("Remove its tables and schemas first") : undefined}
-        />
+        {!system && (
+          <>
+            <Divider />
+            <ActionItem
+              icon={<DeleteOutline fontSize="small" />}
+              label={t("Remove catalog")}
+              onClick={run(remove)}
+              danger
+              disabled={isDefault || holds}
+              hint={!isDefault && holds ? t("Remove its tables and schemas first") : undefined}
+            />
+          </>
+        )}
       </Menu>
       <NewSchemaDialog open={creatingIn !== null} catalog={creatingIn ?? undefined} onClose={() => setCreatingIn(null)} />
       <PermissionsDialog open={granting !== null} on={granting ?? ""} onClose={() => setGranting(null)} />

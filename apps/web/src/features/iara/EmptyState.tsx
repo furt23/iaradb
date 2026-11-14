@@ -1,6 +1,7 @@
 "use client";
 
 import ArrowForwardRounded from "@mui/icons-material/ArrowForwardRounded";
+import ChatBubbleOutlineRounded from "@mui/icons-material/ChatBubbleOutlineRounded";
 import DescriptionOutlined from "@mui/icons-material/DescriptionOutlined";
 import InsertChartOutlined from "@mui/icons-material/InsertChartOutlined";
 import SpeedOutlined from "@mui/icons-material/SpeedOutlined";
@@ -32,6 +33,10 @@ const EXAMPLES: Record<IaraSurface, Example[]> = {
     { text: "Explain this query", hint: "What it reads and returns", Icon: DescriptionOutlined },
     { text: "Make this query faster", hint: "Suggestions you can apply", Icon: SpeedOutlined },
   ],
+  agent: [
+    { text: "What can you answer?", hint: "The subjects and tables I know", Icon: DescriptionOutlined },
+    { text: "Which tables can I use?", hint: "See what is in your catalog", Icon: TableChartOutlined },
+  ],
   dashboard: [
     { text: "Which tables can I use?", hint: "See what is in your catalog", Icon: TableChartOutlined },
     { text: "Add a chart of sales by month", hint: "Iara builds it, you approve", Icon: InsertChartOutlined },
@@ -40,20 +45,24 @@ const EXAMPLES: Record<IaraSurface, Example[]> = {
 };
 
 /** A new conversation: a hello and three prompts that fill the composer. */
-export function EmptyState({ surface, onPick }: { surface: IaraSurface; onPick(text: string): void }) {
+export function EmptyState({ surface, suggestions, onPick }: { surface: IaraSurface; suggestions?: string[]; onPick(text: string): void }) {
   const { t } = useTranslation();
+  // the agent's own example questions are the person's words: never translated
+  const examples = suggestions?.length
+    ? suggestions.slice(0, 3).map((text) => ({ text, hint: "", Icon: ChatBubbleOutlineRounded, own: true }))
+    : EXAMPLES[surface].map((e) => ({ ...e, own: false }));
   return (
     <Box sx={{ m: "auto", p: 2, display: "flex", flexDirection: "column", alignItems: "center", gap: 1.5, textAlign: "center" }}>
       <IaraMark size={48} />
       <Typography sx={{ fontWeight: 650 }}>{t("Hi, I'm Iara.")}</Typography>
       <Typography variant="body2" sx={{ color: "text.secondary" }}>
-        {t("Ask me about your data, or have me write and run the code.")}
+        {surface === "agent" ? t("Ask me about your data.") : t("Ask me about your data, or have me write and run the code.")}
       </Typography>
       <Box sx={{ display: "flex", flexDirection: "column", gap: 0.75, alignSelf: "stretch" }}>
-        {EXAMPLES[surface].map(({ text, hint, Icon }) => (
+        {examples.map(({ text, hint, Icon, own }) => (
           <ButtonBase
             key={text}
-            onClick={() => onPick(t(text))}
+            onClick={() => onPick(own ? text : t(text))}
             sx={{
               width: "100%",
               display: "flex",
@@ -76,11 +85,13 @@ export function EmptyState({ surface, onPick }: { surface: IaraSurface; onPick(t
             </Box>
             <Box sx={{ flex: 1, minWidth: 0 }}>
               <Typography variant="body2" sx={{ fontWeight: 600, color: "text.primary" }}>
-                {t(text)}
+                {own ? text : t(text)}
               </Typography>
-              <Typography variant="caption" sx={{ display: "block", color: "text.secondary" }}>
-                {t(hint)}
-              </Typography>
+              {hint && (
+                <Typography variant="caption" sx={{ display: "block", color: "text.secondary" }}>
+                  {t(hint)}
+                </Typography>
+              )}
             </Box>
             <ArrowForwardRounded className="arrow" sx={{ fontSize: 16, flexShrink: 0, color: "text.disabled", transition: "transform 150ms, color 150ms" }} />
           </ButtonBase>

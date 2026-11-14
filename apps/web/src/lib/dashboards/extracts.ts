@@ -26,6 +26,8 @@ export interface ExtractEntry {
   columns: ColumnInfo[];
   /** the catalog tables it was read from, `catalog.schema.table`, lowercase */
   sources: string[];
+  /** the Delta version read of each base table, by name; absent when one of them has none */
+  versions?: Record<string, number>;
   /** datasetHash of the dataset definition it was built from */
   hash: string;
   /** unix milliseconds */
@@ -53,6 +55,11 @@ function count(v: unknown, what: string): number {
   return v;
 }
 
+function whole(v: unknown, what: string): number {
+  if (typeof v !== "number" || !Number.isInteger(v) || v < 0) throw new Error(`${what} is a whole number, 0 or more`);
+  return v;
+}
+
 function text(v: unknown, what: string): string {
   if (typeof v !== "string") throw new Error(`${what} is text`);
   return v;
@@ -66,6 +73,11 @@ function version(v: unknown, what: string): string {
 function list(v: unknown, what: string): unknown[] {
   if (!Array.isArray(v)) throw new Error(`${what} is a list`);
   return v;
+}
+
+function versionsOf(v: unknown, what: string): Record<string, number> {
+  // fromEntries: a table called `__proto__` stays a key
+  return Object.fromEntries(Object.entries(object(v, what)).map(([table, n]) => [table, whole(n, `${what}: ${table}`)]));
 }
 
 function entryOf(v: unknown, name: string): ExtractEntry {
@@ -82,6 +94,7 @@ function entryOf(v: unknown, name: string): ExtractEntry {
     bytes: count(e.bytes, `${at}: bytes`),
     columns,
     sources: list(e.sources, `${at}: sources`).map((s, i) => text(s, `${at}: source ${i + 1}`)),
+    ...(e.versions === undefined ? {} : { versions: versionsOf(e.versions, `${at}: versions`) }),
     hash: text(e.hash, `${at}: hash`),
     refreshed_at: count(e.refreshed_at, `${at}: refreshed_at`),
   };

@@ -2,7 +2,7 @@ import "server-only";
 
 import { Annotation, type LangGraphRunnableConfig } from "@langchain/langgraph";
 
-import type { IaraAgent, IaraChange, IaraDecision, IaraFileContext, IaraMemory, IaraProposal, IaraToolUse, IaraUsage } from "@/lib/iara/protocol";
+import type { IaraAgent, IaraChange, IaraChart, IaraDecision, IaraFileContext, IaraMemory, IaraProposal, IaraToolUse, IaraUsage } from "@/lib/iara/protocol";
 
 import type { StudioUser } from "../auth/access";
 import type { ToolContext } from "../ai/tools";
@@ -84,6 +84,7 @@ export type Emit =
   | { type: "tool"; use: IaraToolUse }
   | { type: "thought"; agent: IaraAgent; id: string; delta: string }
   | { type: "memory"; action: "saved" | "forgotten"; memory: IaraMemory }
+  | { type: "chart"; chart: IaraChart }
   | { type: "usage"; usage: IaraUsage };
 
 /** Sends `e` to the browser (a no-op outside a streamed run, e.g. in tests that pass no writer). */
@@ -102,6 +103,8 @@ export interface IaraDeps {
   user: StudioUser;
   /** Python lint of a notebook cell (null: no notebook, e.g. the SQL editor) */
   lint: ((code: string, kind: "python" | "sql" | "markdown") => Promise<{ severity: string; message: string }[]>) | null;
+  /** an agent's chat: its definition as prompt text (server/agents/brief.ts) and whether it may draw charts; `tools` is already narrowed to its tables */
+  agent?: { brief: string; charts: boolean };
 }
 
 // ---- state ----

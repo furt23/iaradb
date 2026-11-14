@@ -121,6 +121,6 @@ export async function runSql(ctx: ToolContext, sql: string, maxRows = MAX_ROWS) 
 export function assistantContext(user: StudioUser): ToolContext {
   // catalog reads and plans need no cluster; queries run on the assistant's kernel
   const request: ToolContext["request"] = (method, params) =>
-    (METADATA_METHODS as readonly string[]).includes(method) ? kernels.metadata(method as MetadataMethod, params as never) : kernels.forAssistant().request(method, params);
+    (METADATA_METHODS as readonly string[]).includes(method) ? kernels.metadata(method as MetadataMethod, params as never) : kernels.forAssistant().request(method, params, undefined, user.email || null);
   return { request, allow: userAllow(user), ontologies: () => ontologiesFor(user) };
 }

@@ -63,11 +63,23 @@ export function activeRun(job: string): JobRun | undefined {
   return [...active.values()].find((a) => a.run.job === job && !isFinished(a.run.status))?.run;
 }
 
+function runId(): string {
+  return `r-${Date.now().toString(36)}-${Math.floor(Math.random() * 46656).toString(36)}`;
+}
+
+/** A scheduled run that had nothing to do: recorded as succeeded, no cluster started. */
+export function recordSkippedRun(spec: JobSpec, summary: string): JobRun {
+  const now = Date.now();
+  const run: JobRun = { id: runId(), job: spec.id, trigger: "schedule", status: "succeeded", startedAt: now, endedAt: now, summary };
+  saveRun(run);
+  return run;
+}
+
 /** Start a run (it goes on in the background); one run of a job at a time. `params` win over the job's and the tasks' params. */
 export function startRun(spec: JobSpec, trigger: RunTrigger, params?: Params): JobRun {
   if (activeRun(spec.id)) throw new Error(`${spec.name} is already running`);
   const run: JobRun = {
-    id: `r-${Date.now().toString(36)}-${Math.floor(Math.random() * 46656).toString(36)}`,
+    id: runId(),
     job: spec.id,
     trigger,
     status: "starting",

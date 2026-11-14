@@ -13,6 +13,7 @@ import { useTranslation } from "react-i18next";
 
 import { useAccount } from "@/features/shell/account";
 import { useNotify } from "@/features/shell/notify";
+import { SYSTEM_CATALOG } from "@/lib/catalogConfig";
 import type { CatalogTable } from "@/lib/catalogToml";
 
 import { ActionItem } from "./ActionItem";
@@ -26,7 +27,7 @@ export interface TableMenuTarget {
   anchor: MenuAnchor;
 }
 
-/** Actions on a catalog table: open, query, copy its name, remove it from the catalog. */
+/** Actions on a catalog table: open, query, copy its name, remove it from the catalog. The `system` catalog is read-only. */
 export function TableMenu({ target, onClose }: { target: TableMenuTarget | null; onClose(): void }) {
   const { t } = useTranslation();
   const [removing, setRemoving] = useState<CatalogTable | null>(null);
@@ -34,6 +35,7 @@ export function TableMenu({ target, onClose }: { target: TableMenuTarget | null;
   const { admin } = useAccount();
   const router = useRouter();
   const notify = useNotify();
+  const system = target?.table.catalog === SYSTEM_CATALOG;
   const anchor = target?.anchor;
   const point = anchor && "x" in anchor ? anchor : null;
   const run = (fn: (t: CatalogTable) => void | Promise<void>) => () => {
@@ -62,12 +64,18 @@ export function TableMenu({ target, onClose }: { target: TableMenuTarget | null;
           })}
         />
         {admin && <ActionItem icon={<LockOutlined fontSize="small" />} label={t("Permissions…")} onClick={run((tRow) => setGranting(tRow.full))} />}
-        <Divider />
-        <ActionItem icon={<DeleteOutline fontSize="small" />} label={t("Remove from catalog…")}
-          onClick={run((tRow) => setRemoving(tRow))}
-          danger
-          disabled={!!target?.table.discovered}
-        />
+        {!system && (
+          <>
+            <Divider />
+            <ActionItem
+              icon={<DeleteOutline fontSize="small" />}
+              label={t("Remove from catalog…")}
+              onClick={run((tRow) => setRemoving(tRow))}
+              danger
+              disabled={!!target?.table.discovered}
+            />
+          </>
+        )}
       </Menu>
       <RemoveTableDialog table={removing} onClose={() => setRemoving(null)} />
       <PermissionsDialog open={granting !== null} on={granting ?? ""} onClose={() => setGranting(null)} />

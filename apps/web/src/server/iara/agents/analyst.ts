@@ -6,7 +6,7 @@ import { FAST_MODEL } from "../../ai/models";
 import { contextText, resultStep, userStep } from "../prompt";
 import { addUsage, ANALYST_STEPS, emit, MAX_STEPS, type ChatUsage, type IaraDeps, type IaraGraphState, type IaraUpdate, type Step } from "../state";
 import { countSteps, cutToTokens } from "../tokens";
-import { DATA_TOOLS, runDataTool } from "../tools";
+import { DATA_TOOLS, dataTools, runDataTool } from "../tools";
 
 /** tokens of one tool result the analyst keeps */
 const RESULT_TOKENS = 6000;
@@ -25,6 +25,9 @@ const ANALYST_SYSTEM = `You explore the user's tables to answer a question for a
 - Tables, columns, files and query plans need no cluster; run_sql does. When run_sql fails because no cluster is running, say the user must start one, and answer with what the other tools give.
 - What was already found in this conversation is given with the question: build on it and do not look it up again.`;
 
+/** an agent reads only its tables: no workspace files */
+const AGENT_DATA_TOOLS = dataTools(["list_tables", "describe_table", "explain_sql", "run_sql", "search_ontology"]);
+
 const STOP = "Stop using tools. Summarize what you found for the question, with the table and column names and the numbers that matter.";
 
 /** The analyst: answers iara's question about the data with the read-only data tools, in its own context, and gives back only a summary (the big results never reach iara's window). */
@@ -32,16 +35,18 @@ export function analystNode(deps: IaraDeps) {
   return async (s: IaraGraphState, config: LangGraphRunnableConfig): Promise<IaraUpdate> => {
     emit(config, { type: "agent", agent: "analyst" });
     const known = s.findings.length ? `\n\nAlready found in this conversation (build on it, do not look it up again):\n${await cutToTokens(s.findings.join("\n\n"), KNOWN_TOKENS)}` : "";
-    const steps: Step[] = [userStep(`${s.handoff!.request}${known}\n\nThe open file:\n${await contextText(s.context, 4000)}`)];
+    const file = await contextText(s.context, 4000);
+    const steps: Step[] = [userStep(`${s.handoff!.request}${known}${file ? `\n\nThe open file:\n${file}` : ""}`)];
+    const agent = s.context.surface === "agent";
     let calls = 0;
     let usage: ChatUsage = { input: 0, output: 0 };
 
     async function ask(withTools: boolean) {
       const reply = await deps.chat({
         model: FAST_MODEL,
-        system: ANALYST_SYSTEM,
+        system: agent ? `${ANALYST_SYSTEM}\n\nYou work for this agent; its instructions and notes on the tables bind you too:\n${deps.agent?.brief ?? ""}` : ANALYST_SYSTEM,
         steps,
-        tools: withTools ? DATA_TOOLS : undefined,
+        tools: withTools ? (agent ? AGENT_DATA_TOOLS : DATA_TOOLS) : undefined,
         onThought: (id, delta) => emit(config, { type: "thought", agent: "analyst", id, delta }),
         signal: config.signal,
       });

@@ -61,8 +61,8 @@ export interface OpenedDashboard {
 }
 
 /** The dashboard's kernel, on its cluster. */
-function requestOn(config: DashboardConfig): RunDeps["request"] {
-  return async (method, params) => kernels.forDashboard(config.id, config.cluster).request(method, params);
+function requestOn(config: DashboardConfig, by: string | null): RunDeps["request"] {
+  return async (method, params) => kernels.forDashboard(config.id, config.cluster).request(method, params, undefined, by);
 }
 
 export async function listDashboardsAction(): Promise<ActionResult<{ dashboards: DashboardSummary[]; problems: DashboardProblem[] }>> {
@@ -176,8 +176,8 @@ export async function runDraft(slug: string, values: FilterValues, cross: CrossP
     const user = await requireUser();
     const d = await readDashboard(slug);
     // an extract built from the draft's definition is read, so the editor is fast; any other dataset runs live on the cluster
-    const extracts = await servedExtracts(d.config.id);
-    return renderDashboard(d, values, { request: requestOn(d.config), redact: false, source: `dashboard ${d.config.title}`, allow: userAllow(user), extracts }, cross);
+    const extracts = await servedExtracts(d.config.id, user.email || null);
+    return renderDashboard(d, values, { request: requestOn(d.config, user.email || null), redact: false, source: `dashboard ${d.config.title}`, allow: userAllow(user), extracts }, cross);
   });
 }
 
@@ -188,7 +188,7 @@ export async function datasetColumns(slug: string, name: string): Promise<Action
     const { config, datasets } = await readDashboard(slug);
     const found = datasets.find((d) => d.name === name);
     if (!found) throw new Error(`there is no dataset ${name}`);
-    const request = requestOn(config);
+    const request = requestOn(config, user.email || null);
     const q = datasetQuery(await withSql(found, request), [], {}, {});
     if ("missing" in q) throw new Error(`needs a value for ${q.missing.map((n) => `:${n}`).join(", ")}`);
     const output = await request("sql.run", { query: `${q.query}\nLIMIT 0`, source: `dashboard ${config.title}`, ...q.params, ...allowParam(userAllow(user)) });
@@ -203,7 +203,7 @@ export async function uniqueColumnsAction(slug: string, columns: { dataset: stri
   return attempt(async () => {
     const user = await requireUser();
     const { config, datasets } = await readDashboard(slug);
-    const request = requestOn(config);
+    const request = requestOn(config, user.email || null);
     const allow = allowParam(userAllow(user));
     return Promise.all(
       columns.map(async ({ dataset, column }) => {
@@ -228,7 +228,7 @@ export async function publishAction(slug: string, share: Share): Promise<ActionR
     const user = await requireUser();
     const d = await readDashboard(slug);
     // recipes are compiled here, so the published copy carries their SQL and viewers never wait on a compile
-    const request = requestOn(d.config);
+    const request = requestOn(d.config, user.email || null);
     const datasets: Dataset[] = [];
     for (const x of d.datasets) {
       try {

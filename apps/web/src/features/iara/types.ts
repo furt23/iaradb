@@ -18,4 +18,6 @@ export interface IaraAdapter {
   preview?(change: IaraChange, decide: IaraDecide): () => void;
   /** Makes the change, with its code as the user adjusted it in the preview; with `run`, also runs it and waits for the result. A throw is reported to Iara as a change not applied. */
   apply(change: IaraChange, run: boolean): Promise<IaraOutcome>;
+  /** runs before each message is sent (an agent's builder saves pending edits, so the server reads them) */
+  beforeSend?(): Promise<void>;
 }

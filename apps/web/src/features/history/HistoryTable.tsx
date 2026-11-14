@@ -6,7 +6,6 @@ import Chip from "@mui/material/Chip";
 import InputAdornment from "@mui/material/InputAdornment";
 import TextField from "@mui/material/TextField";
 import { DataGrid, type GridColDef } from "@mui/x-data-grid";
-import type { HistoryEntry } from "@iara/protocol";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -15,17 +14,17 @@ import { AnalyzeIconButton } from "@/features/analyze/AnalyzeIconButton";
 import { PageHeader } from "@/features/shell/PageHeader";
 import { LocalTime } from "@/features/shell/LocalTime";
 import { formatCount, formatDuration } from "@/lib/format";
+import type { QueryLogEntry } from "@/lib/system/types";
 
-type Row = HistoryEntry & { id: number };
-
-export function HistoryTable({ entries }: { entries: HistoryEntry[] }) {
+export function HistoryTable({ entries }: { entries: QueryLogEntry[] }) {
   const { t } = useTranslation();
   const router = useRouter();
   const [filter, setFilter] = useState("");
 
-  const columns = useMemo<GridColDef<Row>[]>(
+  const columns = useMemo<GridColDef<QueryLogEntry>[]>(
     () => [
-      { field: "ts", headerName: t("When"), width: 180, renderCell: ({ row }) => <LocalTime ms={row.ts * 1000} /> },
+      { field: "ts", headerName: t("When"), width: 180, renderCell: ({ row }) => <LocalTime ms={row.ts} /> },
+      { field: "user", headerName: t("User"), width: 200 },
       {
         field: "error",
         headerName: t("Status"),
@@ -52,16 +51,15 @@ export function HistoryTable({ entries }: { entries: HistoryEntry[] }) {
         width: 64,
         sortable: false,
         filterable: false,
-        renderCell: ({ row }) => <AnalyzeIconButton query={row.query} source={row.source} />,
+        renderCell: ({ row }) => (row.kind === "sql" ? <AnalyzeIconButton query={row.query} source={row.source} /> : null),
       },
     ],
     [t],
   );
 
-  const rows = useMemo<Row[]>(() => {
+  const rows = useMemo(() => {
     const f = filter.trim().toLowerCase();
-    const all = entries.map((e, i) => ({ ...e, id: i }));
-    return f ? all.filter((r) => r.query.toLowerCase().includes(f) || r.source.toLowerCase().includes(f) || (r.error ?? "").toLowerCase().includes(f)) : all;
+    return f ? entries.filter((r) => r.query.toLowerCase().includes(f) || r.source.toLowerCase().includes(f) || (r.user ?? "").toLowerCase().includes(f) || (r.error ?? "").toLowerCase().includes(f)) : entries;
   }, [entries, filter]);
 
   return (
@@ -95,10 +93,13 @@ export function HistoryTable({ entries }: { entries: HistoryEntry[] }) {
           columns={columns}
           density="compact"
           disableRowSelectionOnClick
-          onRowClick={({ row }) => router.push(`/sql?q=${encodeURIComponent(row.query)}`)}
+          onRowClick={({ row }) => {
+            if (row.kind === "sql") router.push(`/sql?q=${encodeURIComponent(row.query)}`);
+          }}
+          getRowClassName={({ row }) => (row.kind === "sql" ? "sql-run" : "")}
           initialState={{ pagination: { paginationModel: { pageSize: 50, page: 0 } } }}
           pageSizeOptions={[25, 50, 100]}
-          sx={{ bgcolor: "background.paper", "& .MuiDataGrid-row": { cursor: "pointer" } }}
+          sx={{ bgcolor: "background.paper", "& .MuiDataGrid-row.sql-run": { cursor: "pointer" } }}
         />
       </Box>
     </Box>

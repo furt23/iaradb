@@ -16,8 +16,9 @@ export const runtime = "nodejs";
  * `done` or `failed`. Catalog changes are stored first.
  */
 export async function POST(req: Request): Promise<Response> {
+  let by: string | null;
   try {
-    await requireUser();
+    by = (await requireUser()).email || null;
   } catch (e) {
     const res = authErrorResponse(e);
     if (res) return res;
@@ -37,14 +38,14 @@ export async function POST(req: Request): Promise<Response> {
       let result: unknown;
       if (body.kind === "notebook") {
         kernel = await kernels.notebookForRun(normalizeRelative(body.path));
-        result = await kernel.request("notebook.run", { cells: body.cells, cell_ids: body.cellIds, autorun: body.autorun === true }, forward);
+        result = await kernel.request("notebook.run", { cells: body.cells, cell_ids: body.cellIds, autorun: body.autorun === true }, forward, by);
       } else if (body.kind === "widget") {
         const path = normalizeRelative(body.path);
         kernel = await kernels.notebookForRun(path);
-        result = await kernel.request("widgets.set", { notebook: path, name: body.name, value: body.value, cells: body.cells }, forward);
+        result = await kernel.request("widgets.set", { notebook: path, name: body.name, value: body.value, cells: body.cells }, forward, by);
       } else if (body.kind === "sql") {
         kernel = kernels.workspace();
-        result = await kernel.request("sql.run", { query: body.query, params: body.params, param_types: body.param_types }, forward);
+        result = await kernel.request("sql.run", { query: body.query, params: body.params, param_types: body.param_types }, forward, by);
       } else {
         throw new Error("unknown run request");
       }

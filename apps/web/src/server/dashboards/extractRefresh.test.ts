@@ -157,11 +157,11 @@ describe("servedExtracts", () => {
   it("gives the manifest, the serving kernel and the URL of a version's file", async () => {
     fake.manifest = { datasets: { orders: old("orders") } };
     fake.serving.mockResolvedValue("answer");
-    const x = await servedExtracts("abcd1234");
+    const x = await servedExtracts("abcd1234", "ana@example.com");
     expect(x.manifest).toBe(fake.manifest);
     expect(x.url("orders", "20261001T000000Z-aaaa")).toBe("s3://b/_iara/extracts/abcd1234/orders/20261001T000000Z-aaaa.parquet");
     expect(await x.serve("result.page", { result_id: "r1", offset: 0, limit: 5 })).toBe("answer");
-    expect(fake.serving).toHaveBeenCalledWith("result.page", { result_id: "r1", offset: 0, limit: 5 });
+    expect(fake.serving).toHaveBeenCalledWith("result.page", { result_id: "r1", offset: 0, limit: 5 }, "ana@example.com");
   });
 
   it("takes a manifest that cannot be read as none, and logs why, so the datasets run live", async () => {

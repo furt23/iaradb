@@ -5,6 +5,7 @@ import type { LangGraphRunnableConfig } from "@langchain/langgraph";
 import type { IaraMemory } from "@/lib/iara/protocol";
 
 import { CODE_MODEL, FAST_MODEL } from "../../ai/models";
+import { CHART_TOOL, drawChart } from "../../agents/chart";
 import { learnOntology, teachableTeams, type Teachable } from "../../ontology/learn";
 import { addMemory, removeMemory } from "../memory";
 import { contextText, DASHBOARD_API, NOTEBOOK_API, resultStep, userStep } from "../prompt";
@@ -151,6 +152,19 @@ async function systemPrompt(memories: IaraMemory[], summary: string | null, file
     .join("\n\n");
 }
 
+/** An agent of the Studio's Agents section only asks the analyst. */
+export const AGENT_TOOLS: FunctionDecl[] = IARA_TOOLS.filter((t) => t.name === "ask_analyst");
+
+const AGENT_SYSTEM = `You are a data agent of Iara Studio, made for one subject (below). People ask you about their data; answer in their language, concisely, with the numbers that answer the question (a small markdown table when it helps).
+You never read data yourself, so never guess a table, a column or a value: ask_analyst for every fact, with a complete question that names the tables to use. What the analyst answered earlier in this conversation still holds: reuse it, and ask only for what is new.
+Answer only within the agent's subject and tables. When a question is outside them, say so in one line and say what you can answer.
+When an answer rests on a definition from the ontology, say which term it came from.
+Never say you did something you did not do.`;
+
+function agentPrompt(agent: string, summary: string | null): string {
+  return [AGENT_SYSTEM, agent, summary && `Earlier in this conversation (summarized):\n${summary}`].filter(Boolean).join("\n\n");
+}
+
 const argText = (args: Record<string, unknown> | undefined, key: string) => (typeof args?.[key] === "string" ? (args[key] as string) : "");
 
 /** Iara: talks with the user, remembers what they ask her to, and hands data questions to the analyst and changes to the author. A handoff ends her turn here; the answer comes back as the function result when she runs again. */
@@ -163,15 +177,19 @@ export function iaraNode(deps: IaraDeps) {
     let calls = 0;
     let used: ChatUsage = { input: 0, output: 0 };
     const file = await contextText(s.context, 30_000);
-    const teaching = teachingText(await teachableTeams(deps.user, deps.tools));
-    const tools = teaching ? [...IARA_TOOLS, LEARN_TOOL] : IARA_TOOLS;
+    // an agent answers the same for everyone: no memories, no ontology lessons, no changes
+    const agent = s.context.surface === "agent" ? (deps.agent?.brief ?? "") : null;
+    const charts = agent !== null && deps.agent?.charts === true;
+    const teaching = agent === null ? teachingText(await teachableTeams(deps.user, deps.tools)) : null;
+    const tools = agent !== null ? (charts ? [...AGENT_TOOLS, CHART_TOOL] : AGENT_TOOLS) : teaching ? [...IARA_TOOLS, LEARN_TOOL] : IARA_TOOLS;
+    const system = async () => (agent !== null ? agentPrompt(agent, summary) : systemPrompt(memories, summary, file, s.context.surface === "dashboard", teaching));
 
     /** One model call; `extra` steps are asked about but not kept in the history. */
     async function ask(tools: FunctionDecl[] | undefined, extra: Step[] = []): Promise<ChatReply> {
       let started = false;
       const r = await deps.chat({
         model: CODE_MODEL,
-        system: await systemPrompt(memories, summary, file, s.context.surface === "dashboard", teaching),
+        system: await system(),
         steps: [...history, ...extra],
         tools,
         onText: (d) => {
@@ -251,6 +269,10 @@ export function iaraNode(deps: IaraDeps) {
           if (!request) results.push(resultStep(call, `${key} is the text of the request`, true));
           else if (handoff) results.push(resultStep(call, "one handoff at a time: call it again after this one", true));
           else handoff = { callId: call.id, name: call.name, request };
+        } else if (call.name === "show_chart" && charts) {
+          const drawn = await drawChart(deps.tools, call.arguments);
+          if ("chart" in drawn) emit(config, { type: "chart", chart: drawn.chart });
+          results.push("chart" in drawn ? resultStep(call, `shown under your answer (${drawn.chart.data.rows.length} rows)`) : resultStep(call, drawn.error, true));
         } else {
           results.push(await memoryCall(call));
         }

@@ -115,6 +115,28 @@ The catalog (tables, schemas and storage settings) is kept in a hidden store, no
 
 A schema can have a `location` (`[schemas.<name>]`, an `s3://` URL or a workspace folder). Every subfolder of it is a table of that schema, named after the folder; folders starting with `_` or `.` and names that are not identifiers are skipped. Tables declared in `[tables]` win over discovered ones, and discovered tables are never written to the catalog. Studio lists the location with the credentials and `[storage."s3://..."]` settings of the catalog and caches the listing for 30 seconds (the refresh button in the Data panel reads it again). `CREATE TABLE` in such a schema writes into the location; `DROP TABLE` is refused for these tables, delete the folder instead.
 
+## Query history and lineage
+
+Studio keeps a log of the runs its kernels make: each SQL statement, and each Python cell that read or wrote a table. A run has who started it, where it ran, its time, rows and memory, and the tables it read and wrote with their Delta version. The log is in Studio's data folder (`system/` under `IARA_STUDIO_DATA`), so it outlives the clusters.
+
+- The Query history page lists the newest runs. It needs no cluster.
+- The Lineage tab of a table in Data lists what wrote the table and what read it: notebooks, the SQL editor, jobs, dashboards and Iara. For each one it shows who ran it last and when, the table's version, and for a writer the tables the same run read.
+- A read by path counts too: `iara.scan_delta("s3://bucket/warehouse/sales/orders")` is a read of `sales.orders` when the catalog has that table at that location.
+
+Not recorded: table previews, the Data Wrangler, and files written from Python with `sink_parquet` or `sink_csv`. Runs a job starts are recorded without a user. A Python cell that runs more than 32 queries keeps the reads of its last 32.
+
+### System catalog
+
+The `system` catalog holds Studio's own records as tables, queried like any other table:
+
+| Table | Rows |
+|---|---|
+| `system.main.queries` | One per run: `id`, `ts`, `user`, `kernel`, `cluster`, `source`, `kind` (`sql` or `python`), `query`, `elapsed_ms`, `rows`, `error`, `memory_peak`, `spilled_bytes`. |
+| `system.main.query_tables` | One per table a run read or wrote: `query_id`, `ts`, `user`, `kernel`, `source`, `access` (`read` or `write`), `table`, `location`, `version`, `operation`. |
+| `system.main.job_runs` | One per job run, dashboard refreshes included: `id`, `job`, `trigger`, `status`, `started_at`, `ended_at`, `cluster`, `error`, `summary`, `tasks`. |
+
+Studio writes them as Parquet files every minute, when something changed: under `_iara/system/` of the team bucket, or in the workspace's `.iara/system/` folder without one. A query therefore sees runs up to a minute old. The catalog appears once the first table is written, and it is read-only in the Data panel. [Data permissions](#data-permissions) apply to it as to any other catalog; `queries` holds the query text of every user.
+
 ## Jobs
 
 A job runs notebooks or SQL files on a cron schedule (UTC) or on demand, on an existing cluster or on a new one that is removed afterwards. Studio keeps run history, durations, statuses and logs. Each job is a file `jobs/<id>.toml` in the workspace.
@@ -202,6 +224,23 @@ In a dashboard the button is in the page's header, and Iara sees the whole dashb
 
 Iara needs `OPENAI_API_KEY` (model `gpt-6-luna`; requests use `store: false`). Your questions, the code it reads, table names and columns, the ontology terms it finds, and the rows of the queries it runs (at most 500) are sent to OpenAI. Kernels never receive the key. Conversations and memories are kept in Studio's data folder, per user.
 
+## Agents
+
+An agent is an Iara focused on one subject. Agents are made in the Agents section and kept in the workspace as `agents/<name>/`: `agent.json` (name, description, tables with their notes, glossary), `instructions.md` and `examples.json` (example questions with their SQL). They are versioned with the workspace.
+
+The builder has the test playground on the left, the open section in the middle, and a rail on the right with Instructions, Tables, SQL examples and Evaluations. Changes are saved as you type, and the next question in the playground uses them.
+
+- **Instructions:** how the agent answers: rules, definitions, tone. Iara and the analyst both follow them. The Glossary tab maps the company's terms to their meaning; it belongs to the agent and is not written to a team's [ontology](#ontology). The Answer style tab sets the answers' language (the question's, Portuguese or English), their length, when to draw charts (when they help, whenever possible, never) and a tone.
+- **Tables:** the tables you may read, by catalog and schema, with a checkbox on each table and on each schema. The agent reads only the checked tables, and of those only the ones the person asking may read; with none checked it reads nothing. Unchecking keeps the notes. Each table has a description and a description per column.
+- **SQL examples:** questions people will ask, with the SQL that answers them. The analyst reuses and adapts that SQL when a question matches. Test query runs the SQL on the agent's checked tables and shows the first 20 rows.
+- **Playground:** under each answer, the charts the agent drew, the SQL it ran (formatted), Save as example, and 👍/👎, which rate the answer in Evaluations. The example questions are offered above the input. An agent never changes files and keeps no memories.
+- **Charts:** the agent draws a bar, line, area or pie chart from a query over its checked tables (at most 200 rows), when the answer style allows it.
+- **Evaluations:** every question asked to the agent, with who asked it, how long it took and whether it was rated. The score is the share of good answers among the rated ones. Opening a question shows, in place of the playground, its answer, charts and SQL (queries that failed included), where it can be rated, noted, or its SQL saved as an example. The log is kept in Studio's data folder, outside the workspace, at most 1000 questions per agent.
+
+The Agents page lists every agent with a search over names, descriptions and tables.
+
+For now an agent is used only from its builder.
+
 ## MCP server
 
 Studio serves the Model Context Protocol at `/api/mcp` (Streamable HTTP, JSON responses), so Claude Code, Cursor or another MCP client can read the catalog and query it. The tools only read:
@@ -281,7 +320,7 @@ Search matches the words of the question with a term's name, synonyms, columns a
 
 ## Dashboards
 
-A dashboard is a canvas of datasets (one SQL query each) and widgets (charts or tables). The editor runs its queries with the signed-in user's grants. Publishing makes it available to viewers; a viewer opens it at `/view`, on the `IARA_VIEW_HOST` host when that is set, and that host serves nothing else. Two viewers with different grants never share cached results. "Schedule refresh" in the editor sets a cron schedule (UTC), stored as `[schedule]` (`cron`, `enabled`) in the dashboard's `dashboard.toml`. Each run renders the published dashboard's initial view (no filter values, no chart picks) on the dashboard's cluster, once for each set of read grants among the people who can open it. A viewer who opens the dashboard with no filters and no chart picks gets the stored render at once, with the time it was made, even when the cluster is stopped; filtered views still run live. Republishing or changing the grants ignores the stored renders until the next run. A run fails when the dashboard is not published or every widget failed, and keeps the previous renders. Refresh runs are not listed in Jobs. Publishing is refused when a dataset reads a table its publisher has no grant on.
+A dashboard is a canvas of datasets (one SQL query each) and widgets (charts or tables). The editor runs its queries with the signed-in user's grants. Publishing makes it available to viewers; a viewer opens it at `/view`, on the `IARA_VIEW_HOST` host when that is set, and that host serves nothing else. Two viewers with different grants never share cached results. "Schedule refresh" in the editor sets a cron schedule (UTC), stored as `[schedule]` (`cron`, `enabled`) in the dashboard's `dashboard.toml`. Each run renders the published dashboard's initial view (no filter values, no chart picks) on the dashboard's cluster, once for each set of read grants among the people who can open it. A viewer who opens the dashboard with no filters and no chart picks gets the stored render at once, with the time it was made, even when the cluster is stopped; filtered views still run live. Republishing or changing the grants ignores the stored renders until the next run. A run fails when the dashboard is not published or every widget failed, and keeps the previous renders. Refresh runs are not listed in Jobs. A scheduled refresh is skipped, and no cluster starts, when nothing it reads changed: every dataset is imported and was built from its current query, and each table it read is a Delta table still at the version it was read at. The run is recorded as succeeded, with "No source changed since the last refresh". A dataset that reads a table that is not Delta, or whose query depends on `now()`, `current_date` or `random()`, always refreshes; so do "Refresh now" and publishing. Publishing is refused when a dataset reads a table its publisher has no grant on.
 
 Datasets are imported by default. Publishing, each scheduled run and "Refresh now" run the dataset once, with the publisher's grants, and store the result as a Parquet file under `_iara/extracts/<dashboard id>/` in the bucket (`.iara/extracts/` in the workspace without one). Renders read that copy in a kernel Studio runs itself, so filters and chart picks need no cluster. A viewer must have grants on every table the dataset read. A dataset with parameters of its own (`:name`), or with `-- iara:mode live` in its header (`"mode": "live"` in a recipe), runs on every render instead; the switch is in the editor's Data tab. While a dataset has no copy built from its current query, it runs live. A copy over `IARA_EXTRACT_MAX_MB` fails that dataset's refresh. With every dataset imported, runs store no initial-view render.
 

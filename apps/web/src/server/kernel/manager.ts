@@ -2,7 +2,7 @@ import "server-only";
 
 import path from "node:path";
 
-import type { NotebookView, ParamsOf, ResultOf, WidgetValue } from "@iara/protocol";
+import type { HistoryEntry, NotebookView, ParamsOf, ResultOf, WidgetValue } from "@iara/protocol";
 
 import { isWithin, movedPath } from "@/lib/paths";
 
@@ -14,6 +14,7 @@ import { LOCAL_CLUSTER } from "../compute/types";
 import { diskCacheEnv, KERNEL_HOME, KERNEL_USER, SPILL_DIR, VENV, WORKSPACE_DIR } from "../compute/userData";
 import { config, type StudioConfig } from "../config";
 import { bucketKeys, bucketProxy, proxyEnv, teamBucketOf } from "../storage/bucketProxy";
+import { appendQuery } from "../system/queryLog";
 import { catalogRegion } from "../workspace/catalogStore";
 import { exists } from "../workspace/files";
 import { kernelConfigText, readNotebookSource, writeNotebookSource } from "../workspace/sources";
@@ -35,6 +36,17 @@ export type ServingMethod = (typeof SERVING_METHODS)[number];
 
 /** The kernels the Studio runs itself, apart from the cluster kernels. */
 type OwnKernel = "metadata" | "serving";
+
+/** Logs the runs of a kernel to the Studio's query log (`cluster` is null for the Studio's own kernels). */
+function logRuns(kernel: string, cluster: string | null): (entry: HistoryEntry, user: string | null) => void {
+  return (entry, user) => appendQuery(entry, { user, kernel, cluster });
+}
+
+/** The serving kernel's disk cache for the extracts it reads from the bucket. */
+function servingEnv(): Record<string, string> {
+  // 2 GB, not the engine's 10 GB default: it shares the Studio's disk
+  return { IARA_DISK_CACHE_DIR: path.join(dataDir(), "cache", "extracts"), IARA_DISK_CACHE_MB: "2048" };
+}
 
 /** how long saves to a renamed notebook's old path follow it to the new one */
 const RENAME_GRACE_MS = 60_000;
@@ -126,7 +138,7 @@ export class KernelManager {
     }
     if (!k || !k.alive) {
       const launcher = this.launcher(cluster);
-      k = new KernelClient({ transport: launcher.start(key), label: `${launcher.name} ${key}`, localRoot: launcher.localRoot, bootstrap });
+      k = new KernelClient({ transport: launcher.start(key), label: `${launcher.name} ${key}`, localRoot: launcher.localRoot, bootstrap, onHistory: logRuns(key, cluster) });
       this.clusterOf.set(k, cluster);
       this.kernels.set(key, k);
     }
@@ -153,7 +165,7 @@ export class KernelManager {
     let own = this.own.get(name);
     if (!own?.kernel.alive) {
       const launcher = localLauncher(this.cfg, env);
-      own = { kernel: new KernelClient({ transport: launcher.start(name), label: name, localRoot: launcher.localRoot, bootstrap }), toml: null };
+      own = { kernel: new KernelClient({ transport: launcher.start(name), label: name, localRoot: launcher.localRoot, bootstrap, onHistory: logRuns(name, null) }), toml: null };
       this.own.set(name, own);
     }
     const toml = await kernelConfigText("local");
@@ -187,12 +199,19 @@ export class KernelManager {
    * (IARA_DISK_CACHE_DIR): a version of an extract is never rewritten, so that
    * cache is never stale.
    */
-  async serving<M extends ServingMethod>(method: M, params: ParamsOf<M>): Promise<ResultOf<M>> {
+  async serving<M extends ServingMethod>(method: M, params: ParamsOf<M>, by?: string | null): Promise<ResultOf<M>> {
     if (!SERVING_METHODS.includes(method)) throw new KernelError("NotServing", `${method} cannot be served from an extract`);
     if ((params as { allow?: unknown }).allow !== undefined) throw new KernelError("NotServing", "the serving kernel takes no read grants: it only runs the Studio's own SQL");
-    // 2 GB, not the engine's 10 GB default: it shares the Studio's disk
-    const env = { IARA_DISK_CACHE_DIR: path.join(dataDir(), "cache", "extracts"), IARA_DISK_CACHE_MB: "2048" };
-    return (await this.ownKernel("serving", env)).request(method, params);
+    return (await this.ownKernel("serving", servingEnv())).request(method, params, undefined, by);
+  }
+
+  /**
+   * Publishes the system catalog's rows from the Studio's own files, in the
+   * serving kernel (the same kernel, so it starts with the same disk cache).
+   * It is the only method this entry point accepts: `system.publish`.
+   */
+  async system(params: ParamsOf<"system.publish">): Promise<ResultOf<"system.publish">> {
+    return (await this.ownKernel("serving", servingEnv())).request("system.publish", params);
   }
 
   /** A kernel of its own for a task of a job run (`id`: `<run>:<task>`), on the run's cluster (its activity keeps the cluster up). */

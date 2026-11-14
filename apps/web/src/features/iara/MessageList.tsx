@@ -6,7 +6,7 @@ import ErrorOutlined from "@mui/icons-material/ErrorOutlined";
 import Box from "@mui/material/Box";
 import Chip from "@mui/material/Chip";
 import Typography from "@mui/material/Typography";
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 
 import { useTranslation } from "@/i18n";
 import type { IaraFileContext, IaraMessage, IaraProposalRecord, IaraSurface } from "@/lib/iara/protocol";
@@ -49,7 +49,24 @@ function ProposalRecord({ proposal }: { proposal: IaraProposalRecord }) {
 }
 
 /** Iara's message: her steps above the text, then what she remembered and the proposals. */
-function IaraBubble({ message, chat, getContext, isLast }: { message: IaraMessage; chat: IaraChat; getContext: () => IaraFileContext; isLast: boolean }) {
+/** What a surface adds under each finished answer (an agent's SQL and feedback); `question` is the user message it answers. */
+export type MessageFooter = (message: IaraMessage, question: string) => ReactNode;
+
+function IaraBubble({
+  message,
+  chat,
+  getContext,
+  isLast,
+  question,
+  footer,
+}: {
+  message: IaraMessage;
+  chat: IaraChat;
+  getContext: () => IaraFileContext;
+  isLast: boolean;
+  question: string;
+  footer?: MessageFooter;
+}) {
   const { t } = useTranslation();
   const { steps, memories, proposals } = message;
   if (!message.text && !steps?.length && !memories?.length && !proposals?.length) return null;
@@ -86,6 +103,7 @@ function IaraBubble({ message, chat, getContext, isLast }: { message: IaraMessag
           <ProposalRecord key={p.id} proposal={p} />
         ),
       )}
+      {footer && !(chat.busy && isLast) && footer(message, question)}
     </Box>
   );
 }
@@ -95,7 +113,22 @@ function IaraBubble({ message, chat, getContext, isLast }: { message: IaraMessag
  * markdown with her steps and proposals. It follows new content to the
  * bottom unless the user scrolled up; a new message follows regardless.
  */
-export function MessageList({ chat, surface, getContext, onPick }: { chat: IaraChat; surface: IaraSurface; getContext: () => IaraFileContext; onPick(text: string): void }) {
+export function MessageList({
+  chat,
+  surface,
+  suggestions,
+  footer,
+  getContext,
+  onPick,
+}: {
+  chat: IaraChat;
+  surface: IaraSurface;
+  /** first questions to offer instead of the surface's own */
+  suggestions?: string[];
+  footer?: MessageFooter;
+  getContext: () => IaraFileContext;
+  onPick(text: string): void;
+}) {
   const { t } = useTranslation();
   const { thread, busy, agent } = chat;
   const messages = thread?.messages ?? [];
@@ -123,7 +156,7 @@ export function MessageList({ chat, surface, getContext, onPick }: { chat: IaraC
       sx={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: 2, p: 1.5 }}
     >
       {messages.length === 0 ? (
-        <EmptyState surface={surface} onPick={onPick} />
+        <EmptyState surface={surface} suggestions={suggestions} onPick={onPick} />
       ) : (
         messages.map((m, i) =>
           m.role === "user" ? (
@@ -131,7 +164,15 @@ export function MessageList({ chat, surface, getContext, onPick }: { chat: IaraC
               {m.text}
             </Box>
           ) : (
-            <IaraBubble key={m.id} message={m} chat={chat} getContext={getContext} isLast={i === messages.length - 1} />
+            <IaraBubble
+              key={m.id}
+              message={m}
+              chat={chat}
+              getContext={getContext}
+              isLast={i === messages.length - 1}
+              question={messages.findLast((q, j) => j < i && q.role === "user")?.text ?? ""}
+              footer={footer}
+            />
           ),
         )
       )}

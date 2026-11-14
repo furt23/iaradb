@@ -11,6 +11,12 @@ import { catalogSchemas, defaultCatalog } from "./catalog";
 import { invalidateDiscovery } from "./discovery";
 import { kernelConfigFor, readConfigText, writeConfigText } from "./sources";
 
+/** A running workspace kernel (catalog, SQL editor) re-reads the catalog, unless it is `except`; none is started for it. */
+export async function syncWorkspaceKernel(except: KernelClient | null = null): Promise<void> {
+  const kernel = kernels.existing(WORKSPACE_KERNEL);
+  if (kernel && kernel !== except) await kernel.request("workspace.configure", { toml: await kernelConfigFor(kernel) });
+}
+
 /** A schema's location got new data: its listing is read again (the catalog is not touched). */
 async function invalidateSchemas(names: string[]): Promise<void> {
   try {
@@ -40,6 +46,5 @@ export async function applyCatalogChanges(all: CatalogChange[], from: KernelClie
     for (const c of changes) text = withChange(text, c);
     await writeConfigText(text);
   });
-  const workspace = kernels.existing(WORKSPACE_KERNEL);
-  if (workspace && workspace !== from) await workspace.request("workspace.configure", { toml: await kernelConfigFor(workspace) });
+  await syncWorkspaceKernel(from);
 }

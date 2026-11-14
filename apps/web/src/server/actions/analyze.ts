@@ -12,8 +12,8 @@ import { attempt, type ActionResult } from "../result";
 /** Runs a query with profiling on the workspace kernel and keeps the analysis: its id. */
 export async function analyzeQuery(query: string, source?: string, values: QueryParams = {}): Promise<ActionResult<{ id: string }>> {
   return attempt(async () => {
-    await requireUser();
-    const analysis = await kernels.workspace().request("sql.analyze", { query, ...values });
+    const user = await requireUser();
+    const analysis = await kernels.workspace().request("sql.analyze", { query, ...values }, undefined, user.email || null);
     return { id: store.saveAnalysis({ ...analysis, source, ...values }).id };
   });
 }

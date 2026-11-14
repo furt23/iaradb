@@ -72,11 +72,11 @@ export async function renderShared(id: string, values: FilterValues, cross: Cros
         p,
         values,
         {
-          request: async (method, params) => kernels.forDashboard(p.id, p.cluster).request(method, params),
+          request: async (method, params) => kernels.forDashboard(p.id, p.cluster).request(method, params, undefined, user.email || null),
           redact: true,
           source: `dashboard view ${p.title}`,
           allow,
-          extracts: await servedExtracts(p.id),
+          extracts: await servedExtracts(p.id, user.email || null),
         },
         cross,
       ),

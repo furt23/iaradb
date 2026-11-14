@@ -60,6 +60,8 @@ export function reduceEvent(state: ChatState, event: IaraEvent): ChatState {
       return patchLast(state, (m) => ({ ...m, steps: addThought(m.steps ?? [], event.data) }));
     case "memory":
       return patchLast(state, (m) => ({ ...m, memories: [...(m.memories ?? []), event.data] }));
+    case "chart":
+      return patchLast(state, (m) => ({ ...m, charts: [...(m.charts ?? []), event.data] }));
     case "usage":
       return state.thread ? { ...state, thread: { ...state.thread, usage: event.data } } : state;
     case "approval": {

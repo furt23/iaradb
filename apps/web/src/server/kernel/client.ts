@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { KernelEventName, KernelInfo, KernelMethod, ParamsOf, ResultOf } from "@iara/protocol";
+import type { HistoryEntry, KernelEventName, KernelInfo, KernelMethod, ParamsOf, ResultOf } from "@iara/protocol";
 
 import type { Transport } from "./transport";
 import { parseMessage } from "./wire";
@@ -21,6 +21,8 @@ interface Pending {
   resolve(value: unknown): void;
   reject(error: Error): void;
   onEvent?: EventListener;
+  /** who the request is for (null: nobody) */
+  by: string | null;
 }
 
 export interface KernelOptions {
@@ -35,6 +37,8 @@ export interface KernelOptions {
    * checks the protocol version and configures the kernel.
    */
   bootstrap?: (kernel: KernelClient, info: KernelInfo) => Promise<KernelInfo>;
+  /** a run the kernel reports, with who the request that caused it was for */
+  onHistory?: (entry: HistoryEntry, by: string | null) => void;
 }
 
 const STDERR_TAIL = 40;
@@ -105,6 +109,7 @@ export class KernelClient {
     if (!msg) return;
     if (msg.kind === "event") {
       if (msg.event === "kernel.ready") this.settleStarted.resolve(msg.data as KernelInfo);
+      else if (msg.event === "history") this.opts.onHistory?.(msg.data as HistoryEntry, msg.request === null ? null : (this.pending.get(msg.request)?.by ?? null));
       else if (msg.request !== null) this.pending.get(msg.request)?.onEvent?.(msg.event, msg.data);
       return;
     }
@@ -125,18 +130,18 @@ export class KernelClient {
   }
 
   /** A request once the kernel is up and configured. */
-  async request<M extends KernelMethod>(method: M, params: ParamsOf<M>, onEvent?: EventListener): Promise<ResultOf<M>> {
+  async request<M extends KernelMethod>(method: M, params: ParamsOf<M>, onEvent?: EventListener, by: string | null = null): Promise<ResultOf<M>> {
     await this.ready;
-    return this.call(method, params, onEvent);
+    return this.call(method, params, onEvent, by);
   }
 
   /** A request as soon as the process is up (used by the bootstrap). */
-  async call<M extends KernelMethod>(method: M, params: ParamsOf<M>, onEvent?: EventListener): Promise<ResultOf<M>> {
+  async call<M extends KernelMethod>(method: M, params: ParamsOf<M>, onEvent?: EventListener, by: string | null = null): Promise<ResultOf<M>> {
     await this.started;
     if (this.exitError) throw this.exitError;
     this.lastUsed = Date.now();
     const id = this.nextId++;
-    const result = new Promise<unknown>((resolve, reject) => this.pending.set(id, { resolve, reject, onEvent }));
+    const result = new Promise<unknown>((resolve, reject) => this.pending.set(id, { resolve, reject, onEvent, by }));
     this.transport.write(JSON.stringify({ id, method, params }) + "\n");
     try {
       return (await result) as ResultOf<M>;

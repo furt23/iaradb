@@ -2,6 +2,10 @@ import type { Diagnostic } from "@iara/protocol";
 import { z } from "zod";
 
 import { IaraRequest } from "@/lib/iara/protocol";
+import { agentAllow, agentBrief } from "@/server/agents/brief";
+import { appendLog } from "@/server/agents/log";
+import { recordingSend } from "@/server/agents/record";
+import { readAgent } from "@/server/agents/store";
 import { openaiChat, openaiLlm } from "@/server/ai/models";
 import { assistantContext } from "@/server/ai/tools";
 import { assist } from "@/server/assist";
@@ -45,5 +49,26 @@ export async function POST(req: Request): Promise<Response> {
         }
       : null;
   const deps: IaraDeps = { chat: openaiChat, llm: openaiLlm, tools: assistantContext(user), user, lint };
-  return eventStream((send) => runTurn(body, deps, send, req.signal));
+  if (ctx.surface !== "agent") return eventStream((send) => runTurn(body, deps, send, req.signal));
+
+  let agent;
+  try {
+    agent = await readAgent(ctx.path);
+  } catch (e) {
+    return Response.json({ ok: false, error: { type: "NotFound", message: (e as Error).message } }, { status: 404 });
+  }
+  // the agent's tables bound what it reads, within the user's own grants
+  const allow = agentAllow(deps.tools.allow, agent);
+  const agentDeps: IaraDeps = { ...deps, tools: { ...deps.tools, allow }, agent: { brief: await agentBrief(agent, allow), charts: agent.config.style.charts !== "never" } };
+  const question = body.kind === "message" ? body.text : "";
+  return eventStream((send) =>
+    runTurn(
+      body,
+      agentDeps,
+      recordingSend(send, ({ messageId, threadId, answer, queries, ms, charts }) => {
+        appendLog(agent.config.id, { id: messageId, at: Date.now(), user: user.email, threadId, question, answer, queries, ms, charts }).catch((e) => console.error("agent log:", e));
+      }),
+      req.signal,
+    ),
+  );
 }

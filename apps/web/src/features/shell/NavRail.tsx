@@ -6,6 +6,7 @@ import EventRepeatOutlined from "@mui/icons-material/EventRepeatOutlined";
 import FolderOutlined from "@mui/icons-material/FolderOutlined";
 import HistoryOutlined from "@mui/icons-material/HistoryOutlined";
 import Memory from "@mui/icons-material/Memory";
+import SmartToyOutlined from "@mui/icons-material/SmartToyOutlined";
 import SpaceDashboardOutlined from "@mui/icons-material/SpaceDashboardOutlined";
 import StorageOutlined from "@mui/icons-material/StorageOutlined";
 import TerminalOutlined from "@mui/icons-material/TerminalOutlined";
@@ -25,6 +26,7 @@ const ICONS: Record<SectionId, ReactNode> = {
   data: <StorageOutlined />,
   wrangle: <AutoFixHighOutlined />,
   dashboards: <SpaceDashboardOutlined />,
+  agents: <SmartToyOutlined />,
   sql: <TerminalOutlined />,
   history: <HistoryOutlined />,
   jobs: <EventRepeatOutlined />,

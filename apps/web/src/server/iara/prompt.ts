@@ -44,6 +44,7 @@ const cellText =(c: ContextCell, selected: boolean): string => {
 
 /** The open file as prompt text: for a notebook its cells in order (id, kind, name, code, output summary, status), the selected cell and the variables; for the SQL editor the query and its last result. Cut to `max` tokens. */
 export async function contextText(ctx: IaraFileContext, max = 30_000): Promise<string> {
+  if (ctx.surface === "agent") return "";
   const text =
     ctx.surface === "dashboard"
       ? dashboardText(ctx)

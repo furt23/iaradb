@@ -2,11 +2,11 @@
 
 import type { CellOutput, DeltaCommit, TableInfo, TableRef } from "@iara/protocol";
 
+import { SYSTEM_CATALOG } from "@/lib/catalogConfig";
 import { type CatalogInfo, type CatalogSchema, displayName, inCatalog, parseTableName, tableEntry, withCatalogNames } from "@/lib/catalogToml";
 
 import { requireUser } from "../auth/session";
 import { kernels } from "../kernel/manager";
-import { WORKSPACE_KERNEL } from "../kernel/keys";
 import { attempt, type ActionResult } from "../result";
 import {
   addCatalog,
@@ -19,9 +19,10 @@ import {
   removeCatalogSchema,
   removeCatalogTable,
 } from "../workspace/catalog";
+import { syncWorkspaceKernel } from "../workspace/catalogChanges";
 import { reloadCatalog } from "../workspace/catalogStore";
 import { invalidateDiscovery } from "../workspace/discovery";
-import { appendConfigEntry, kernelConfigFor } from "../workspace/sources";
+import { appendConfigEntry } from "../workspace/sources";
 
 export async function tableInfo(name: string): Promise<ActionResult<TableInfo>> {
   return attempt(async () => {
@@ -97,18 +98,12 @@ export async function addTable(
 
 // catalog edits go through kernels.exclusive, as catalog changes from runs and jobs do: no edit is lost
 
-/** A running workspace kernel re-reads the catalog (none is started for it). */
-async function syncRunningKernel(): Promise<void> {
-  const kernel = kernels.existing(WORKSPACE_KERNEL);
-  if (kernel) await kernel.request("workspace.configure", { toml: await kernelConfigFor(kernel) });
-}
-
 /** Remove a table from the catalog; a running workspace kernel forgets it too. */
 export async function removeTable(name: string): Promise<ActionResult<null>> {
   return attempt(async () => {
     await requireUser();
     await kernels.exclusive(() => removeCatalogTable(name));
-    await syncRunningKernel();
+    await syncWorkspaceKernel();
     return null;
   });
 }
@@ -117,8 +112,9 @@ export async function removeTable(name: string): Promise<ActionResult<null>> {
 export async function createCatalog(name: string, description?: string): Promise<ActionResult<null>> {
   return attempt(async () => {
     await requireUser();
+    if (name.trim().toLowerCase() === SYSTEM_CATALOG) throw new Error("system is the Studio's own catalog: pick another name");
     await kernels.exclusive(() => addCatalog(name.trim(), description?.trim() || null));
-    await syncRunningKernel();
+    await syncWorkspaceKernel();
     return null;
   });
 }
@@ -128,7 +124,7 @@ export async function removeCatalog(name: string): Promise<ActionResult<null>> {
   return attempt(async () => {
     await requireUser();
     await kernels.exclusive(() => dropCatalog(name));
-    await syncRunningKernel();
+    await syncWorkspaceKernel();
     return null;
   });
 }
@@ -139,7 +135,7 @@ export async function createSchema(name: string, description?: string, location?
     await requireUser();
     const target = catalog?.trim().toLowerCase() || (await defaultCatalog());
     await kernels.exclusive(() => addCatalogSchema(target, name.trim(), description?.trim() || null, location?.trim() || null));
-    await syncRunningKernel();
+    await syncWorkspaceKernel();
     return null;
   });
 }
@@ -149,7 +145,7 @@ export async function removeSchema(name: string): Promise<ActionResult<null>> {
   return attempt(async () => {
     await requireUser();
     await kernels.exclusive(() => removeCatalogSchema(name));
-    await syncRunningKernel();
+    await syncWorkspaceKernel();
     return null;
   });
 }
@@ -169,7 +165,7 @@ export async function syncCatalog(): Promise<ActionResult<TableRef[]>> {
   return attempt(async () => {
     await requireUser();
     reloadCatalog();
-    await syncRunningKernel();
+    await syncWorkspaceKernel();
     return catalogTables();
   });
 }

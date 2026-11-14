@@ -60,6 +60,9 @@ if (!i18next.isInitialized) {
         useSuspense: false,
       },
     } as unknown as Parameters<typeof i18next.init>[0]);
+} else {
+  // a dev reload re-runs this module on a live i18next: without this the server keeps the old keys and renders untranslated text
+  for (const [lng, bundle] of Object.entries(resources)) i18next.addResourceBundle(lng, "translation", bundle.translation, true, true);
 }
 
 /**

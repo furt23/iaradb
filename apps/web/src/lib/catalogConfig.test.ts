@@ -65,4 +65,37 @@ describe("kernelConfig", () => {
     const broken = `[workspace\nname = `;
     expect(kernelConfig(broken, { ...TEAM })).toBe(broken);
   });
+
+  it("declares the system catalog with one table, as Parquet folders", () => {
+    const cfg = parse(kernelConfig(TEXT, { ...LOCAL, system: [{ name: "queries", path: "/ws/.iara/system/queries" }] }));
+    expect(cfg.catalogs).toEqual({
+      system: {
+        description: "The Studio's own records (read-only)",
+        tables: { queries: { path: "/ws/.iara/system/queries", format: "parquet" } },
+      },
+    });
+    expect(cfg.tables).toEqual({ sales: { path: "s3://team-data/sales/" } });
+  });
+
+  it("declares two system tables", () => {
+    const system = [
+      { name: "queries", path: "/a/queries" },
+      { name: "job_runs", path: "/a/job_runs" },
+    ];
+    const cfg = parse(kernelConfig(TEXT, { ...LOCAL, system }));
+    expect(Object.keys((cfg.catalogs as { system: { tables: object } }).system.tables)).toEqual(["queries", "job_runs"]);
+  });
+
+  it("generates nothing for the system catalog when no table is published", () => {
+    expect(kernelConfig(TEXT, { ...LOCAL, system: [] })).toBe(TEXT);
+  });
+
+  it("replaces a system catalog the stored text declares, and keeps the other catalogs", () => {
+    const text = `${TEXT}\n[catalogs.system]\ndescription = "mine"\n\n[catalogs.system.tables.mine]\npath = "x"\n\n[catalogs.sales]\ndescription = "Sales"\n`;
+    const cfg = parse(kernelConfig(text, { ...LOCAL, system: [{ name: "queries", path: "/q" }] }));
+    expect(cfg.catalogs).toEqual({
+      system: { description: "The Studio's own records (read-only)", tables: { queries: { path: "/q", format: "parquet" } } },
+      sales: { description: "Sales" },
+    });
+  });
 });

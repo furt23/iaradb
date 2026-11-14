@@ -78,6 +78,27 @@ const config = () => {
 };
 
 describe("analystNode", () => {
+  it("as an agent: works within its brief, with no workspace files and no open file", async () => {
+    const systems: string[] = [];
+    const { deps: d, requests } = deps((req) => {
+      systems.push(req.system);
+      return answering("orders has 7 rows");
+    });
+    await analystNode({ ...d, agent: { brief: "Only main.sales.orders; revenue excludes returns", charts: true } })(state({ context: { surface: "agent", path: "sales" } }), config().config);
+
+    expect(requests[0].tools?.map((t) => t.name)).toEqual(["list_tables", "describe_table", "explain_sql", "run_sql", "search_ontology"]);
+    expect(systems[0]).toContain("revenue excludes returns");
+    const first = requests[0].steps[0] as Extract<Step, { type: "user_input" }>;
+    expect(first.content[0].text).not.toContain("The open file");
+  });
+
+  it("gives run_sql's query with the tool event", async () => {
+    const { deps: d } = deps((_, n) => (n === 1 ? calling(callStep("c1", "run_sql", { sql: "SELECT id FROM main.sales.orders" })) : answering("ok")));
+    const { config: c, writer } = config();
+    await analystNode(d)(state(), c);
+    expect(writer.mock.calls.map(([e]) => e)).toContainEqual({ type: "tool", use: { agent: "analyst", tool: "run_sql", sql: "SELECT id FROM main.sales.orders" } });
+  });
+
   it("uses the tools, then gives the model's text as the summary", async () => {
     const { deps: d, requests } = deps((_, n) => (n === 1 ? calling(callStep("c1", "describe_table", { name: "orders" })) : answering("main.sales.orders(id int64), 7 rows")));
     const { config: c, writer } = config();

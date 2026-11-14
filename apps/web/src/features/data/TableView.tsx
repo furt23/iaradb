@@ -27,6 +27,7 @@ import { WranglerView } from "@/features/wrangler";
 
 import { HistoryTab } from "./HistoryTab";
 import { ColumnsTable } from "./ColumnsTable";
+import { LineageTab } from "./LineageTab";
 import { useData, type Load } from "./DataProvider";
 import { sampleQuery, sqlHref } from "./links";
 import { LoadFailure } from "./LoadFailure";
@@ -54,7 +55,7 @@ function Loaded<T>({ load, onRetry, children }: { load: Load<T> | undefined; onR
   return <>{children(load.data)}</>;
 }
 
-type Section = "columns" | "sample" | "history" | "wrangle";
+type Section = "columns" | "sample" | "history" | "wrangle" | "lineage";
 /** the section each table showed last (tabs remount as they are switched) */
 const lastSection = new Map<string, Section>();
 
@@ -136,6 +137,7 @@ export function TableView({ table }: { table: TableRef }) {
         <Tab value="sample" label={t("Sample data")} />
         <Tab value="wrangle" label={t("Wrangle")} />
         {isDelta && <Tab value="history" label={t("History")} />}
+        <Tab value="lineage" label={t("Lineage")} />
       </Tabs>
 
       <Box ref={body} sx={{ flex: 1, minHeight: 0, overflow: "auto" }}>
@@ -147,6 +149,8 @@ export function TableView({ table }: { table: TableRef }) {
           <HistoryTab name={name} version={ready?.version} />
         ) : section === "wrangle" ? (
           <WranglerView kernelKey="workspace" source={{ table: name }} label={name} />
+        ) : section === "lineage" ? (
+          <LineageTab name={name} />
         ) : (
           <Loaded load={data.preview(name)} onRetry={() => load(name, true)}>
             {(output) => <OutputView output={output} kernelKey="workspace" tableHeight={sampleHeight} />}

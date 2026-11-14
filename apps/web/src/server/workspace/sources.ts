@@ -8,6 +8,8 @@ import { kernelConfig } from "@/lib/catalogConfig";
 import { defaultCatalogOf, normalizeCatalogName } from "@/lib/catalogToml";
 
 import { config } from "../config";
+import { publishedTables, tableUrl } from "../system/store";
+import { TABLES } from "../system/tables";
 import { writeAtomic } from "./atomic";
 import { catalogRegion, defaultWorkspaceName, readCatalogText, writeCatalogText } from "./catalogStore";
 import { resolveWorkspacePath } from "./files";
@@ -44,11 +46,13 @@ export type KernelTarget = "local" | "cluster";
  * machine's proxy, and the bucket's endpoint is not for their code to read.
  */
 export async function kernelConfigText(target: KernelTarget): Promise<string> {
+  const published = new Set(await publishedTables());
   return kernelConfig(await readConfigText(), {
     name: defaultWorkspaceName(),
     bucket: config.bucket,
     endpoint: target === "cluster" ? null : config.storageEndpoint,
     region: catalogRegion(),
+    system: TABLES.filter((t) => published.has(t.name)).map((t) => ({ name: t.name, path: tableUrl(t.name) })),
   });
 }
 

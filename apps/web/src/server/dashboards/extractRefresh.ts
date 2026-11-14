@@ -24,12 +24,12 @@ import type { RunDeps } from "./run";
  * is down) is logged and taken as none, so every dataset runs live and viewers
  * still get their data.
  */
-export async function servedExtracts(id: string): Promise<NonNullable<RunDeps["extracts"]>> {
+export async function servedExtracts(id: string, by: string | null = null): Promise<NonNullable<RunDeps["extracts"]>> {
   const manifest = await readManifest(id).catch((e: Error) => {
     console.error(`dashboard ${id}: extracts manifest not read, its datasets run live: ${e.message}`);
     return null;
   });
-  return { manifest, serve: (method, params) => kernels.serving(method, params), url: (dataset, version) => extractUrl(id, dataset, version) };
+  return { manifest, serve: (method, params) => kernels.serving(method, params, by), url: (dataset, version) => extractUrl(id, dataset, version) };
 }
 
 /**
@@ -56,7 +56,7 @@ export async function refreshExtracts(
         max_bytes: extractMaxBytes(),
         source: deps.source,
       });
-      built.set(d.name, { version, rows: out.rows, bytes: out.bytes, columns: out.columns, sources: out.sources, hash: datasetHash(d), refreshed_at: Date.now() });
+      built.set(d.name, { version, rows: out.rows, bytes: out.bytes, columns: out.columns, sources: out.sources, ...(out.versions && { versions: out.versions }), hash: datasetHash(d), refreshed_at: Date.now() });
       deps.log(`${d.name}: ${formatCount(out.rows)} rows, ${formatBytes(out.bytes)}`);
     } catch (e) {
       failed++;
