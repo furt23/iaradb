@@ -32,6 +32,10 @@ export interface QueryProfile {
   spilled_bytes?: number;
   /** object-store requests the run made (absent when the engine does not report them) */
   requests?: StorageRequests;
+  /** the tables the run read, by location, with the Delta version read (absent from older kernels) */
+  reads?: { location: string; version: number | null }[];
+  /** the result depends on when it ran or on chance (`now()`, `current_date`, `random()`), not only on what it read */
+  volatile?: boolean;
   /** in execution order */
   pipelines: PipelineStats[];
   /** pipelines not started yet, in the order they will run (absent from older kernels) */

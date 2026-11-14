@@ -75,15 +75,23 @@ export interface KernelMethods {
   /**
    * A dashboard dataset's result written as one zstd Parquet file at `path` (a
    * folder path or `s3://` URL), read under `allow`. `sources`: the catalog tables
-   * it read (`catalog.schema.table`). Over `max_bytes` it fails and leaves no file.
+   * it read (`catalog.schema.table`). `versions`: the Delta version read of each base
+   * table, by name (null when a table read has no name or no version, or when the
+   * result also depends on the time it ran, as with `current_date`). Over
+   * `max_bytes` it fails and leaves no file.
    */
   "extract.write": [
     { query: string; path: string; allow: string[]; max_bytes: number; source?: string },
-    { rows: number; bytes: number; columns: ColumnInfo[]; sources: string[] },
+    { rows: number; bytes: number; columns: ColumnInfo[]; sources: string[]; versions: Record<string, number> | null },
   ];
   /** runs the query with profiling; the rows are counted, not returned */
   "sql.analyze": [{ query: string } & QueryParams, QueryAnalysis];
-  "history.list": [{ limit?: number }, HistoryEntry[]];
+  /**
+   * A file of JSON lines the Studio keeps (`source`, on the kernel's machine) written as one zstd
+   * Parquet file at `dest` (a path or `s3://` URL) with exactly `columns`: fields a line lacks are
+   * null, others are dropped. A `timestamp` column holds unix milliseconds in the lines.
+   */
+  "system.publish": [{ source: string; dest: string; columns: [string, SystemColumnType][] }, { rows: number; bytes: number }];
   /** a Data Wrangler recipe over a table or result: first rows, counts over all rows, its code */
   "wrangle.preview": [{ source: WrangleSource; steps: WrangleStep[] }, WranglePreview];
   "wrangle.profile": [{ source: WrangleSource; steps: WrangleStep[]; column: string }, WrangleProfile];
@@ -137,12 +145,17 @@ export interface CatalogChange {
   kind?: "table" | "schema" | "catalog" | "refresh";
 }
 
+/** The type of a column of a `system` table. */
+export type SystemColumnType = "string" | "int" | "float" | "bool" | "timestamp";
+
 export interface KernelEvents {
   "kernel.ready": KernelInfo;
   "cell.state": CellStateEvent;
   "cell.stream": CellStreamEvent;
   progress: ProgressEvent;
   "catalog.changed": CatalogChange;
+  /** a run that just ended, for the Studio's query log: sent before the request's result */
+  history: HistoryEntry;
   /** the widgets (definitions or values) differ from what the client last heard */
   "widgets.changed": WidgetsState;
 }

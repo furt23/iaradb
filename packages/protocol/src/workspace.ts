@@ -62,9 +62,27 @@ export interface KernelInfo {
   catalogs?: string[];
 }
 
+/** A table a run read: `table` is its `catalog.schema.table` name when the catalog has one at `location`. */
+export interface TableRead {
+  table: string | null;
+  /** the table's folder, file pattern or URL, as the engine was given it */
+  location: string;
+  /** the Delta version read or written (null: not a Delta table) */
+  version: number | null;
+}
+
+/** A table a run wrote. */
+export interface TableWrite extends TableRead {
+  /** the Delta operation (`WRITE`, `MERGE`, ...) or the statement */
+  operation: string;
+}
+
+/** One run the kernel reports to the Studio (the `history` event): a SQL statement, or a Python cell that read or wrote tables. */
 export interface HistoryEntry {
   /** unix seconds */
   ts: number;
+  kind: "sql" | "python";
+  /** the statement, or the Python cell's code */
   query: string;
   source: string;
   elapsed_ms: number;
@@ -72,4 +90,9 @@ export interface HistoryEntry {
   error: string | null;
   /** the parameter values of a parameterized query */
   params?: Record<string, unknown>;
+  memory_peak: number | null;
+  spilled_bytes: number | null;
+  requests: { list: number; head: number; get: number; bytes: number } | null;
+  reads: TableRead[];
+  writes: TableWrite[];
 }
