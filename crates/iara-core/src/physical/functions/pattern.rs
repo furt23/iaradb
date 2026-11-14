@@ -17,6 +17,7 @@ use arrow::array::*;
 use parking_lot::Mutex;
 use regex::{Regex, RegexBuilder};
 
+use super::linear::{self, Linear};
 use crate::error::{Result, WhError};
 use crate::physical::expr::ColumnarValue;
 
@@ -97,50 +98,32 @@ struct Tail {
     end: bool,
 }
 
-static TAILS: LazyLock<Mutex<HashMap<Key, Option<Arc<Tail>>>>> = LazyLock::new(Default::default);
+/// How a pattern's capture search is shortened: its split tail, and the
+/// head (the whole pattern, with no tail) as a linear program
+/// ([`Linear`]) when it is one.
+#[derive(Clone, Default)]
+struct Plan {
+    tail: Option<Arc<Tail>>,
+    fast: Option<Arc<Linear>>,
+}
 
-fn tail_for(pat: &str, o: &Opts, full: &Regex) -> Option<Arc<Tail>> {
+static PLANS: LazyLock<Mutex<HashMap<Key, Plan>>> = LazyLock::new(Default::default);
+
+fn plan_for(pat: &str, o: &Opts, full: &Regex) -> Plan {
     let key = (pat.to_string(), o.key.clone());
-    if let Some(t) = TAILS.lock().get(&key) {
-        return t.clone();
+    if let Some(p) = PLANS.lock().get(&key) {
+        return p.clone();
     }
-    let t = split_tail(pat, o, full).map(Arc::new);
-    let mut cache = TAILS.lock();
+    let plan = make_plan(pat, o, full).unwrap_or_default();
+    let mut cache = PLANS.lock();
     if cache.len() > 512 {
         cache.clear();
     }
-    cache.insert(key, t.clone());
-    t
+    cache.insert(key, plan.clone());
+    plan
 }
 
-thread_local! {
-    /// This thread's own clones of the cached regexes and split tails: a
-    /// clone has its own search caches (lazy DFA states, backtracker), which
-    /// stay warm from batch to batch and are never taken in turns.
-    static LOCAL: std::cell::RefCell<HashMap<Key, (Arc<Regex>, Option<Arc<Tail>>)>> = std::cell::RefCell::new(HashMap::new());
-}
-
-/// The regex of `pat` and its split tail, as this thread's clones.
-fn local_regex(pat: &str, o: &Opts) -> Result<(Arc<Regex>, Option<Arc<Tail>>)> {
-    let key = (pat.to_string(), o.key.clone());
-    if let Some(v) = LOCAL.with(|m| m.borrow().get(&key).cloned()) {
-        return Ok(v);
-    }
-    let shared = regex_for(pat, o)?;
-    let re = Arc::new(Regex::clone(&shared));
-    let tail = tail_for(pat, o, &shared).map(|t| Arc::new(Tail::clone(&t)));
-    LOCAL.with(|m| {
-        let mut m = m.borrow_mut();
-        if m.len() > 512 {
-            m.clear();
-        }
-        m.insert(key, (re.clone(), tail.clone()));
-    });
-    Ok((re, tail))
-}
-
-fn split_tail(pat: &str, o: &Opts, full: &Regex) -> Option<Tail> {
-    use regex_syntax::hir::{Dot, Hir, HirKind, Look};
+fn make_plan(pat: &str, o: &Opts, full: &Regex) -> Option<Plan> {
     if o.literal || o.key.contains('m') {
         return None;
     }
@@ -150,6 +133,43 @@ fn split_tail(pat: &str, o: &Opts, full: &Regex) -> Option<Tail> {
         .build()
         .parse(pat)
         .ok()?;
+    let groups = full.captures_len();
+    Some(match split_tail(&hir, full) {
+        Some((tail, head)) => Plan { fast: Linear::compile(&head, groups).map(Arc::new), tail: Some(Arc::new(tail)) },
+        None => Plan { tail: None, fast: Linear::compile(&hir, groups).map(Arc::new) },
+    })
+}
+
+thread_local! {
+    /// This thread's own clones of the cached regexes and split tails: a
+    /// clone has its own search caches (lazy DFA states, backtracker), which
+    /// stay warm from batch to batch and are never taken in turns.
+    static LOCAL: std::cell::RefCell<HashMap<Key, (Arc<Regex>, Plan)>> = std::cell::RefCell::new(HashMap::new());
+}
+
+/// The regex of `pat` and its plan, the regexes as this thread's clones.
+fn local_regex(pat: &str, o: &Opts) -> Result<(Arc<Regex>, Plan)> {
+    let key = (pat.to_string(), o.key.clone());
+    if let Some(v) = LOCAL.with(|m| m.borrow().get(&key).cloned()) {
+        return Ok(v);
+    }
+    let shared = regex_for(pat, o)?;
+    let re = Arc::new(Regex::clone(&shared));
+    let mut plan = plan_for(pat, o, &shared);
+    plan.tail = plan.tail.map(|t| Arc::new(Tail::clone(&t)));
+    LOCAL.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.len() > 512 {
+            m.clear();
+        }
+        m.insert(key, (re.clone(), plan.clone()));
+    });
+    Ok((re, plan))
+}
+
+/// The tail of a parsed pattern and the head before it.
+fn split_tail(hir: &regex_syntax::hir::Hir, full: &Regex) -> Option<(Tail, regex_syntax::hir::Hir)> {
+    use regex_syntax::hir::{Dot, Hir, HirKind, Look};
     let HirKind::Concat(parts) = hir.kind() else { return None };
     let end = matches!(parts.last()?.kind(), HirKind::Look(Look::End));
     let k = parts.len() - end as usize;
@@ -162,43 +182,91 @@ fn split_tail(pat: &str, o: &Opts, full: &Regex) -> Option<Tail> {
         d if *d == Hir::dot(Dot::AnyCharExceptLF) => false,
         _ => return None,
     };
-    let head = Regex::new(&Hir::concat(parts[..k - 1].to_vec()).to_string()).ok()?;
-    (head.captures_len() == full.captures_len()).then_some(Tail { head, dot_nl, end })
+    let head_hir = Hir::concat(parts[..k - 1].to_vec());
+    let head = Regex::new(&head_hir.to_string()).ok()?;
+    (head.captures_len() == full.captures_len()).then_some((Tail { head, dot_nl, end }, head_hir))
+}
+
+/// Which search found the last match (its groups are read from it).
+enum Found {
+    Fast,
+    Head,
+    Full,
 }
 
 /// A regex's capture search: the split head (see [`Tail`]) when it
-/// answers, the whole pattern otherwise.
+/// answers, the whole pattern otherwise; the head (or the whole pattern
+/// with no tail) by its linear program when it has one.
 struct Captures {
     full: Arc<Regex>,
     full_locs: regex::CaptureLocations,
     tail: Option<(Arc<Tail>, regex::CaptureLocations)>,
+    fast: Option<Arc<Linear>>,
+    run: linear::Run,
+    found: Found,
 }
 
 impl Captures {
     fn new(pat: &str, o: &Opts) -> Result<Self> {
-        let (full, tail) = local_regex(pat, o)?;
-        let tail = tail.map(|t| {
+        let (full, plan) = local_regex(pat, o)?;
+        let tail = plan.tail.map(|t| {
             let locs = t.head.capture_locations();
             (t, locs)
         });
-        Ok(Self { full_locs: full.capture_locations(), full, tail })
+        Ok(Self { full_locs: full.capture_locations(), full, tail, fast: plan.fast, run: Default::default(), found: Found::Full })
     }
 
-    /// The first match's span and its groups.
-    fn find(&mut self, text: &str) -> Option<((usize, usize), &regex::CaptureLocations)> {
-        if let Some((t, locs)) = &mut self.tail {
-            // no head match: no match of the whole either
-            let m = t.head.captures_read(locs, text)?;
-            let stop = if t.dot_nl { None } else { memchr::memchr(b'\n', &text.as_bytes()[m.end()..]) };
-            match stop {
-                None => return Some(((m.start(), text.len()), locs)),
-                Some(i) if !t.end => return Some(((m.start(), m.end() + i), locs)),
-                // `.*$` cannot cross the line break after this head match
-                Some(_) => {}
+    /// Whether a search costs little (a result is not worth remembering).
+    fn cheap(&self) -> bool {
+        self.fast.is_some()
+    }
+
+    /// The match of the head, or of the whole pattern when it has no tail.
+    fn first(&mut self, text: &str) -> Option<(usize, usize)> {
+        if let Some(fast) = &self.fast {
+            // a search that backtracks too much is left to the regex
+            if let Ok(end) = fast.find(text, &mut self.run) {
+                self.found = Found::Fast;
+                return Some((0, end?));
             }
         }
+        match &mut self.tail {
+            Some((t, locs)) => {
+                let m = t.head.captures_read(locs, text)?;
+                self.found = Found::Head;
+                Some((m.start(), m.end()))
+            }
+            None => self.whole(text),
+        }
+    }
+
+    fn whole(&mut self, text: &str) -> Option<(usize, usize)> {
         let m = self.full.captures_read(&mut self.full_locs, text)?;
-        Some(((m.start(), m.end()), &self.full_locs))
+        self.found = Found::Full;
+        Some((m.start(), m.end()))
+    }
+
+    /// The first match's span; its groups are read with [`Captures::group`].
+    fn find(&mut self, text: &str) -> Option<(usize, usize)> {
+        // no head match: no match of the whole either
+        let (start, end) = self.first(text)?;
+        let Some((t, _)) = &self.tail else { return Some((start, end)) };
+        let stop = if t.dot_nl { None } else { memchr::memchr(b'\n', &text.as_bytes()[end..]) };
+        match stop {
+            None => Some((start, text.len())),
+            Some(i) if !t.end => Some((start, end + i)),
+            // `.*$` cannot cross the line break after this head match
+            Some(_) => self.whole(text),
+        }
+    }
+
+    /// A group's span in the last match found.
+    fn group(&self, g: usize) -> Option<(usize, usize)> {
+        match (&self.found, &self.tail) {
+            (Found::Fast, _) => self.run.group(g),
+            (Found::Head, Some((_, locs))) => locs.get(g),
+            _ => self.full_locs.get(g),
+        }
     }
 }
 
@@ -307,8 +375,9 @@ fn memo_map<V: Copy>(a: &ArrayRef, mut f: impl FnMut(&str) -> V, mut each: impl 
 }
 
 /// A Utf8 array of `f` over the subject's strings (`f` writes the value
-/// and returns false for NULL), once per distinct string (see [`Memo`]).
-fn map_texts(a: &ArrayRef, mut f: impl FnMut(&str, &mut String) -> bool) -> ArrayRef {
+/// and returns false for NULL), once per distinct string (see [`Memo`])
+/// when `remember`.
+fn map_texts(a: &ArrayRef, remember: bool, mut f: impl FnMut(&str, &mut String) -> bool) -> ArrayRef {
     let n = a.len();
     let mut offsets: Vec<i32> = Vec::with_capacity(n + 1);
     offsets.push(0);
@@ -316,6 +385,7 @@ fn map_texts(a: &ArrayRef, mut f: impl FnMut(&str, &mut String) -> bool) -> Arra
     let mut valid = BooleanBufferBuilder::new(n);
     let mut out = String::new();
     let mut memo = Memo::new();
+    memo.on = remember;
     for t in keyed_texts(a) {
         let ok = match t {
             None => false,
@@ -375,11 +445,11 @@ pub fn extract(args: &[ColumnarValue], m: usize) -> Result<ArrayRef> {
     let a = subject(args, m)?;
     // capture slots reused across rows (no allocation per row)
     let mut caps = Captures::new(&pat, &o)?;
-    Ok(map_texts(&a, |text, out| {
+    Ok(map_texts(&a, group == 0 || !caps.cheap(), |text, out| {
         let hit = if group == 0 {
             re.find(text).map(|x| x.as_str())
         } else {
-            caps.find(text).and_then(|(_, locs)| locs.get(group)).map(|(x, y)| &text[x..y])
+            caps.find(text).and_then(|_| caps.group(group)).map(|(x, y)| &text[x..y])
         };
         match hit {
             Some(h) => out.push_str(h),
@@ -399,8 +469,8 @@ pub fn replace(args: &[ColumnarValue], m: usize) -> Result<ArrayRef> {
         // replacement written straight into the output
         let pieces = pieces(&rep, &o);
         let mut caps = Captures::new(&pat, &o)?;
-        return Ok(map_texts(&a, |text, out| {
-            let Some(((start, end), locs)) = caps.find(text) else {
+        return Ok(map_texts(&a, !caps.cheap(), |text, out| {
+            let Some((start, end)) = caps.find(text) else {
                 out.push_str(text);
                 return true;
             };
@@ -411,7 +481,7 @@ pub fn replace(args: &[ColumnarValue], m: usize) -> Result<ArrayRef> {
                     // the whole match, tail included
                     Piece::Group(0) => out.push_str(&text[start..end]),
                     Piece::Group(g) => {
-                        if let Some((x, y)) = locs.get(*g) {
+                        if let Some((x, y)) = caps.group(*g) {
                             out.push_str(&text[x..y]);
                         }
                     }
@@ -422,7 +492,7 @@ pub fn replace(args: &[ColumnarValue], m: usize) -> Result<ArrayRef> {
         }));
     }
     let rep = replacement(&rep, &o);
-    Ok(map_texts(&a, |text, out| {
+    Ok(map_texts(&a, true, |text, out| {
         let r = if o.global { re.replace_all(text, rep.as_str()) } else { re.replace(text, rep.as_str()) };
         out.push_str(&r);
         true
@@ -521,7 +591,7 @@ mod tests {
         for (pat, flags) in cases {
             let o = Opts::parse(flags).unwrap();
             let full = regex_for(pat, &o).unwrap();
-            assert!(tail_for(pat, &o, &full).is_some(), "{pat} splits");
+            assert!(plan_for(pat, &o, &full).tail.is_some(), "{pat} splits");
             let mut caps = Captures::new(pat, &o).unwrap();
             let mut locs = full.capture_locations();
             for t in texts {
@@ -529,14 +599,14 @@ mod tests {
                     let groups: Vec<_> = (0..locs.len()).map(|g| locs.get(g)).skip(1).collect();
                     ((m.start(), m.end()), groups)
                 });
-                let got = caps.find(t).map(|(span, l)| (span, (0..l.len()).map(|g| l.get(g)).skip(1).collect::<Vec<_>>()));
+                let got = caps.find(t).map(|span| (span, (1..locs.len()).map(|g| caps.group(g)).collect::<Vec<_>>()));
                 assert_eq!(got, want, "{pat:?} on {t:?}");
             }
         }
         // a lazy or bounded tail is not split
         for pat in [r"a.*?$", r"a.{0,3}$", r"a.*b", r"(/.*)$"] {
             let o = Opts::parse("").unwrap();
-            assert!(tail_for(pat, &o, &regex_for(pat, &o).unwrap()).is_none(), "{pat}");
+            assert!(plan_for(pat, &o, &regex_for(pat, &o).unwrap()).tail.is_none(), "{pat}");
         }
     }
 }

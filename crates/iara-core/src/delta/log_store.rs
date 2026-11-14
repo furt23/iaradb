@@ -61,6 +61,7 @@ enum Backend {
 #[derive(Debug, Clone)]
 pub struct LogStore {
     backend: Backend,
+    given: String,
 }
 
 fn not_found(what: &str) -> WhError {
@@ -82,15 +83,12 @@ impl LogStore {
             Location::Local(table) => Backend::Local { table },
             Location::Object(table) => Backend::Object { table, options: options.clone() },
         };
-        Ok(LogStore { backend })
+        Ok(LogStore { backend, given: table.to_string() })
     }
 
     /// The table root, as given.
     pub fn table(&self) -> String {
-        match &self.backend {
-            Backend::Local { table } => table.display().to_string(),
-            Backend::Object { table, .. } => table.to_string(),
-        }
+        self.given.clone()
     }
 
     fn local_dir(table: &std::path::Path) -> PathBuf {

@@ -5,6 +5,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use iara_core::exec::query::{self, PipelineStats, QueryStats};
+use iara_core::exec::write_log;
 use iara_core::physical::analyze;
 use iara_core::physical::planner::PlanNode;
 
@@ -51,6 +52,15 @@ pub fn stats_dict<'py>(py: Python<'py>, q: &QueryStats) -> PyResult<Bound<'py, P
         pending.append(item)?;
     }
     d.set_item("pending", pending)?;
+    let reads = PyList::empty(py);
+    for r in &q.reads {
+        let item = PyDict::new(py);
+        item.set_item("location", &r.location)?;
+        item.set_item("version", r.version)?;
+        reads.append(item)?;
+    }
+    d.set_item("reads", reads)?;
+    d.set_item("volatile", q.volatile)?;
     Ok(d)
 }
 
@@ -110,11 +120,27 @@ pub fn take_recorded_plans(py: Python<'_>) -> PyResult<Bound<'_, PyList>> {
     Ok(out)
 }
 
+/// The table writes noted since the last call, oldest first (only while plans are
+/// recorded): `{location, version, operation}`, `version` None for plain files.
+#[pyfunction]
+pub fn take_writes(py: Python<'_>) -> PyResult<Bound<'_, PyList>> {
+    let out = PyList::empty(py);
+    for w in write_log::take_writes() {
+        let d = PyDict::new(py);
+        d.set_item("location", &w.location)?;
+        d.set_item("version", w.version)?;
+        d.set_item("operation", &w.operation)?;
+        out.append(d)?;
+    }
+    Ok(out)
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(interrupt, m)?)?;
     m.add_function(wrap_pyfunction!(cancel_query, m)?)?;
     m.add_function(wrap_pyfunction!(running_queries, m)?)?;
     m.add_function(wrap_pyfunction!(record_plans, m)?)?;
     m.add_function(wrap_pyfunction!(take_recorded_plans, m)?)?;
+    m.add_function(wrap_pyfunction!(take_writes, m)?)?;
     Ok(())
 }

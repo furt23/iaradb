@@ -209,7 +209,8 @@ fn semi_joins_drop_the_rows_that_do_not_match() {
         "select count(*), sum(d.dk) from dim d where d.dflag = 1 and exists (select 1 from {p} p where p.k64 = d.dk and p.v > d.dx)",
         Some("k64"),
     );
-    check(&ctx, "select count(*), sum(d.dk) from dim d where d.dflag = 1 and d.dk in (select k64 from {p} where s is not null)", None);
+    // the scan reads only the key and the filter's column: `s` is decoded for the rows whose key matches
+    check(&ctx, "select count(*), sum(d.dk) from dim d where d.dflag = 1 and d.dk in (select k64 from {p} where s is not null)", Some("k64"));
 }
 
 #[test]

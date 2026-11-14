@@ -35,6 +35,12 @@ pub trait Source: Send + Sync {
     fn resident(&self) -> bool {
         false
     }
+    /// Whether every value of output column `col` is in one morsel only
+    /// (row groups whose ranges of it do not overlap): rows with equal
+    /// values then never meet across morsels.
+    fn morsel_confined(&self, _col: usize) -> bool {
+        false
+    }
     /// The plan node it belongs to, in a measured run.
     fn node(&self) -> Option<usize> {
         None
@@ -49,6 +55,11 @@ pub trait Operator: Send + Sync {
         Ok(vec![])
     }
     fn describe(&self) -> String;
+    /// The input column that output column `out` copies, row for row (rows
+    /// may be dropped); None when it is computed, or not known to be one.
+    fn source_column(&self, _out: usize) -> Option<usize> {
+        None
+    }
     /// The plan node it belongs to, in a measured run.
     fn node(&self) -> Option<usize> {
         None
@@ -105,6 +116,9 @@ impl Source for Pipeline {
     }
     fn describe(&self) -> String {
         Pipeline::describe(self)
+    }
+    fn morsel_confined(&self, col: usize) -> bool {
+        self.ops.iter().rev().try_fold(col, |c, op| op.source_column(c)).is_some_and(|c| self.source.morsel_confined(c))
     }
 }
 

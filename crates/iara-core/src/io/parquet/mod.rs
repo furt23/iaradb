@@ -248,6 +248,10 @@ impl TableProvider for ParquetTable {
     fn kind(&self) -> &'static str {
         "parquet"
     }
+    fn origin(&self) -> Option<crate::exec::query::TableRead> {
+        // an explicit file list (`from_files`, the only `conform` table) is a Delta table's inner table
+        (!self.conform).then(|| crate::exec::query::TableRead { location: self.pattern.clone(), version: None })
+    }
     fn location(&self) -> Option<crate::io::dataset::TableLocation> {
         crate::io::dataset::is_folder(&self.pattern).then(|| crate::io::dataset::TableLocation {
             path: self.pattern.clone(),

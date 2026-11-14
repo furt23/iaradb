@@ -50,17 +50,48 @@ const RECENT: f64 = 0.2;
 const MARGIN: f64 = 0.85;
 
 pub struct LateFilter {
-    /// the scan's filters, one per conjunct, cheap ones first: the columns
-    /// (of the table, = of the files) each reads, ascending, and its
-    /// predicate over those columns. A row's later columns are decoded only
-    /// if it passed the earlier conjuncts (`p_size = 15 AND p_type LIKE
-    /// '%BRASS'` decodes `p_type` for the rows of size 15).
-    filters: Vec<(Vec<usize>, Arc<PhysExpr>)>,
+    /// the scan's filters in stages (see [`Stage`]). A row's later columns
+    /// are decoded only if it passed the earlier stages (`p_size = 15 AND
+    /// p_type LIKE '%BRASS'` decodes `p_type` for the rows of size 15).
+    filters: Vec<Stage>,
     /// a top k's bound on a column of the table
     bound: Option<(usize, Arc<TopKBound>)>,
     /// hash joins' build keys, on columns of the table
     joins: Vec<(usize, Arc<JoinKeyFilter>)>,
     timing: Timing,
+}
+
+/// The conjuncts of the scan's filters over one set of columns.
+struct Stage {
+    /// the columns (of the table, = of the files) it reads, ascending
+    columns: Vec<usize>,
+    /// over those columns
+    predicate: Arc<PhysExpr>,
+    /// the conjuncts on fixed-width columns: they run first
+    fixed: bool,
+    /// size of its columns in the files
+    bytes: u64,
+    /// rows it tested and rows it kept, so far
+    seen: Arc<AtomicU64>,
+    kept: Arc<AtomicU64>,
+}
+
+impl Stage {
+    /// Stages run by ascending rank: what a stage costs (the bytes of its
+    /// columns) over the share of rows it drops, the order that decodes the
+    /// least when the stages drop rows independently. `Title LIKE
+    /// '%Google%' AND URL NOT LIKE '%.google.%' AND SearchPhrase <> ''`
+    /// starts with the small search phrases, then the titles (few have
+    /// the word) and reads the URLs of what is left.
+    fn rank(&self) -> f64 {
+        if self.fixed {
+            return 0.0;
+        }
+        let seen = self.seen.load(Ordering::Relaxed);
+        // before any row: as if it kept half
+        let kept = if seen == 0 { 0.5 } else { self.kept.load(Ordering::Relaxed) as f64 / seen as f64 };
+        (self.bytes.max(1) as f64) / (1.0 - kept).max(0.01)
+    }
 }
 
 /// Which mode the next row groups take (0 = decode everything, 1 = filter
@@ -118,8 +149,15 @@ impl Timing {
         }
         let ns = took.as_nanos() as f64 / bytes as f64;
         let mut s = self.state.lock();
+        // the slower mode runs only now and then: its last row group says
+        // more than its average, which is from before the data (or a top
+        // k's bound) changed
+        let rechecked = s.best == Some(1 - mode);
         let avg = &mut s.cost[mode];
-        *avg = Some(avg.map_or(ns, |a| a * (1.0 - RECENT) + ns * RECENT));
+        *avg = Some(match *avg {
+            Some(a) if !rechecked => a * (1.0 - RECENT) + ns * RECENT,
+            _ => ns,
+        });
     }
 }
 
@@ -139,17 +177,22 @@ fn table_columns(table_schema: &SchemaRef, e: &Expr) -> Option<Vec<usize>> {
 
 impl LateFilter {
     /// For a scan of `projection` with `filters`, a top k's `bound` and hash
-    /// joins' `joins` keys: None when they read every projected column
-    /// (nothing to skip) or the filters cannot be compiled. The join keys it
-    /// uses are marked as attached.
+    /// joins' `joins` keys: None when the filters cannot be compiled, or
+    /// when the tests read every projected column and there is little to
+    /// skip: one test alone, or filters only (their columns are decoded
+    /// twice for the rows they keep, often most). A bound or join keys next
+    /// to another test drop most rows before its columns are decoded. The
+    /// join keys it uses are marked as attached. `bytes` is the size of a table column
+    /// in the files (any unit).
     pub fn new(
         table_schema: &SchemaRef,
         projection: &[usize],
         filters: &[Expr],
         bound: Option<&ScanBound>,
         joins: &[ScanJoinKeys],
+        bytes: &dyn Fn(usize) -> u64,
     ) -> Option<Self> {
-        let compile = |predicate: Expr| -> Option<(Vec<usize>, Arc<PhysExpr>)> {
+        let compile = |predicate: Expr, fixed: bool| -> Option<Stage> {
             // scan filters name the table's columns; drop their qualifiers
             let predicate = predicate
                 .transform_up(&mut |e| match e {
@@ -159,11 +202,13 @@ impl LateFilter {
                 .ok()?;
             let columns = table_columns(table_schema, &predicate)?;
             let schema = PlanSchema::from_arrow(None, &table_schema.project(&columns).ok()?);
-            Some((columns, Arc::new(create_physical_expr(&predicate, &schema).ok()?)))
+            let predicate = Arc::new(create_physical_expr(&predicate, &schema).ok()?);
+            let bytes = columns.iter().map(|&c| bytes(c)).sum();
+            Some(Stage { columns, predicate, fixed, bytes, seen: Default::default(), kept: Default::default() })
         };
-        // the conjuncts on fixed-width columns together, first (a column is
-        // decoded once per stage), then those on other columns by column set;
-        // one that does not compile is left to the filter above the scan
+        // the conjuncts on fixed-width columns together (a column is decoded
+        // once per stage), then those on other columns by column set; one
+        // that does not compile is left to the filter above the scan
         let conjuncts = conjunction(filters.iter().cloned()).map(|p| split_conjunction(&p)).unwrap_or_default();
         let fixed = |e: &Expr| {
             table_columns(table_schema, e).is_some_and(|cols| cols.iter().all(|&c| table_schema.field(c).data_type().primitive_width().is_some()))
@@ -180,16 +225,22 @@ impl LateFilter {
                 None => stages.push((cols, vec![c])),
             }
         }
-        let filters: Vec<(Vec<usize>, Arc<PhysExpr>)> =
-            stages.into_iter().filter_map(|(_, es)| conjunction(es.into_iter())).filter_map(|p| compile(p)).collect();
+        let filters: Vec<Stage> = stages
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, (_, es))| Some((i, conjunction(es.into_iter())?)))
+            .filter_map(|(i, p)| compile(p, i == 0))
+            .collect();
         let bound = bound.map(|b| (b.column, b.bound.clone()));
         let joins: Vec<_> = joins.iter().map(|j| (j.column, j.keys.clone())).collect();
         let read = |p: &usize| {
-            filters.iter().any(|(c, _)| c.contains(p))
+            filters.iter().any(|s| s.columns.contains(p))
                 || bound.as_ref().is_some_and(|(c, _)| c == p)
                 || joins.iter().any(|(c, _)| c == p)
         };
-        if filters.is_empty() && bound.is_none() && joins.is_empty() || projection.iter().all(read) {
+        let tests = filters.len() + bound.is_some() as usize + joins.len();
+        let skips = tests > 1 && (bound.is_some() || !joins.is_empty());
+        if tests == 0 || !skips && projection.iter().all(read) {
             return None;
         }
         joins.iter().for_each(|(_, keys)| keys.attach());
@@ -237,15 +288,20 @@ impl LateFilter {
                 Ok(keys.mask(batch.column(0)).unwrap_or_else(|| keep_all(&batch)))
             })));
         }
-        for (columns, predicate) in &self.filters {
-            let mask = ProjectionMask::roots(schema, columns.iter().copied());
-            let predicate = predicate.clone();
+        let mut stages: Vec<&Stage> = self.filters.iter().collect();
+        stages.sort_by(|a, b| a.rank().total_cmp(&b.rank()));
+        for stage in stages {
+            let mask = ProjectionMask::roots(schema, stage.columns.iter().copied());
+            let (predicate, seen, kept) = (stage.predicate.clone(), stage.seen.clone(), stage.kept.clone());
             predicates.push(Box::new(ArrowPredicateFn::new(mask, move |batch: RecordBatch| -> Result<BooleanArray, ArrowError> {
                 // an error here is left to the filter above the scan
-                Ok(match predicate.evaluate_array(&batch) {
+                let keep = match predicate.evaluate_array(&batch) {
                     Ok(a) if a.data_type() == &arrow::datatypes::DataType::Boolean => null_as_false(a.as_boolean()),
                     _ => keep_all(&batch),
-                })
+                };
+                seen.fetch_add(keep.len() as u64, Ordering::Relaxed);
+                kept.fetch_add(keep.true_count() as u64, Ordering::Relaxed);
+                Ok(keep)
             })));
         }
         RowFilter::new(predicates)
@@ -271,6 +327,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn stages_run_by_size_and_rows_dropped() {
+        use crate::expr::{col, lit};
+        use crate::scalar::Scalar;
+        use arrow::datatypes::{DataType, Field, Schema};
+        let field = |n: &str, t: DataType| Field::new(n, t, false);
+        let schema: SchemaRef = Arc::new(Schema::new(vec![
+            field("title", DataType::Utf8View),
+            field("id", DataType::Int64),
+            field("phrase", DataType::Utf8View),
+            field("other", DataType::Int64),
+        ]));
+        let text = |s: &str| lit(Scalar::utf8(s));
+        let filters = [col("title").not_eq(text("x")), col("phrase").not_eq(text("")), col("id").gt(lit(Scalar::int64(3)))];
+        let sizes = [900, 8, 100, 8];
+        let late = LateFilter::new(&schema, &[0, 1, 2, 3], &filters, None, &[], &|c| sizes[c]).unwrap();
+        let order = || {
+            let mut stages: Vec<&Stage> = late.filters.iter().collect();
+            stages.sort_by(|a, b| a.rank().total_cmp(&b.rank()));
+            stages.iter().map(|s| s.columns.clone()).collect::<Vec<_>>()
+        };
+        // the fixed-width column, then the strings by size
+        assert_eq!(order(), vec![vec![1], vec![2], vec![0]]);
+        // the small string keeps every row, the large one 1 in 100: the large one pays first
+        for s in &late.filters {
+            s.seen.store(1000, Ordering::Relaxed);
+            s.kept.store(if s.columns == [0] { 10 } else { 1000 }, Ordering::Relaxed);
+        }
+        assert_eq!(order(), vec![vec![1], vec![0], vec![2]]);
+    }
+
+    #[test]
     fn explores_both_modes_then_keeps_the_faster() {
         let t = Timing::default();
         let first: Vec<usize> = (0..2 * EXPLORE).map(|_| t.choose()).collect();
@@ -287,5 +374,8 @@ mod tests {
         }
         let later: Vec<usize> = (0..40).map(|_| t.choose()).collect();
         assert_eq!(later.iter().filter(|&&m| m == 1).count(), 2, "{later:?}");
+        // a top k's bound tightens: one row group filtered early at its new cost wins it back
+        t.record(1, 1000, Duration::from_nanos(500));
+        assert_eq!(t.choose(), 1);
     }
 }

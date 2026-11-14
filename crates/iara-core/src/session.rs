@@ -64,6 +64,11 @@ impl DeferredTable {
         self.loaded.lock().is_some()
     }
 
+    /// What the table reads, if it is loaded.
+    fn loaded_origin(&self) -> Option<crate::exec::query::TableRead> {
+        self.loaded.lock().as_ref()?.origin()
+    }
+
     /// The kind of the table, if it is loaded.
     pub(crate) fn loaded_kind(&self) -> Option<&'static str> {
         self.loaded.lock().as_ref().map(|t| t.kind())
@@ -232,6 +237,24 @@ impl SessionContext {
     /// Forks share the policy, so they share the record.
     pub fn tables_read(&self) -> Vec<String> {
         self.policy.as_ref().map_or_else(Vec::new, |p| p.read.lock().iter().cloned().collect())
+    }
+
+    /// `(location, catalog.schema.table)` of every registered table that is loaded and lives in
+    /// storage. A deferred table that has not loaded yet is left out, never loaded here.
+    pub fn table_locations(&self) -> Vec<(String, String)> {
+        let catalog = self.state.catalog.read();
+        catalog
+            .tables
+            .iter()
+            .filter_map(|(name, slot)| {
+                let origin = match slot {
+                    Slot::Entry(TableEntry::Table(t)) => t.origin(),
+                    Slot::Entry(TableEntry::View(_)) => None,
+                    Slot::Deferred(d) => d.loaded_origin(),
+                };
+                origin.map(|o| (o.location, name.key()))
+            })
+            .collect()
     }
 
     /// Fail unless a table may be read (always when the context is not

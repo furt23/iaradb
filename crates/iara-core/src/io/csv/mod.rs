@@ -40,6 +40,8 @@ pub struct CsvTable {
     est_rows: usize,
     /// Whether the schema sample holds a quote byte (decides how remote files are split).
     sample_quoted: bool,
+    /// the path or pattern given
+    pattern: String,
 }
 
 impl std::fmt::Debug for CsvTable {
@@ -68,7 +70,7 @@ impl CsvTable {
         let lines = head.iter().filter(|&&b| b == b'\n').count().max(1);
         let total: u64 = files.iter().map(|f| f.len()).sum();
         let est_rows = (total as usize) * lines / head.len().max(1);
-        Ok(Self { names, files: Arc::new(files), file_schema, selected, schema, starts, options, est_rows, sample_quoted })
+        Ok(Self { names, files: Arc::new(files), file_schema, selected, schema, starts, options, est_rows, sample_quoted, pattern: pattern.to_string() })
     }
 
     fn byte_ranges(&self) -> Vec<ranges::ByteRange> {
@@ -97,6 +99,9 @@ impl TableProvider for CsvTable {
     }
     fn kind(&self) -> &'static str {
         "csv"
+    }
+    fn origin(&self) -> Option<crate::exec::query::TableRead> {
+        Some(crate::exec::query::TableRead { location: self.pattern.clone(), version: None })
     }
     fn create_source(&self, projection: Option<&[usize]>, _filters: &[Expr], _fetch: Option<usize>) -> Result<Arc<dyn Source>> {
         // table column -> file column

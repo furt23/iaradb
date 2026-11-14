@@ -16,6 +16,7 @@ use super::stats::FileStats;
 use super::LogStore;
 use crate::error::Result;
 use crate::exec::pipeline::Source;
+use crate::exec::query::TableRead;
 use crate::expr::Expr;
 use crate::io::location::url_scheme;
 use crate::io::memory::MemTable;
@@ -75,6 +76,11 @@ impl DeltaTable {
         if self.follow && next.as_delta().is_some_and(|n| n.root == self.root) {
             *self.successor.lock() = Some(next);
         }
+    }
+
+    /// The newer registration scans read instead, when it has the same schema.
+    fn successor_table(&self) -> Option<Arc<dyn TableProvider>> {
+        self.successor.lock().clone().filter(|n| n.schema() == self.schema)
     }
 
     pub fn from_snapshot(location: &str, storage: &StorageOptions, snapshot: Snapshot) -> Result<DeltaTable> {
@@ -176,9 +182,15 @@ impl TableProvider for DeltaTable {
         Some(self.schema.fields().iter().filter_map(|f| stats.iter().find(|s| s.column == *f.name()).cloned()).collect())
     }
 
+    fn origin(&self) -> Option<TableRead> {
+        match self.successor_table() {
+            Some(next) => next.origin(),
+            None => Some(TableRead { location: self.root.clone(), version: Some(self.snapshot.version) }),
+        }
+    }
+
     fn create_source(&self, projection: Option<&[usize]>, filters: &[Expr], fetch: Option<usize>) -> Result<Arc<dyn Source>> {
-        let next = self.successor.lock().clone();
-        if let Some(next) = next.filter(|n| n.schema() == self.schema) {
+        if let Some(next) = self.successor_table() {
             return next.create_source(projection, filters, fetch);
         }
         let inner: Vec<usize> = match projection {

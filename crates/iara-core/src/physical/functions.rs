@@ -17,6 +17,7 @@ use crate::scalar::Scalar;
 mod dates;
 mod eval;
 pub mod json;
+mod linear;
 pub mod lists;
 mod math;
 pub mod names;

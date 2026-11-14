@@ -4,6 +4,7 @@
 
 mod support;
 
+mod agg_confined;
 mod agg_limit;
 mod agg_pushdown;
 mod aggregates_p1;

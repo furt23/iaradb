@@ -130,6 +130,11 @@ pub struct AggregateSink {
     /// the partitioned finalize stops once it has them (each partition holds
     /// complete groups)
     pub fetch: Option<usize>,
+    /// a key column's values are each in one morsel of the input (see
+    /// [`crate::exec::pipeline::Source::morsel_confined`]), so no group
+    /// spans two: a worker's table is final at the end of each morsel and
+    /// is emitted there, with no radix mode and nothing to merge
+    pub confined: bool,
 }
 
 /// The hash partitions of radix mode: as many as keep about
@@ -212,6 +217,8 @@ pub struct AggLocal {
     finished_rows: usize,
     /// the worker's number (spreads the partition it visits first)
     worker: usize,
+    /// confined keys: the finished groups of the morsels run so far
+    done: Vec<RecordBatch>,
 }
 
 impl AggLocal {
@@ -302,6 +309,7 @@ impl AggregateSink {
             part_cols: OnceLock::new(),
             flushed: Mutex::new(vec![]),
             fetch: None,
+            confined: false,
         }
     }
 
@@ -330,6 +338,7 @@ impl AggregateSink {
             morsels_seen: 0,
             finished_rows: 0,
             worker,
+            done: vec![],
         })
     }
 
@@ -408,6 +417,24 @@ impl AggregateSink {
         local.table_bytes = 0;
         local.table_rows = 0;
         self.flushed.lock().push(full);
+        Ok(())
+    }
+
+    /// Confined keys: the worker's table holds whole groups, emitted as
+    /// output; the next morsel starts an empty table of about its size.
+    fn emit_table(&self, local: &mut AggLocal) -> Result<()> {
+        let n = local.num_groups();
+        if local.keys.is_none() || n == 0 {
+            return Ok(());
+        }
+        let mut keys = GroupKeys::try_new(&self.group_types)?;
+        keys.reserve(n);
+        let keys = local.keys.replace(keys).expect("keys").emit()?;
+        let mut accs = std::mem::replace(&mut local.accs, self.new_accs()?);
+        local.done.push(self.output(keys, &mut accs, n)?);
+        local.reservation.shrink(local.table_bytes);
+        local.table_bytes = 0;
+        local.table_rows = 0;
         Ok(())
     }
 
@@ -731,6 +758,10 @@ impl Sink for AggregateSink {
         let ng = table.len();
         local.accs.update(&inputs, &local.gids, ng)?;
         let fits = self.account_table(local);
+        if self.confined {
+            // the table never outgrows a morsel's groups
+            return Ok(());
+        }
         let large = ng > RADIX_MIN_GROUPS && ng * RADIX_MAX_ROWS_PER_GROUP > local.table_rows;
         if fits && large && ng * FLUSH_MIN_ROWS_PER_GROUP <= local.table_rows && self.can_flush() {
             return self.flush_table(local);
@@ -771,8 +802,28 @@ impl Sink for AggregateSink {
         Ok(())
     }
 
+    fn morsel_done(&self, local: &mut Result<AggLocal>, _morsel: usize) -> Result<()> {
+        match local {
+            Ok(l) if self.confined => self.emit_table(l),
+            _ => Ok(()),
+        }
+    }
+
     fn finalize(&self, mut locals: Vec<Result<AggLocal>>) -> Result<Vec<RecordBatch>> {
         let t0 = std::time::Instant::now();
+        if self.confined {
+            let mut batches = vec![];
+            for l in locals {
+                let mut l = l?;
+                self.emit_table(&mut l)?;
+                batches.append(&mut l.done);
+            }
+            if crate::exec::pipeline::profiling() {
+                let groups: usize = batches.iter().map(|b| b.num_rows()).sum();
+                eprintln!("[iara]   aggregate: keys confined to morsels, {groups} groups emitted morsel by morsel");
+            }
+            return crate::exec::pipeline::coalesce_small(&self.schema, batches, crate::io::parquet::batch_size());
+        }
         let flushed = std::mem::take(&mut *self.flushed.lock());
         if crate::exec::pipeline::profiling() && !flushed.is_empty() {
             let groups: usize = flushed.iter().map(|l| l.num_groups()).sum();

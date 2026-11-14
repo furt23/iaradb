@@ -114,6 +114,13 @@ impl Operator for FilterOp {
     fn describe(&self) -> String {
         format!("Filter({})", self.predicate)
     }
+
+    fn source_column(&self, out: usize) -> Option<usize> {
+        match &self.projection {
+            Some(p) => p.get(out).copied(),
+            None => Some(out),
+        }
+    }
 }
 
 pub struct ProjectOp {
@@ -138,5 +145,9 @@ impl Operator for ProjectOp {
             "Project({})",
             self.exprs.iter().map(|e| e.to_string()).collect::<Vec<_>>().join(", ")
         )
+    }
+
+    fn source_column(&self, out: usize) -> Option<usize> {
+        self.exprs.get(out)?.as_column_index()
     }
 }

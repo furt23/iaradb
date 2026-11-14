@@ -13,6 +13,13 @@ use crate::types::{is_float, is_integer, is_string};
 
 const TS_US: DataType = DataType::Timestamp(TimeUnit::Microsecond, None);
 
+/// Tell the running query, if any, that its result depends on more than what it reads.
+fn note_volatile() {
+    if let Some(q) = crate::exec::query::current() {
+        q.note_volatile();
+    }
+}
+
 pub fn compile(func: ScalarFunc, args: &[Expr], schema: &PlanSchema) -> Result<PhysExpr> {
     use ScalarFunc::*;
     let n = args.len();
@@ -55,6 +62,7 @@ pub fn compile(func: ScalarFunc, args: &[Expr], schema: &PlanSchema) -> Result<P
         }
         Now | CurrentDate => {
             nargs(0, 0)?;
+            note_volatile();
             return Ok(PhysExpr::Literal(time::query_time(func == Now)));
         }
         ToDate | ToTimestamp if n == 1 => {
@@ -95,6 +103,7 @@ pub fn compile(func: ScalarFunc, args: &[Expr], schema: &PlanSchema) -> Result<P
         }
         Random => {
             nargs(0, 2)?;
+            note_volatile();
             for i in 0..n {
                 to(&mut a, i, &DataType::Int64)?;
             }

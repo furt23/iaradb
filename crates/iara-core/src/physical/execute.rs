@@ -284,6 +284,7 @@ impl Exec {
                     _ => self.pipeline(input, ids[0])?,
                 };
                 sink.morsels = Some(pipe.source.num_morsels());
+                sink.confined = group_exprs.iter().any(|e| e.as_column_index().is_some_and(|c| pipe.morsel_confined(c)));
                 Ok(self.output(id, self.run(id, &pipe, &sink)?))
             }
             PhysicalPlan::Sort { input, keys, fetch, schema, bound } => {

@@ -959,6 +959,11 @@ impl PySessionContext {
         self.inner.tables_read()
     }
 
+    /// `{location: catalog.schema.table}` of the loaded tables that live in storage.
+    fn table_locations(&self) -> std::collections::HashMap<String, String> {
+        self.inner.table_locations().into_iter().collect()
+    }
+
     /// Where `CREATE TABLE ... AS` writes tables (None: in memory).
     #[pyo3(signature = (path, storage_options=None))]
     fn set_warehouse(&self, path: Option<&str>, storage_options: Option<&Bound<'_, PyDict>>) -> PyResult<()> {

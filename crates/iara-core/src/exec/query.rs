@@ -140,9 +140,22 @@ pub struct QueryStats {
     pub spilled_bytes: u64,
     /// requests made to object stores (process-wide when queries overlap)
     pub requests: StorageRequests,
+    /// the tables the query planned a scan of
+    pub reads: Vec<TableRead>,
+    /// the result depends on when it ran or on chance (`now()`, `current_date`, `random()`), not only on what it read
+    pub volatile: bool,
+}
+
+/// A table a query read: where it lives and, for Delta, the version scanned.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TableRead {
+    pub location: String,
+    pub version: Option<u64>,
 }
 
 pub struct QueryHandle {
+    reads: Mutex<Vec<TableRead>>,
+    volatile: AtomicBool,
     id: u64,
     started: Instant,
     spilled_before: u64,
@@ -179,6 +192,21 @@ impl QueryHandle {
             pipelines: Mutex::new(vec![]),
             planned: Mutex::new(VecDeque::new()),
             executions: AtomicUsize::new(0),
+            reads: Mutex::new(vec![]),
+            volatile: AtomicBool::new(false),
+        }
+    }
+
+    /// Note that the query's result is not a function of its tables alone.
+    pub fn note_volatile(&self) {
+        self.volatile.store(true, Ordering::Relaxed);
+    }
+
+    /// Note a table the query reads (once).
+    pub fn note_read(&self, read: TableRead) {
+        let mut reads = self.reads.lock();
+        if !reads.contains(&read) {
+            reads.push(read);
         }
     }
 
@@ -255,6 +283,8 @@ impl QueryHandle {
             memory_peak: memory::pool().peak(),
             spilled_bytes: spill::spilled_bytes() - self.spilled_before,
             requests: storage_requests().since(self.requests_before),
+            reads: self.reads.lock().clone(),
+            volatile: self.volatile.load(Ordering::Relaxed),
         }
     }
 }

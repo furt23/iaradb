@@ -709,6 +709,10 @@ fn stats_aggregate(a: &crate::logical::Aggregate) -> Result<Option<PhysicalPlan>
         return Ok(None);
     }
     let Some(values) = s.source.stats_aggregates(&wanted) else { return Ok(None) };
+    // answered without a scan, but the table was still read
+    if let Some((q, o)) = crate::exec::query::current().zip(s.source.origin()) {
+        q.note_read(o);
+    }
     let fields: Vec<Field> = a.schema.fields().iter().map(|f| Field::new(f.name(), f.field.data_type().clone(), true)).collect();
     let cols = values
         .iter()
@@ -747,6 +751,9 @@ fn swap_order(nl: usize, nr: usize) -> Vec<usize> {
 pub fn create_physical_plan(plan: &LogicalPlan) -> Result<PhysicalPlan> {
     Ok(match plan {
         LogicalPlan::Scan(s) => {
+            if let Some((q, o)) = crate::exec::query::current().zip(s.source.origin()) {
+                q.note_read(o);
+            }
             let bound_at = BOUNDED_SCANS.with(|m| m.borrow().iter().rposition(|(p, ..)| std::ptr::eq(*p, s)));
             let bound = bound_at.map(|i| BOUNDED_SCANS.with(|m| m.borrow()[i].1.clone()));
             let joins: Vec<ScanJoinKeys> = JOIN_SCANS.with(|m| m.borrow().iter().filter(|(p, _)| std::ptr::eq(*p, s)).map(|(_, j)| j.clone()).collect());

@@ -80,6 +80,8 @@ pub struct JsonTable {
     schema: SchemaRef,
     options: JsonOptions,
     est_rows: Option<usize>,
+    /// the path or pattern given
+    pattern: String,
 }
 
 impl std::fmt::Debug for JsonTable {
@@ -105,7 +107,7 @@ impl JsonTable {
         let truncated = (sample.len() as u64) < files[0].len();
         let schema = source::infer_file(&sample, arrays[0], truncated, options.infer_rows, options.nested)?;
         let est_rows = estimate_rows(&files, &arrays, &sample);
-        Ok(Self { names, files: Arc::new(files), arrays, schema: Arc::new(schema), options, est_rows })
+        Ok(Self { names, files: Arc::new(files), arrays, schema: Arc::new(schema), options, est_rows, pattern: pattern.to_string() })
     }
 
     fn byte_ranges(&self) -> Vec<ByteRange> {
@@ -154,6 +156,9 @@ impl TableProvider for JsonTable {
     }
     fn kind(&self) -> &'static str {
         "json"
+    }
+    fn origin(&self) -> Option<crate::exec::query::TableRead> {
+        Some(crate::exec::query::TableRead { location: self.pattern.clone(), version: None })
     }
     fn create_source(&self, projection: Option<&[usize]>, _filters: &[Expr], _fetch: Option<usize>) -> Result<Arc<dyn Source>> {
         let out = match projection {

@@ -31,3 +31,4 @@ pub mod spill;
 pub mod stream;
 pub mod unnest;
 pub mod window;
+pub mod write_log;

@@ -955,6 +955,15 @@ impl Operator for HashJoinProbe {
             if self.filter.is_some() { ", filtered" } else { "" }
         )
     }
+
+    fn source_column(&self, out: usize) -> Option<usize> {
+        // an inner join emits a probe row's matches as it probes it, and nothing at the end
+        if self.join_type != JoinType::Inner {
+            return None;
+        }
+        let joined = self.order.as_ref().map_or(Some(out), |o| o.get(out).copied())?;
+        (joined < self.joined_schema.fields().len() - self.table.batch.num_columns()).then_some(joined)
+    }
 }
 
 // ---------------------------------------------------------------------------

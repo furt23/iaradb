@@ -127,6 +127,7 @@ impl Transaction {
             actions.extend(self.actions.iter().cloned());
             if log.put_if_absent(&commit_file_name(version), write_commit(&actions))? {
                 self.after_commit(log, version);
+                crate::exec::write_log::note_write(&log.table(), Some(version), &self.operation);
                 return Ok(version);
             }
             let from = checked.map_or(0, |v| v + 1);

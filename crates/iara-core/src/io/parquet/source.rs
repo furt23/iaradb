@@ -118,7 +118,17 @@ impl ParquetSource {
         };
         let bound = req.bound.filter(|_| !req.conform);
         if !req.conform && req.fetch.is_none() {
-            src.late_filter = LateFilter::new(req.table_schema, &src.projection, req.filters, bound, req.joins);
+            // a column's size: its chunks in a few row groups of the first file
+            let groups = src.files.first().map_or(&[][..], |f| f.meta.metadata().row_groups());
+            let bytes = |c: usize| -> u64 {
+                let Some(first) = groups.first() else { return 0 };
+                let name = req.table_schema.field(c).name();
+                let leaves: Vec<usize> =
+                    first.columns().iter().enumerate().filter(|(_, k)| k.column_path().parts().first() == Some(name)).map(|(i, _)| i).collect();
+                let sample = groups.iter().step_by(groups.len().div_ceil(8));
+                sample.map(|rg| leaves.iter().map(|&i| rg.column(i).uncompressed_size()).sum::<i64>()).sum::<i64>().max(0) as u64
+            };
+            src.late_filter = LateFilter::new(req.table_schema, &src.projection, req.filters, bound, req.joins, &bytes);
         }
         if let Some(b) = bound {
             let ranges = morsel_ranges(&src.files, &src.morsels, req.table_schema.field(b.column).name());
@@ -223,17 +233,28 @@ fn scanned(files: &[Arc<ParquetFile>]) -> &str {
 }
 
 fn morsel_ranges(files: &[Arc<ParquetFile>], morsels: &[Morsel], column: &str) -> Vec<Option<(i64, i64, bool)>> {
+    // per file, the row groups its morsels read (a pruned scan reads few)
+    let mut read: Vec<Vec<usize>> = vec![vec![]; files.len()];
+    for m in morsels {
+        if read[m.file].last() != Some(&m.row_group) {
+            read[m.file].push(m.row_group);
+        }
+    }
     let per_file: Vec<Vec<Option<(i64, i64, bool)>>> = files
         .iter()
-        .map(|f| {
-            let rgs = f.meta.metadata().row_groups();
+        .zip(&mut read)
+        .map(|(f, read)| {
+            read.sort_unstable();
+            read.dedup();
+            let meta = f.meta.metadata();
+            let rgs = || read.iter().map(|&g| meta.row_group(g));
             let stats = || -> Option<Vec<Option<(i64, i64, bool)>>> {
                 let conv = StatisticsConverter::try_new(column, f.meta.schema(), f.meta.parquet_schema()).ok()?.with_missing_null_counts_as_zero(false);
-                let mins = conv.row_group_mins(rgs.iter()).ok()?;
-                let maxs = conv.row_group_maxes(rgs.iter()).ok()?;
-                let nulls = conv.row_group_null_counts(rgs.iter()).ok()?;
+                let mins = conv.row_group_mins(rgs()).ok()?;
+                let maxs = conv.row_group_maxes(rgs()).ok()?;
+                let nulls = conv.row_group_null_counts(rgs()).ok()?;
                 Some(
-                    (0..rgs.len())
+                    (0..read.len())
                         .map(|i| {
                             let (lo, hi) = (ordinal_at(mins.as_ref(), i)?, ordinal_at(maxs.as_ref(), i)?);
                             Some((lo, hi, !nulls.is_valid(i) || nulls.value(i) > 0))
@@ -241,10 +262,10 @@ fn morsel_ranges(files: &[Arc<ParquetFile>], morsels: &[Morsel], column: &str) -
                         .collect(),
                 )
             };
-            stats().unwrap_or_else(|| vec![None; rgs.len()])
+            stats().unwrap_or_else(|| vec![None; read.len()])
         })
         .collect();
-    morsels.iter().map(|m| per_file[m.file][m.row_group]).collect()
+    morsels.iter().map(|m| per_file[m.file][read[m.file].binary_search(&m.row_group).expect("a row group read")]).collect()
 }
 
 /// The first morsels that hold `rows` rows between them.
@@ -379,6 +400,24 @@ impl Source for ParquetSource {
 
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+
+    fn morsel_confined(&self, col: usize) -> bool {
+        // whole row groups of files laid out like the table (one type in all)
+        if self.columns.is_some() || self.morsels.iter().any(|m| m.range.is_some()) {
+            return false;
+        }
+        let Some(field) = self.schema.fields().get(col) else { return false };
+        // floats: NaNs are outside the statistics
+        if field.data_type().is_floating() {
+            return false;
+        }
+        // a NULL in any row group would meet the NULLs of the others
+        let ranges: Option<Vec<(i64, i64)>> =
+            morsel_ranges(&self.files, &self.morsels, field.name()).into_iter().map(|r| r.filter(|r| !r.2).map(|(lo, hi, _)| (lo, hi))).collect();
+        let Some(mut ranges) = ranges else { return false };
+        ranges.sort_unstable();
+        ranges.windows(2).all(|w| w[0].1 < w[1].0)
     }
 
     fn describe(&self) -> String {

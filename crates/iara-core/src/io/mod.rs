@@ -79,6 +79,11 @@ pub trait TableProvider: Send + Sync + Debug {
     fn location(&self) -> Option<dataset::TableLocation> {
         None
     }
+    /// What a query that scans the table reads: its location and Delta version (None: not a
+    /// table of storage, or only the inner part of one).
+    fn origin(&self) -> Option<crate::exec::query::TableRead> {
+        None
+    }
     /// The table as a Delta table, when it is one (its root, storage and snapshot).
     fn as_delta(&self) -> Option<&crate::delta::DeltaTable> {
         None

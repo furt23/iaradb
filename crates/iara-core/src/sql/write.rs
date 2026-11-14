@@ -71,6 +71,10 @@ pub(super) fn summary_with(
     format: Option<&str>,
     version: Option<u64>,
 ) -> Result<LazyFrame> {
+    // Delta commits note themselves (see `Transaction::commit`); only plain-file writes are noted here
+    if let Some(p) = path.filter(|_| version.is_none() && (format == Some("parquet") || operation == "copy")) {
+        crate::exec::write_log::note_write(p, None, operation);
+    }
     let schema = Arc::new(Schema::new(vec![
         Field::new("operation", DataType::Utf8, false),
         Field::new("table", DataType::Utf8, true),

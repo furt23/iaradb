@@ -6,7 +6,10 @@
 //! are never decoded) and skips row groups whose statistics are all past it.
 //!
 //! Keys are compared as order-preserving `i64` ordinals: integers, dates,
-//! times and timestamps as they are, floats by their total order bits.
+//! times and timestamps as they are, floats by their total order bits,
+//! strings by their first 8 bytes. Strings that differ later share an
+//! ordinal; the bound keeps the rows that tie with it, so that only costs
+//! rows it could have dropped.
 
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
@@ -70,10 +73,65 @@ macro_rules! with_ordinals {
     }};
 }
 
+/// Order-preserving ordinal of 8 bytes read as a big-endian number.
+fn bytes_ordinal(b: u64) -> i64 {
+    (b ^ (1 << 63)) as i64
+}
+
+/// The ordinal of a string: its first 8 bytes, zeros past its end.
+fn prefix_ordinal(s: &[u8]) -> i64 {
+    let mut b = [0u8; 8];
+    let n = s.len().min(8);
+    b[..n].copy_from_slice(&s[..n]);
+    bytes_ordinal(u64::from_be_bytes(b))
+}
+
+/// [`map_ordinals`] for strings. `f` must be a threshold (true up to, or
+/// from, some ordinal): a long string of a view array is read only when
+/// the 4 bytes its view holds do not decide.
+fn map_prefixes(a: &dyn Array, f: impl Fn(i64) -> bool) -> Option<BooleanBuffer> {
+    match a.data_type() {
+        DataType::Utf8View => {
+            let a = a.as_string_view();
+            let views = a.views();
+            Some(BooleanBuffer::collect_bool(views.len(), |i| {
+                // after the length: a string of up to 12 bytes (zeros past its
+                // end), else its first 4 bytes and where the rest is
+                let head = u64::from_be_bytes(views[i].to_le_bytes()[4..12].try_into().unwrap());
+                if views[i] as u32 <= 12 {
+                    return f(bytes_ordinal(head));
+                }
+                let low = f(bytes_ordinal(head & !0xFFFF_FFFF));
+                if low == f(bytes_ordinal(head | 0xFFFF_FFFF)) { low } else { a.is_valid(i) && f(prefix_ordinal(a.value(i).as_bytes())) }
+            }))
+        }
+        DataType::Utf8 => {
+            let a = a.as_string::<i32>();
+            Some(BooleanBuffer::collect_bool(a.len(), |i| f(prefix_ordinal(a.value(i).as_bytes()))))
+        }
+        DataType::LargeUtf8 => {
+            let a = a.as_string::<i64>();
+            Some(BooleanBuffer::collect_bool(a.len(), |i| f(prefix_ordinal(a.value(i).as_bytes()))))
+        }
+        _ => None,
+    }
+}
+
+fn prefix_at(a: &dyn Array, i: usize) -> Option<i64> {
+    let s = match a.data_type() {
+        DataType::Utf8View => a.as_string_view().value(i),
+        DataType::Utf8 => a.as_string::<i32>().value(i),
+        DataType::LargeUtf8 => a.as_string::<i64>().value(i),
+        _ => return None,
+    };
+    Some(prefix_ordinal(s.as_bytes()))
+}
+
 /// `f(ordinal)` for every row of a key array (any value for NULL rows), as
-/// a boolean buffer; None for key types without ordinals.
+/// a boolean buffer; None for key types without ordinals. `f` must be a
+/// threshold (see [`map_prefixes`]).
 fn map_ordinals(a: &dyn Array, f: impl Fn(i64) -> bool) -> Option<BooleanBuffer> {
-    with_ordinals!(a, v, conv, Some(BooleanBuffer::collect_bool(v.len(), |i| f(conv(v[i])))), None)
+    with_ordinals!(a, v, conv, Some(BooleanBuffer::collect_bool(v.len(), |i| f(conv(v[i])))), map_prefixes(a, f))
 }
 
 /// The ordinal of row `i` of a key array (None: NULL or no ordinal).
@@ -81,7 +139,7 @@ pub fn ordinal_at(a: &dyn Array, i: usize) -> Option<i64> {
     if a.is_null(i) {
         return None;
     }
-    with_ordinals!(a, v, conv, Some(conv(v[i])), None)
+    with_ordinals!(a, v, conv, Some(conv(v[i])), prefix_at(a, i))
 }
 
 impl TopKBound {
@@ -153,10 +211,35 @@ mod tests {
         let t = TimestampMicrosecondArray::from(vec![-5, 7]);
         assert_eq!(ordinal_at(&t, 0), Some(-5));
         assert_eq!(ordinal_at(&t, 1), Some(7));
-        assert_eq!(ordinal_at(&StringArray::from(vec!["a"]), 0), None);
+        assert_eq!(ordinal_at(&arrow::array::BooleanArray::from(vec![true]), 0), None);
     }
 
-    use arrow::array::{Float64Array, Int64Array, StringArray, TimestampMicrosecondArray};
+    use arrow::array::{Float64Array, Int64Array, StringArray, StringViewArray, TimestampMicrosecondArray};
+
+    #[test]
+    fn strings_are_bounded_by_their_first_bytes() {
+        // sorted; the long ones share 4 bytes (what a view holds), two of them 8
+        let texts = vec!["", "a", "ab", "abcdefgh", "abcdefgh-1", "abcdefgh-2 and more than a view holds", "abcdzzzzzzzzzzzzz", "b", "é"];
+        let views: ArrayRef = Arc::new(StringViewArray::from(texts.clone()));
+        let plain: ArrayRef = Arc::new(StringArray::from(texts.clone()));
+        let ords: Vec<i64> = (0..texts.len()).map(|i| ordinal_at(&views, i).unwrap()).collect();
+        assert!(ords.windows(2).all(|w| w[0] <= w[1]), "{ords:?}");
+        assert_eq!(ords, (0..texts.len()).map(|i| ordinal_at(&plain, i).unwrap()).collect::<Vec<_>>());
+        for (k, desc) in (0..texts.len()).flat_map(|k| [(k, false), (k, true)]) {
+            let b = TopKBound::new(desc, false);
+            b.offer(&views, k);
+            // every row at or before the bound is kept; ties on 8 bytes too
+            let want: Vec<bool> = ords.iter().map(|&o| if desc { o >= ords[k] } else { o <= ords[k] }).collect();
+            for keys in [&views, &plain] {
+                let m = b.mask(keys).unwrap();
+                assert_eq!(m.iter().map(|v| v.unwrap()).collect::<Vec<_>>(), want, "bound {:?} desc {desc}", texts[k]);
+            }
+        }
+        let nulls: ArrayRef = Arc::new(StringViewArray::from(vec![None, Some("abcdefgh-2 and more than a view holds")]));
+        let b = TopKBound::new(false, false);
+        b.offer(&views, 4);
+        assert_eq!(b.mask(&nulls).unwrap().iter().map(|v| v.unwrap()).collect::<Vec<_>>(), vec![false, true]);
+    }
 
     #[test]
     fn bound_masks_rows_past_it() {

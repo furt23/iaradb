@@ -41,6 +41,10 @@ impl Operator for MeasuredOp {
         self.inner.describe()
     }
 
+    fn source_column(&self, out: usize) -> Option<usize> {
+        self.inner.source_column(out)
+    }
+
     fn node(&self) -> Option<usize> {
         Some(self.node.id())
     }
@@ -77,6 +81,10 @@ impl Source for MeasuredSource {
 
     fn resident(&self) -> bool {
         self.inner.resident()
+    }
+
+    fn morsel_confined(&self, col: usize) -> bool {
+        self.inner.morsel_confined(col)
     }
 
     fn node(&self) -> Option<usize> {
