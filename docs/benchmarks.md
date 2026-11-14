@@ -122,7 +122,7 @@ The runs that follow another job pay for the previous one's page cache, so compa
 
 ## Reproducing
 
-The scripts are in `benchmarks/`. Install the engines with `uv pip install -e ".[bench]"` (Spark also needs Java 17+, and chDB has no Windows wheels) and a release build of Iara (see [development.md](development.md)).
+The scripts are in `benchmarks/`. Install the engines with `uv sync --group bench` (Spark also needs Java 17+, and chDB has no Windows wheels) and a release build of Iara (see [development.md](development.md)).
 
 Generate the data (with `tpchgen-cli` when it is installed, else DuckDB's dbgen) and the typed ClickBench file:
 

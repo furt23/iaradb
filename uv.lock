@@ -888,7 +888,7 @@ wheels = [
 ]
 
 [[package]]
-name = "iara"
+name = "iaradb"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
@@ -897,6 +897,15 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+pandas = [
+    { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "pandas", version = "3.0.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+]
+polars = [
+    { name = "polars" },
+]
+
+[package.dev-dependencies]
 bench = [
     { name = "chdb", marker = "sys_platform != 'win32'" },
     { name = "daft" },
@@ -908,6 +917,7 @@ bench = [
 ]
 dev = [
     { name = "boto3" },
+    { name = "deltalake" },
     { name = "duckdb" },
     { name = "marimo" },
     { name = "moto", extra = ["server"] },
@@ -919,45 +929,37 @@ dev = [
     { name = "polars" },
     { name = "pytest" },
 ]
-pandas = [
-    { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "pandas", version = "3.0.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-]
-polars = [
-    { name = "polars" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "deltalake" },
-]
 
 [package.metadata]
 requires-dist = [
-    { name = "boto3", marker = "extra == 'dev'", specifier = ">=1.34" },
-    { name = "chdb", marker = "sys_platform != 'win32' and extra == 'bench'" },
-    { name = "daft", marker = "extra == 'bench'" },
-    { name = "datafusion", marker = "extra == 'bench'" },
-    { name = "duckdb", marker = "extra == 'bench'" },
-    { name = "duckdb", marker = "extra == 'dev'" },
-    { name = "marimo", marker = "extra == 'dev'", specifier = ">=0.16" },
-    { name = "moto", extras = ["server"], marker = "extra == 'dev'", specifier = ">=5" },
-    { name = "numpy", marker = "extra == 'dev'" },
-    { name = "pandas", marker = "extra == 'dev'" },
     { name = "pandas", marker = "extra == 'pandas'" },
-    { name = "polars", marker = "extra == 'bench'" },
-    { name = "polars", marker = "extra == 'dev'" },
     { name = "polars", marker = "extra == 'polars'" },
-    { name = "psutil", marker = "extra == 'bench'" },
     { name = "pyarrow", specifier = ">=14" },
-    { name = "pyspark", marker = "extra == 'bench'", specifier = ">=4" },
-    { name = "pytest", marker = "extra == 'dev'" },
     { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2" },
 ]
-provides-extras = ["pandas", "polars", "dev", "bench"]
+provides-extras = ["pandas", "polars"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "deltalake", specifier = ">=1.6.6" }]
+bench = [
+    { name = "chdb", marker = "sys_platform != 'win32'" },
+    { name = "daft" },
+    { name = "datafusion" },
+    { name = "duckdb" },
+    { name = "polars" },
+    { name = "psutil" },
+    { name = "pyspark", specifier = ">=4" },
+]
+dev = [
+    { name = "boto3", specifier = ">=1.34" },
+    { name = "deltalake", specifier = ">=1.6.6" },
+    { name = "duckdb" },
+    { name = "marimo", specifier = ">=0.16" },
+    { name = "moto", extras = ["server"], specifier = ">=5" },
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "polars" },
+    { name = "pytest" },
+]
 
 [[package]]
 name = "idna"

@@ -28,7 +28,7 @@ ENV VIRTUAL_ENV=/opt/build \
 
 WORKDIR /src
 # only what maturin reads: the manifests, the Rust crates and the Python package
-COPY Cargo.toml Cargo.lock pyproject.toml ./
+COPY Cargo.toml Cargo.lock pyproject.toml README.md LICENSE ./
 COPY crates ./crates
 COPY python ./python
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
@@ -79,7 +79,7 @@ RUN uv python install ${PYTHON_VERSION} \
 RUN --mount=type=bind,from=wheel,source=/wheels,target=/wheels \
     --mount=type=cache,target=/root/.cache/uv \
     uv pip install --python /opt/venv/bin/python \
-      /wheels/iara-*.whl \
+      /wheels/iaradb-*.whl \
       "pyarrow==25.0.1" "marimo==0.25.1" "jedi==0.20.0" "boto3==1.43.111"
 
 # the built workspace: the web app with the node_modules it needs at run time

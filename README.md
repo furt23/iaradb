@@ -38,7 +38,16 @@ iara.sql("select k, sum(v) from t group by k", t=arrow_table)   # pyarrow, panda
 
 ## Install
 
-Wheels will be published to PyPI. Until then, build from source: see [docs/development.md](docs/development.md).
+With [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv add iaradb            # in a uv project
+uv pip install iaradb    # in any virtual environment
+```
+
+`pip install iaradb` works too. The package is named `iaradb` on PyPI and imported as `iara`.
+
+Wheels are published for Windows and Linux (x86-64), Python 3.10 and newer. On other platforms, build from source: see [docs/development.md](docs/development.md).
 
 ## Performance
 
@@ -50,13 +59,14 @@ Sum of the query times, on the same Parquet files (AWS m7i.4xlarge, 16 vCPUs, 64
 | TPC-H SF100, all 22 queries | **36.6 s** | 58.5 s | 69.3 s |
 | ClickBench, all 43 queries | **17.8 s** | 26.0 s | 28.9 s |
 
-TPC-H results were checked against DuckDB's. Per-query numbers, the other engines, and how to reproduce them: [docs/benchmarks.md](docs/benchmarks.md).
+TPC-H results were checked against DuckDB's. Per-query numbers and the other engines: [workhouse.dev/benchmarks](https://workhouse.dev/benchmarks/).
 
 ## Documentation
 
-- [Studio](docs/studio.md)
+- [Python API and SQL](https://docs.workhouse.dev/), starting with the [quickstart](https://docs.workhouse.dev/quickstart/)
+- [Studio](https://workhouse.dev/studio/)
+- [Storage](https://docs.workhouse.dev/storage/): S3, R2 and MinIO
 - [Delta Lake tables](docs/delta.md): writes, MERGE, time travel, maintenance
-- [Storage and cloud](docs/storage-and-cloud.md): S3, R2, clusters
 - [Architecture](docs/architecture.md)
 - [Development](docs/development.md): building, tests, environment variables
 

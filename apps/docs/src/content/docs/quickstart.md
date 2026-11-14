@@ -10,10 +10,10 @@ This guide introduces the core concepts of the Iara Python API: constructing que
 Use [uv](https://docs.astral.sh/uv/) to manage the environment and install Iara:
 
 ```bash
-uv add iara
+uv add iaradb
 ```
 
-Outside a uv project, install it into the active environment with `uv pip install iara`.
+Outside a uv project, install it into the active environment with `uv pip install iaradb`.
 
 Import the package and commonly used expression utilities:
 

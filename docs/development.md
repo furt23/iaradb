@@ -45,7 +45,7 @@ uv pip install maturin pyarrow
 maturin develop --release          # thin LTO, builds faster
 maturin develop --profile dist     # fat LTO, one codegen unit; use for benchmarks
 maturin develop --profile fast     # no LTO, quick iteration
-uv pip install -e ".[dev]"         # test dependencies
+uv sync --group dev                # test dependencies
 ```
 
 On Windows MSVC, `.cargo/config.toml` builds with `target-cpu=native`, so the binary only runs on CPUs like the build machine.

@@ -17,8 +17,6 @@ import math
 import random
 from typing import Any, Sequence
 
-import pyarrow as pa
-
 import iara as ia
 from iara import functions as F
 
@@ -225,6 +223,8 @@ def _sample_without(lf: ia.LazyFrame, n: int, seed: int) -> ia.LazyFrame:
 def _sample_with_replacement(lf: ia.LazyFrame, n: int, seed: int, total: int) -> ia.LazyFrame:
     if n and total == 0:
         raise ValueError("cannot sample rows from an empty frame")
+    import pyarrow as pa  # loaded on use: importing it costs ~0.4 s at `import iara`
+
     draws = ia.from_arrow(
         pa.table({_DRAW: pa.array(range(n), type=pa.int64())})
     ).lazy()
@@ -327,6 +327,8 @@ def describe(self: ia.DataFrame) -> ia.DataFrame:
     data: dict[str, list[str | None]] = {"statistic": list(_STATS)}
     for i, name in enumerate(schema):
         data[name] = _column_summary(row, i, row["__rows"])
+    import pyarrow as pa  # loaded on use, as above
+
     return ia.from_arrow(
         pa.table({k: pa.array(v, type=pa.string()) for k, v in data.items()})
     )

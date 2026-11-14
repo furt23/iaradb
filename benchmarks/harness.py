@@ -35,7 +35,7 @@ MARK = "@@bench "
 Setup = Callable[[dict[str, str], dict], Callable[[int], object]]
 
 PACKAGES = {
-    "iara": "iara",
+    "iara": "iaradb",
     "duckdb": "duckdb",
     "polars": "polars",
     "polars-sql": "polars",
