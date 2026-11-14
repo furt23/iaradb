@@ -37,6 +37,7 @@ const pathname = Astro.url.pathname;
           <a href="/#engine">Engine</a>
           <a href="/benchmarks/" class={pathname.startsWith('/benchmarks') ? 'is-active' : ''}>Benchmarks</a>
           <a href="/studio/" class={pathname.startsWith('/studio') ? 'is-active' : ''}>Studio</a>
+          <a href="/pricing/" class={pathname.startsWith('/pricing') ? 'is-active' : ''}>Pricing</a>
           <a href={GITHUB_URL}>GitHub</a>
           <a class="button button--primary nav__cta" href={DOCS_URL}>Docs</a>
         </nav>
@@ -58,6 +59,7 @@ const pathname = Astro.url.pathname;
           <a href={DOCS_URL}>Documentation</a>
           <a href="/benchmarks/">Benchmarks</a>
           <a href="/studio/">Studio</a>
+          <a href="/pricing/">Pricing</a>
           <a href={GITHUB_URL}>GitHub</a>
         </nav>
         <p class="footer__note">Apache-2.0 · {year}</p>

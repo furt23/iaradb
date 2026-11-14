@@ -1,0 +1,256 @@
+---
+import Base from '../layouts/Base.astro';
+import LogoMark from '../components/LogoMark.astro';
+import Plans from '../components/Plans.astro';
+import { addOns, comparison, plans } from '../data/pricing';
+import { DOCS_URL, GITHUB_URL } from '../config';
+
+const terms = [
+  ['Annual billing', 'Two months free on any paid plan.'],
+  ['Education and research', 'Team at no cost for verified institutions.'],
+  ['Spending limit', 'Usage beyond the plan only runs when an admin allows it. The limit is on by default.'],
+  ['Your own bucket', 'Keep data in your own S3 or R2 bucket on Business and Enterprise. Storage is then billed by your provider.'],
+];
+---
+
+<Base
+  title="Pricing · Iara"
+  description="Iara Studio plans: Free, Pro, Team, Business and Enterprise. The engine is Apache-2.0 and free to self-host."
+>
+  <section class="section hero">
+    <div class="container">
+      <header class="section-head" data-reveal>
+        <span class="eyebrow">Pricing · Iara Studio</span>
+        <h1>Start free.<br />Grow with your team.</h1>
+        <p class="lede">The engine is open source and always free. Hosted Studio plans include seats, compute, storage and Iara.</p>
+      </header>
+      <Plans />
+    </div>
+  </section>
+
+  <section class="section section--alt">
+    <div class="container">
+      <header class="section-head" data-reveal>
+        <span class="eyebrow">Compare plans</span>
+        <h2>What each plan includes</h2>
+      </header>
+      <div class="tablewrap" data-reveal>
+        <table>
+          <thead>
+            <tr>
+              <th><span class="sr">Feature</span></th>
+              {plans.map((p) => <th class:list={{ hl: p.tag }}>{p.name}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {comparison.map((row) =>
+              typeof row === 'string' ? (
+                <tr class="grp"><td colspan={plans.length + 1}>{row}</td></tr>
+              ) : (
+                <tr>
+                  <th scope="row">{row[0]}</th>
+                  {row.slice(1).map((v, i) => (
+                    <td class:list={{ hl: plans[i].tag, no: v === false, yes: v === true }}>
+                      {v === true ? '✓' : v === false ? '–' : v}
+                      {typeof v === 'boolean' && <span class="sr">{v ? 'included' : 'not included'}</span>}
+                    </td>
+                  ))}
+                </tr>
+              ),
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="container two">
+      <div data-reveal>
+        <span class="eyebrow">Beyond the plan</span>
+        <h2>Add-ons</h2>
+        <p class="muted">Pay only for what you use past your quota.</p>
+        <div class="tablewrap">
+          <table class="addons">
+            <thead><tr><th>US$</th><th class="n">Pro</th><th class="n hl">Team</th><th class="n">Business</th></tr></thead>
+            <tbody>
+              {addOns.map(([item, ...prices]) => (
+                <tr>
+                  <th scope="row">{item}</th>
+                  {prices.map((p, i) => <td class:list={['n', { hl: i === 1 }]}>{p}</td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="terms" data-reveal-stagger>
+        {terms.map(([title, text]) => (
+          <div class="term">
+            <h3>{title}</h3>
+            <p class="muted small">{text}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--alt closing">
+    <div class="container closing__inner" data-reveal>
+      <LogoMark size={56} />
+      <h2>Try Studio on the Free plan.</h2>
+      <p class="lede">Or run the engine and Studio yourself, free under Apache-2.0.</p>
+      <div class="closing__actions">
+        <a class="button button--primary" href={`${DOCS_URL}/quickstart/`}>Get started</a>
+        <a class="button button--ghost" href={GITHUB_URL}>Source on GitHub</a>
+      </div>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .hero {
+    padding-top: 72px;
+  }
+
+  .sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+
+  .tablewrap {
+    overflow-x: auto;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-lg);
+    background: var(--vellum);
+    box-shadow: var(--shadow);
+  }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 820px;
+    font-size: 0.9rem;
+  }
+
+  th,
+  td {
+    padding: 12px 16px;
+    text-align: left;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+
+  thead th {
+    font: 500 0.76rem var(--font-mono);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+    background: var(--parchment-2);
+  }
+
+  tbody th {
+    font-weight: 600;
+  }
+
+  tbody tr:last-child > * {
+    border-bottom: 0;
+  }
+
+  .hl {
+    background: rgb(220 232 247 / 0.55);
+  }
+
+  thead .hl {
+    color: var(--cobalt);
+  }
+
+  .yes {
+    color: var(--cobalt);
+    font-weight: 600;
+  }
+
+  .no {
+    color: var(--ink-3);
+  }
+
+  .grp td {
+    background: var(--parchment-2);
+    font: 500 0.76rem var(--font-mono);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--cobalt);
+  }
+
+  .n {
+    text-align: right;
+    font-family: var(--font-mono);
+  }
+
+  .addons {
+    min-width: 0;
+  }
+
+  .two {
+    display: grid;
+    grid-template-columns: 1.1fr 1fr;
+    gap: 48px;
+    align-items: start;
+  }
+
+  .terms {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+  }
+
+  .term {
+    background: var(--vellum);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-lg);
+    padding: 22px;
+  }
+
+  .term h3 {
+    font-size: 1.05rem;
+    margin-bottom: 6px;
+  }
+
+  .term p {
+    margin: 0;
+  }
+
+  .closing__inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+
+  .closing__inner :global(svg) {
+    margin-bottom: 20px;
+  }
+
+  .closing__actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 12px;
+    margin-top: 8px;
+  }
+
+  @media (max-width: 900px) {
+    .two {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  @media (max-width: 520px) {
+    .terms {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+</style>
