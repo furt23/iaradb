@@ -90,12 +90,28 @@ describe("kernelConfig", () => {
     expect(kernelConfig(TEXT, { ...LOCAL, system: [] })).toBe(TEXT);
   });
 
-  it("replaces a system catalog the stored text declares, and keeps the other catalogs", () => {
-    const text = `${TEXT}\n[catalogs.system]\ndescription = "mine"\n\n[catalogs.system.tables.mine]\npath = "x"\n\n[catalogs.sales]\ndescription = "Sales"\n`;
+  it("keeps a system catalog the stored text declares, and generates none", () => {
+    const text = `${TEXT}
+[catalogs.system]
+description = "mine"
+
+[catalogs.system.tables.mine]
+path = "x"
+`;
     const cfg = parse(kernelConfig(text, { ...LOCAL, system: [{ name: "queries", path: "/q" }] }));
-    expect(cfg.catalogs).toEqual({
-      system: { description: "The Studio's own records (read-only)", tables: { queries: { path: "/q", format: "parquet" } } },
-      sales: { description: "Sales" },
-    });
+    expect((cfg.catalogs as { system: unknown }).system).toEqual({ description: "mine", tables: { mine: { path: "x" } } });
+  });
+
+  it("generates nothing when the default catalog is named system", () => {
+    expect(kernelConfig(TEXT, { ...LOCAL, name: "system", system: [{ name: "queries", path: "/q" }] })).toBe(TEXT);
+  });
+
+  it("keeps the other catalogs next to the generated one", () => {
+    const text = `${TEXT}
+[catalogs.sales]
+description = "Sales"
+`;
+    const cfg = parse(kernelConfig(text, { ...LOCAL, system: [{ name: "queries", path: "/q" }] }));
+    expect(Object.keys(cfg.catalogs as object).sort()).toEqual(["sales", "system"]);
   });
 });

@@ -60,7 +60,9 @@ export function kernelConfig(text: string, opts: KernelSettings): string {
     }
   }
   const system = opts.system ?? [];
-  if (system.length) {
+  // a catalog the user declares, or the default catalog, keeps the name: the system tables are then not visible
+  const taken = opts.name.toLowerCase() === SYSTEM_CATALOG || (isRecord(cfg.catalogs) && SYSTEM_CATALOG in cfg.catalogs);
+  if (system.length && !taken) {
     const tables = Object.fromEntries(system.map((t) => [t.name, { path: t.path, format: "parquet" }]));
     const catalogs = isRecord(cfg.catalogs) ? cfg.catalogs : {};
     cfg.catalogs = {

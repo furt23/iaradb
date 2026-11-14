@@ -119,6 +119,8 @@ A schema can have a `location` (`[schemas.<name>]`, an `s3://` URL or a workspac
 
 Studio keeps a log of the runs its kernels make: each SQL statement, and each Python cell that read or wrote a table. A run has who started it, where it ran, its time, rows and memory, and the tables it read and wrote with their Delta version. The log is in Studio's data folder (`system/` under `IARA_STUDIO_DATA`), so it outlives the clusters.
 
+The runs that `.iara/history.jsonl` held before this log existed are copied into it once, the first time the log is read; the old file is left as it was.
+
 - The Query history page lists the newest runs. It needs no cluster.
 - The Lineage tab of a table in Data lists what wrote the table and what read it: notebooks, the SQL editor, jobs, dashboards and Iara. For each one it shows who ran it last and when, the table's version, and for a writer the tables the same run read.
 - A read by path counts too: `iara.scan_delta("s3://bucket/warehouse/sales/orders")` is a read of `sales.orders` when the catalog has that table at that location.
@@ -134,6 +136,8 @@ The `system` catalog holds Studio's own records as tables, queried like any othe
 | `system.main.queries` | One per run: `id`, `ts`, `user`, `kernel`, `cluster`, `source`, `kind` (`sql` or `python`), `query`, `elapsed_ms`, `rows`, `error`, `memory_peak`, `spilled_bytes`. |
 | `system.main.query_tables` | One per table a run read or wrote: `query_id`, `ts`, `user`, `kernel`, `source`, `access` (`read` or `write`), `table`, `location`, `version`, `operation`. |
 | `system.main.job_runs` | One per job run, dashboard refreshes included: `id`, `job`, `trigger`, `status`, `started_at`, `ended_at`, `cluster`, `error`, `summary`, `tasks`. |
+
+A catalog or schema named `system` cannot be created. A workspace whose default catalog or stored catalog is named `system` keeps its own: the system tables are then not generated.
 
 Studio writes them as Parquet files every minute, when something changed: under `_iara/system/` of the team bucket, or in the workspace's `.iara/system/` folder without one. A query therefore sees runs up to a minute old. The catalog appears once the first table is written, and it is read-only in the Data panel. [Data permissions](#data-permissions) apply to it as to any other catalog; `queries` holds the query text of every user.
 

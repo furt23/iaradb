@@ -7,6 +7,7 @@ import { kernels } from "../kernel/manager";
 import { writeAtomic } from "../workspace/atomic";
 import { syncWorkspaceKernel } from "../workspace/catalogChanges";
 import { dayOf, rowsFile, tableDir } from "./paths";
+import { importLegacyHistory } from "./queryLog";
 import { markPublished, publishedFiles, publishedUrl } from "./store";
 import { TABLES, type SystemTable } from "./tables";
 
@@ -42,6 +43,7 @@ export class Publisher {
     if (this.ticking) return;
     this.ticking = true;
     try {
+      importLegacyHistory();
       for (const table of TABLES) {
         const rows = table.rows;
         if (rows) await logged(`snapshot ${table.name}`, async () => writeSnapshot(table.name, await rows()));

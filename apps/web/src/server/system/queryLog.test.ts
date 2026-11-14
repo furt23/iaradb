@@ -7,8 +7,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { QueryTableRow } from "@/lib/system/types";
 
+import { config } from "../config";
 import { appendQuery, recentQueries } from "./queryLog";
 import { rowsFile } from "./paths";
+
+// a workspace of its own: the config reads it when it loads, and the example's old history must not be copied in
+vi.hoisted(() => {
+  process.env.IARA_WORKSPACE = `${process.env.TEMP ?? process.env.TMPDIR ?? "."}/querylog-ws-${Math.random().toString(36).slice(2)}`;
+});
 
 const DAY = 86_400;
 const ctx = { user: "ana@example.com", kernel: "workspace", cluster: null };
@@ -42,6 +48,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   delete process.env.IARA_STUDIO_DATA;
   fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(config.workspace, { recursive: true, force: true });
 });
 
 describe("the query log", () => {
@@ -85,5 +92,23 @@ describe("the query log", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(() => appendQuery(entry(), ctx)).not.toThrow();
     expect(error).toHaveBeenCalled();
+  });
+});
+
+describe("the old history file", () => {
+  it("is copied into the log once, and left as it was", () => {
+    const legacy = path.join(config.workspace, ".iara", "history.jsonl");
+    fs.mkdirSync(path.dirname(legacy), { recursive: true });
+    const old = JSON.stringify({ ts: 1_700_000_000, query: "select 7", source: "sql editor", elapsed_ms: 2, rows: 1, error: null });
+    fs.writeFileSync(legacy, `${old}
+not json
+`);
+    const runs = recentQueries(10);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ query: "select 7", ts: 1_700_000_000_000, user: null, kernel: "workspace", kind: "sql" });
+    expect(recentQueries(10)).toHaveLength(1);
+    expect(fs.readFileSync(legacy, "utf8")).toBe(`${old}
+not json
+`);
   });
 });
