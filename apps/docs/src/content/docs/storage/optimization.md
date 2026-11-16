@@ -19,6 +19,7 @@ Fetched data is held under a budget (`IARA_REMOTE_PREFETCH_MB`). Each group keep
 2. **Metadata Caching**: Decoded Parquet file footers are cached per version in memory (`IARA_METADATA_CACHE_MB`, default 256 MB), keyed by the object's version, so a replaced file is read again. The first read of a file fetches its last `IARA_FOOTER_GUESS_KB` (default 512 KB), which is the whole file when it is that small.
 3. **Directory Listing Cache**: S3 prefix listings are cached for 30 seconds (`IARA_LIST_CACHE_SECS`) and dropped as soon as this process writes or deletes under the same path. Writes by other programs show up when the entry expires.
 4. **Prefetch Window**: S3 readers prefetch upcoming row groups asynchronously into a bounded buffer (`IARA_REMOTE_PREFETCH_MB`, default 256 MB), keeping CPU threads busy. Up to `IARA_REMOTE_PREFETCH` (default 16) groups are fetched ahead.
+5. **Delta Tables of Many Files**: A query on a Delta table is planned from the table's log alone. Filters skip files by the log's statistics, and row counts, `min` and `max` come from them. The scan opens each file it keeps when it reads it, requesting the footers of up to `IARA_REMOTE_FILES` (default 128) files at once. A file larger than `IARA_SPLIT_MB` (default 128 MB) is read as several morsels.
 
 ---
 

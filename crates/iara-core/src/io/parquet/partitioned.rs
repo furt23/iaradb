@@ -6,6 +6,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 
 use super::source::ParquetSource;
+use super::split_scan::SplitSource;
 use crate::error::Result;
 use crate::exec::pipeline::{Emit, Source};
 use crate::io::partition::Partitions;
@@ -20,8 +21,26 @@ pub enum Col {
     Part(usize),
 }
 
+/// A scan whose morsels each read one file.
+pub trait FileScan: Source {
+    /// The file (index into the scanned files) a morsel reads.
+    fn file_of(&self, morsel: usize) -> usize;
+}
+
+impl FileScan for ParquetSource {
+    fn file_of(&self, morsel: usize) -> usize {
+        self.morsel_file(morsel)
+    }
+}
+
+impl FileScan for SplitSource {
+    fn file_of(&self, morsel: usize) -> usize {
+        self.morsel_file(morsel)
+    }
+}
+
 pub struct PartitionedSource {
-    pub inner: ParquetSource,
+    pub inner: Box<dyn FileScan>,
     /// partition values of the scanned files, one row per file
     pub partitions: Partitions,
     pub layout: Vec<Col>,
@@ -36,7 +55,7 @@ impl Source for PartitionedSource {
     }
 
     fn run_morsel(&self, morsel: usize, emit: Emit<'_>) -> Result<()> {
-        let file = self.inner.morsel_file(morsel);
+        let file = self.inner.file_of(morsel);
         let values = self.partitions.values.columns();
         self.inner.run_morsel(morsel, &mut |b: RecordBatch| {
             let n = b.num_rows();

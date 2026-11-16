@@ -8,6 +8,7 @@
 //! [`MAX_STRING_CHARS`], timestamps are written with millisecond precision
 //! (minimum rounded down, maximum up), as other Delta writers do.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 
 use arrow::array::AsArray;
@@ -33,6 +34,9 @@ pub struct FileStats {
     /// upper bounds
     pub max: HashMap<String, Scalar>,
     pub null_count: HashMap<String, u64>,
+    /// `tightBounds` is false: rows of the file are deleted (a deletion
+    /// vector) and the bounds may be wider than the values left
+    pub wide_bounds: bool,
 }
 
 impl FileStats {
@@ -67,9 +71,10 @@ impl FileStats {
             min_values: Option<BTreeMap<String, Box<RawValue>>>,
             max_values: Option<BTreeMap<String, Box<RawValue>>>,
             null_count: Option<BTreeMap<String, Box<RawValue>>>,
+            tight_bounds: Option<bool>,
         }
         let raw: Raw = serde_json::from_str(json).map_err(|e| WhError::Execution(format!("invalid Delta file statistics: {e}")))?;
-        let mut stats = FileStats { num_records: raw.num_records, ..Default::default() };
+        let mut stats = FileStats { num_records: raw.num_records, wide_bounds: raw.tight_bounds == Some(false), ..Default::default() };
         let walk = |section: Option<BTreeMap<String, Box<RawValue>>>, f: &mut dyn FnMut(String, &DataType, &str)| {
             if let Some(section) = section {
                 walk_leaves(schema.fields(), &section, "", f);
@@ -95,6 +100,113 @@ impl FileStats {
         });
         stats.null_count = nulls;
         Ok(stats)
+    }
+}
+
+/// The sections of a file's statistics, each still JSON text.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RawStats<'a> {
+    pub num_records: Option<u64>,
+    pub tight_bounds: Option<bool>,
+    #[serde(borrow)]
+    pub min_values: Option<&'a RawValue>,
+    #[serde(borrow)]
+    pub max_values: Option<&'a RawValue>,
+    #[serde(borrow)]
+    pub null_count: Option<&'a RawValue>,
+}
+
+/// The members of a JSON object, values as text. Names are borrowed from the text unless
+/// they are written with escapes.
+struct Members<'a>(Vec<(Cow<'a, str>, &'a RawValue)>);
+
+impl<'de> Deserialize<'de> for Members<'de> {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        struct Name<'a>(Cow<'a, str>);
+        impl<'de> Deserialize<'de> for Name<'de> {
+            fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+                struct V;
+                impl<'de> serde::de::Visitor<'de> for V {
+                    type Value = Name<'de>;
+                    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        f.write_str("a member name")
+                    }
+                    fn visit_borrowed_str<E>(self, v: &'de str) -> std::result::Result<Name<'de>, E> {
+                        Ok(Name(Cow::Borrowed(v)))
+                    }
+                    fn visit_str<E>(self, v: &str) -> std::result::Result<Name<'de>, E> {
+                        Ok(Name(Cow::Owned(v.to_string())))
+                    }
+                }
+                d.deserialize_str(V)
+            }
+        }
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = Members<'de>;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("an object")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> std::result::Result<Members<'de>, A::Error> {
+                let mut out = Vec::with_capacity(map.size_hint().unwrap_or(0));
+                while let Some(name) = map.next_key::<Name<'de>>()? {
+                    out.push((name.0, map.next_value::<&'de RawValue>()?));
+                }
+                Ok(Members(out))
+            }
+        }
+        d.deserialize_map(V)
+    }
+}
+
+/// The columns statistics can describe: the leaves of a schema, found by name level by level.
+pub(crate) struct Leaves {
+    top: HashMap<String, Leaf>,
+    /// dotted path and type of each leaf
+    pub columns: Vec<(String, DataType)>,
+}
+
+enum Leaf {
+    Column(usize),
+    Struct(HashMap<String, Leaf>),
+}
+
+impl Leaves {
+    pub fn of(schema: &Schema) -> Leaves {
+        fn level(fields: &Fields, prefix: &str, columns: &mut Vec<(String, DataType)>) -> HashMap<String, Leaf> {
+            let mut out = HashMap::with_capacity(fields.len());
+            for field in fields {
+                let path = if prefix.is_empty() { field.name().clone() } else { format!("{prefix}.{}", field.name()) };
+                let leaf = match field.data_type() {
+                    DataType::Struct(children) => Leaf::Struct(level(children, &path, columns)),
+                    dt => {
+                        columns.push((path, dt.clone()));
+                        Leaf::Column(columns.len() - 1)
+                    }
+                };
+                out.insert(field.name().clone(), leaf);
+            }
+            out
+        }
+        let mut columns = vec![];
+        let top = level(schema.fields(), "", &mut columns);
+        Leaves { top, columns }
+    }
+
+    /// Call `f(column, json text)` for each leaf a section of statistics has a value of.
+    pub fn walk<'a>(&self, section: &'a RawValue, f: &mut dyn FnMut(usize, &'a str)) {
+        fn level<'a>(at: &HashMap<String, Leaf>, object: &'a RawValue, f: &mut dyn FnMut(usize, &'a str)) {
+            let Ok(members) = serde_json::from_str::<Members<'a>>(object.get()) else { return };
+            for (name, value) in members.0 {
+                match at.get(name.as_ref()) {
+                    Some(Leaf::Column(i)) => f(*i, value.get()),
+                    Some(Leaf::Struct(inner)) => level(inner, value, f),
+                    None => {}
+                }
+            }
+        }
+        level(&self.top, section, f)
     }
 }
 
@@ -225,13 +337,25 @@ fn parse_timestamp_micros(s: &str) -> Option<i64> {
     NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f").ok().map(|n| n.and_utc().timestamp_micros())
 }
 
-/// A bound read from JSON `text` as a value of type `dt`.
-fn parse_scalar(dt: &DataType, text: &str) -> Option<Scalar> {
+/// A bound as the value its type stores: integers, dates (days) and
+/// timestamps (microseconds) as an integer.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Bound {
+    Int(i64),
+    Float(f64),
+    Text(String),
+    Decimal(i128),
+}
+
+/// A bound read from JSON `text` for a column of type `dt` (`None`: a null, a
+/// value that is not of the type, or a type statistics have no form for).
+pub(crate) fn parse_bound(dt: &DataType, text: &str) -> Option<Bound> {
     let text = text.trim();
     if text == "null" {
         return None;
     }
     let string = || serde_json::from_str::<String>(text).ok();
+    let fits = |v: i64, lo: i64, hi: i64| (lo..=hi).contains(&v).then_some(Bound::Int(v));
     match dt {
         DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
             let v = match text.parse::<i64>() {
@@ -241,19 +365,38 @@ fn parse_scalar(dt: &DataType, text: &str) -> Option<Scalar> {
                     (f.fract() == 0.0 && f.abs() < 9.0e18).then_some(f as i64)?
                 }
             };
-            Scalar::int64(v).cast_exact(dt)
+            match dt {
+                DataType::Int8 => fits(v, i8::MIN.into(), i8::MAX.into()),
+                DataType::Int16 => fits(v, i16::MIN.into(), i16::MAX.into()),
+                DataType::Int32 => fits(v, i32::MIN.into(), i32::MAX.into()),
+                _ => Some(Bound::Int(v)),
+            }
         }
-        DataType::Float32 | DataType::Float64 => {
-            let f: f64 = text.parse().ok().filter(|f: &f64| f.is_finite())?;
-            Scalar::float64(f).cast_to(dt).ok()
-        }
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Scalar::utf8(&string()?).cast_to(dt).ok(),
+        DataType::Float32 | DataType::Float64 => text.parse().ok().filter(|f: &f64| f.is_finite()).map(Bound::Float),
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => string().map(Bound::Text),
         DataType::Date32 => {
             let d = NaiveDate::parse_from_str(&string()?, "%Y-%m-%d").ok()?;
-            Some(Scalar::date32(d.num_days_from_ce() - UNIX_EPOCH_DAY_FROM_CE))
+            Some(Bound::Int(i64::from(d.num_days_from_ce() - UNIX_EPOCH_DAY_FROM_CE)))
         }
-        DataType::Timestamp(TimeUnit::Microsecond, tz) => Some(Scalar::timestamp_us(parse_timestamp_micros(&string()?)?, tz.clone())),
-        DataType::Decimal128(p, s) => Scalar::decimal128(parse_decimal(text, *s)?, *p, *s).ok(),
+        DataType::Timestamp(TimeUnit::Microsecond, _) => parse_timestamp_micros(&string()?).map(Bound::Int),
+        DataType::Decimal128(p, s) => {
+            let v = parse_decimal(text, *s)?;
+            // more digits than the column holds: not a value of it
+            (v.unsigned_abs() < 10u128.checked_pow(u32::from(*p))?).then_some(Bound::Decimal(v))
+        }
+        _ => None,
+    }
+}
+
+/// A bound read from JSON `text` as a value of type `dt`.
+fn parse_scalar(dt: &DataType, text: &str) -> Option<Scalar> {
+    match (dt, parse_bound(dt, text)?) {
+        (DataType::Date32, Bound::Int(days)) => Some(Scalar::date32(days as i32)),
+        (DataType::Timestamp(TimeUnit::Microsecond, tz), Bound::Int(micros)) => Some(Scalar::timestamp_us(micros, tz.clone())),
+        (_, Bound::Int(v)) => Scalar::int64(v).cast_exact(dt),
+        (_, Bound::Float(f)) => Scalar::float64(f).cast_to(dt).ok(),
+        (_, Bound::Text(s)) => Scalar::utf8(&s).cast_to(dt).ok(),
+        (DataType::Decimal128(p, s), Bound::Decimal(v)) => Scalar::decimal128(v, *p, *s).ok(),
         _ => None,
     }
 }
@@ -310,6 +453,7 @@ mod tests {
             .into(),
             max: [("id".to_string(), Scalar::int64(100)), ("at".to_string(), ts(1_001))].into(),
             null_count: [("id".to_string(), 0), ("s.a".to_string(), 4)].into(),
+            wide_bounds: false,
         };
         let json = stats.to_json();
         assert!(json.starts_with("{\"numRecords\":10,\"minValues\":{\"at\":\"1970-01-01T00:00:00.001Z\""), "{json}");

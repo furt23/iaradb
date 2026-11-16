@@ -77,6 +77,8 @@ result["requests"]               # the requests this query made
 | `IARA_IO_THREADS` | `4` | Threads of the I/O runtime. |
 | `IARA_REMOTE_PREFETCH` | `16` | Row groups or CSV chunks fetched ahead, in parallel. |
 | `IARA_REMOTE_PREFETCH_MB` | `256` | Memory for data fetched but not yet decoded. |
+| `IARA_REMOTE_FILES` | `128` | Files of a Delta table whose footers are requested at once while a scan runs. |
+| `IARA_SPLIT_MB` | `128` | Bytes of a Delta table's file read as one morsel. |
 | `IARA_COALESCE_KB` | `1024` | Ranges closer than this are fetched as one request. |
 | `IARA_MAX_REQUEST_MB` | `64` | Largest single range request. |
 | `IARA_FETCH_TARGET_MB` | `32` | Row group data fetched per request batch. |

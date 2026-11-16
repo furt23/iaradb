@@ -65,16 +65,16 @@ fn open_remote(remote: Vec<(usize, ObjectFile)>) -> Result<Vec<(usize, ParquetFi
             (i, o, f.meta)
         })
         .collect();
-    opened
-        .into_par_iter()
-        .map(|(i, o, meta)| {
-            let meta = ArrowReaderMetadata::try_new(meta, ArrowReaderOptions::new()).map_err(|e| named(&o.url, e))?;
-            Ok((i, ParquetFile { name: o.url.to_string(), blob: Blob::Object(o), meta: with_string_views(meta) }))
-        })
-        .collect()
+    opened.into_par_iter().map(|(i, o, meta)| Ok((i, remote_file(o, meta)?))).collect()
 }
 
-fn open_local(path: &Path) -> Result<ParquetFile> {
+/// A remote file whose footer was read.
+pub(super) fn remote_file(o: ObjectFile, meta: Arc<ParquetMetaData>) -> Result<ParquetFile> {
+    let meta = ArrowReaderMetadata::try_new(meta, ArrowReaderOptions::new()).map_err(|e| named(&o.url, e))?;
+    Ok(ParquetFile { name: o.url.to_string(), blob: Blob::Object(o), meta: with_string_views(meta) })
+}
+
+pub(super) fn open_local(path: &Path) -> Result<ParquetFile> {
     let data = map_local(path)?;
     let meta = ArrowReaderMetadata::load(&data, ArrowReaderOptions::new()).map_err(|e| named(&path.display(), e))?;
     Ok(ParquetFile { name: path.display().to_string(), blob: Blob::Mapped(data), meta: with_string_views(meta) })

@@ -16,8 +16,10 @@
 //!   whole files,
 //! * a table can also be an explicit list of files with their partition
 //!   values and statistics (a Delta table, see [`ParquetTable::from_files`]):
-//!   files are opened as scans need them, filters skip files by their
-//!   statistics, and each file is read onto the table's columns by name.
+//!   filters skip files by their statistics, the optimizer's estimates come
+//!   from them too, and each file is read onto the table's columns by name.
+//!   Planning opens no file of a table of many: the scan opens each as it
+//!   reads it (see [`split_scan`]).
 
 mod conform;
 mod dataset;
@@ -27,11 +29,14 @@ mod footer;
 mod hive_write;
 pub mod late;
 mod late_filter;
+mod log_stats;
 pub mod meta_cache;
 mod partitioned;
 mod prune;
 mod sample_cache;
 pub mod source;
+mod split_fetch;
+pub mod split_scan;
 mod stats;
 mod table_files;
 mod write;
@@ -39,24 +44,30 @@ mod write;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Schema, SchemaRef};
+use arrow::datatypes::{Schema, SchemaRef};
 use parking_lot::Mutex;
 
 pub use file::ParquetFile;
 pub use source::ParquetSource;
 pub use dataset::{DatasetSink, ParquetOptions, sink_parquet_files};
 pub use hive_write::{HiveSink, MAX_PARTITIONS, new_file_name};
+pub use log_stats::LogStats;
 pub use write::{ParquetSink, parse_compression, write_parquet, write_parquet_with};
 
-use crate::delta::stats::FileStats;
 use crate::error::{Result, WhError};
 use crate::exec::pipeline::Source;
 use crate::expr::Expr;
 use crate::io::options::StorageOptions;
 use crate::io::partition::{self, Partitions};
 use crate::io::{ColumnStats, DataFile, Location, TableProvider, list_files};
-use partitioned::{PartitionedSource, split_projection};
+use log_stats::Answer;
+use partitioned::{FileScan, PartitionedSource, split_projection};
+use split_scan::{SplitRequest, SplitSource};
 use table_files::TableFiles;
+
+/// The most files opened while a query is planned, for a table that opens its files as
+/// scans read them: to answer an aggregate from their footers.
+const PLANNED_FILES: usize = 64;
 
 pub fn batch_size() -> usize {
     static SIZE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
@@ -76,7 +87,7 @@ pub struct ParquetTable {
     file_schema: SchemaRef,
     partitions: Option<Partitions>,
     /// statistics of each file, when the table has an explicit file list (else empty)
-    file_stats: Vec<Option<FileStats>>,
+    log: LogStats,
     /// files may lack columns or order them differently: scans match columns by name
     conform: bool,
     storage: StorageOptions,
@@ -105,7 +116,7 @@ impl ParquetTable {
             schema,
             file_schema,
             partitions,
-            file_stats: vec![],
+            log: LogStats::default(),
             conform: false,
             storage: options.clone(),
             ndv_cache: Default::default(),
@@ -113,12 +124,14 @@ impl ParquetTable {
         })
     }
 
-    /// A table of exactly these files. `schema` holds every column; the
+    /// A table of exactly these files, with what the table's log says of
+    /// each (`stats`, a file per file of `files`). `schema` holds every column; the
     /// `partition_columns` among them are not in the files but come from the
     /// files' `partition_values` (text, aligned to `partition_columns`) and are
     /// placed after the others. Files may lack columns of the schema (read as
-    /// NULL) or order them differently; only the first is opened now.
-    pub fn from_files(files: Vec<TableFile>, schema: &Schema, partition_columns: &[String], storage: &StorageOptions) -> Result<Self> {
+    /// NULL) or order them differently; only the first is opened now. The
+    /// others open when a scan reads them.
+    pub fn from_files(files: Vec<TableFile>, stats: LogStats, schema: &Schema, partition_columns: &[String], storage: &StorageOptions) -> Result<Self> {
         if files.is_empty() {
             return Err(WhError::Plan("a table of files needs at least one file".into()));
         }
@@ -137,7 +150,7 @@ impl ParquetTable {
             Some(p) => Arc::new(Schema::new([file_schema.fields().to_vec(), p.schema().fields().to_vec()].concat())),
             None => file_schema.clone(),
         };
-        let file_stats = files.iter().map(|f| f.stats.clone()).collect();
+        let log = stats;
         let mut listed = Vec::with_capacity(files.len());
         for f in &files {
             listed.push((data_file(&f.path, f.size, storage)?, f.size));
@@ -148,7 +161,7 @@ impl ParquetTable {
             schema,
             file_schema,
             partitions,
-            file_stats,
+            log,
             conform: true,
             storage: storage.clone(),
             ndv_cache: Default::default(),
@@ -165,10 +178,92 @@ impl ParquetTable {
     /// log, among those `keep` leaves.
     fn keep_by_stats(&self, filters: &[Expr], keep: Option<Vec<bool>>) -> Vec<bool> {
         let mut keep = keep.unwrap_or_else(|| vec![true; self.files.len()]);
-        for (k, by_stats) in keep.iter_mut().zip(prune::keep_files(filters, &self.file_schema, &self.file_stats)) {
+        for (k, by_stats) in keep.iter_mut().zip(prune::keep_files(filters, &self.file_schema, &self.log, self.files.len())) {
             *k &= by_stats;
         }
         keep
+    }
+
+    /// The scan of a table of listed files. Few files are opened now, as a
+    /// table of Parquet files does, and their row groups are the morsels.
+    /// Many are left to the scan, which opens each when it reads it: reading
+    /// thousands of footers first would take longer than most queries.
+    fn listed_source(&self, projection: Vec<usize>, filters: &[Expr], fetch: Option<usize>) -> Result<Arc<dyn Source>> {
+        let mut keep = self.keep_by_stats(filters, self.partitions.as_ref().map(|p| p.keep(filters)));
+        if let Some(rows) = fetch {
+            self.keep_for_limit(&mut keep, rows as u64);
+        }
+        let (file_projection, layout) = match &self.partitions {
+            Some(_) => split_projection(&projection, self.file_schema.fields().len()),
+            None => (projection.clone(), vec![]),
+        };
+        let kept: Vec<usize> = (0..keep.len()).filter(|&i| keep[i]).collect();
+        let files = kept.len();
+        let inner: Box<dyn FileScan> = match self.files.list().filter(|_| self.opens_in_scan(&kept, &file_projection, filters)) {
+            Some(list) => {
+                let rows = kept.iter().map(|&i| self.log.rows_of(i)).collect();
+                Box::new(SplitSource::try_new(SplitRequest { list, kept, rows, table_schema: &self.file_schema, projection: file_projection, filters, fetch })?)
+            }
+            None => {
+                let files = self.files.select(&keep)?;
+                let req = source::ScanRequest { files: &files, table_schema: &self.file_schema, projection: file_projection, filters, fetch, conform: true, row_numbers: false, bound: None, joins: &[] };
+                Box::new(ParquetSource::try_new(req)?)
+            }
+        };
+        let Some(parts) = &self.partitions else {
+            let source: Box<dyn Source> = inner;
+            return Ok(Arc::from(source));
+        };
+        Ok(Arc::new(PartitionedSource {
+            inner,
+            partitions: parts.select(&keep)?,
+            layout,
+            schema: Arc::new(self.schema.project(&projection)?),
+            files: (files, self.files.len()),
+        }))
+    }
+
+    /// Whether the scan of the `kept` files opens them itself: when they make
+    /// enough morsels to keep every thread busy, or when it only counts rows
+    /// the log already gives.
+    fn opens_in_scan(&self, kept: &[usize], file_projection: &[usize], filters: &[Expr]) -> bool {
+        let morsels = split_scan::split_count(kept.iter().map(|&i| self.files.size(i)));
+        if morsels >= (rayon::current_num_threads() * 3).min(PLANNED_FILES) {
+            return true;
+        }
+        let on_files = filters.iter().flat_map(|f| f.column_refs()).any(|c| self.file_schema.field_with_name(&c.name).is_ok());
+        file_projection.is_empty() && !on_files && kept.iter().all(|&i| self.log.rows_of(i).is_some())
+    }
+
+    /// A LIMIT reads the first files that hold `rows` rows between them, by the log's counts.
+    fn keep_for_limit(&self, keep: &mut [bool], rows: u64) {
+        let mut have = 0u64;
+        for i in 0..keep.len() {
+            if !keep[i] {
+                continue;
+            }
+            if have >= rows {
+                keep[i] = false;
+                continue;
+            }
+            // a file without a count may hold no rows: every later file stays
+            let Some(n) = self.log.rows_of(i) else { return };
+            have += n;
+        }
+    }
+
+    /// An aggregate over the whole table from the log, or from the footers
+    /// of the few files the log says can hold the value.
+    fn log_aggregate(&self, agg: crate::io::StatsAgg) -> Option<crate::scalar::Scalar> {
+        match self.log.aggregate(&self.file_schema, agg) {
+            Answer::Exact(v) => Some(v),
+            Answer::Files(files) if files.len() <= PLANNED_FILES => {
+                let mut keep = vec![false; self.files.len()];
+                files.iter().for_each(|&i| keep[i] = true);
+                stats::aggregates(&self.files.select(&keep).ok()?, &self.file_schema, &[agg])?.pop()
+            }
+            _ => None,
+        }
     }
 
     /// The partition column behind table column `column`, if it is one.
@@ -207,8 +302,6 @@ pub struct TableFile {
     pub size: u64,
     /// the text of the table's partition columns, in their order (`None`: null)
     pub partition_values: Vec<Option<String>>,
-    /// bounds of the columns' values, for skipping the file
-    pub stats: Option<FileStats>,
 }
 
 /// The file at `path` without listing it: its size is known.
@@ -243,7 +336,8 @@ impl TableProvider for ParquetTable {
         self.schema.clone()
     }
     fn num_rows(&self) -> Option<usize> {
-        Some(self.files.rows())
+        // a table of listed files counts by its log (its files are not open)
+        Some(self.log.rows().filter(|_| self.conform).map_or_else(|| self.files.rows(), |n| n as usize))
     }
     fn kind(&self) -> &'static str {
         "parquet"
@@ -263,9 +357,10 @@ impl TableProvider for ParquetTable {
         if let Some((p, j)) = self.partition_column(column) {
             return Some(p.ndv(j));
         }
-        // strings are sampled by position in the first file, which may order columns differently
-        if self.conform && matches!(self.file_schema.field(column).data_type(), DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Binary | DataType::BinaryView) {
-            return None;
+        if self.conform {
+            // from the log: strings would be sampled by position in the first file, which
+            // may order its columns differently
+            return cached(&self.ndv_cache, column, || self.log.ndv(self.file_schema.field(column), self.num_rows().unwrap_or(0)));
         }
         cached(&self.ndv_cache, column, || {
             // strings are sampled in the first file, numbers need every file's statistics
@@ -278,11 +373,14 @@ impl TableProvider for ParquetTable {
         if let Some((p, j)) = self.partition_column(column) {
             return p.range(j);
         }
+        if self.conform {
+            return cached(&self.range_cache, column, || self.log.range(self.file_schema.field(column)));
+        }
         cached(&self.range_cache, column, || stats::range(&self.files.all().ok()?, &self.file_schema, column))
     }
 
     fn column_stats(&self) -> Option<Vec<ColumnStats>> {
-        let mut out = stats::column_stats(&self.files.all().ok()?, &self.file_schema);
+        let mut out = if self.conform { self.log.column_stats(&self.file_schema) } else { stats::column_stats(&self.files.all().ok()?, &self.file_schema) };
         if let Some(p) = &self.partitions {
             out.extend((0..p.schema().fields().len()).map(|j| p.stats(j)));
         }
@@ -296,6 +394,9 @@ impl TableProvider for ParquetTable {
         if !aggs.iter().all(|a| matches!(*a, StatsAgg::Rows) || matches!(*a, StatsAgg::NonNull(c) | StatsAgg::Min(c) | StatsAgg::Max(c) if in_files(c))) {
             return None;
         }
+        if self.conform {
+            return aggs.iter().map(|a| self.log_aggregate(*a)).collect();
+        }
         stats::aggregates(&self.files.all().ok()?, &self.file_schema, aggs)
     }
 
@@ -306,7 +407,7 @@ impl TableProvider for ParquetTable {
         bound: Option<&crate::io::ScanBound>,
         joins: &[crate::io::ScanJoinKeys],
     ) -> Option<Result<Arc<dyn Source>>> {
-        if self.partitions.is_some() || self.conform || !self.file_stats.is_empty() {
+        if self.partitions.is_some() || self.conform {
             return None;
         }
         let projection = projection.map_or_else(|| (0..self.schema.fields().len()).collect(), |p| p.to_vec());
@@ -319,7 +420,7 @@ impl TableProvider for ParquetTable {
     }
 
     fn late_rows(&self) -> Option<Arc<dyn crate::io::LateRows>> {
-        if self.partitions.is_some() || self.conform || !self.file_stats.is_empty() {
+        if self.partitions.is_some() || self.conform {
             return None;
         }
         let files = self.files.all().ok()?;
@@ -331,22 +432,21 @@ impl TableProvider for ParquetTable {
             Some(p) => p.to_vec(),
             None => (0..self.schema.fields().len()).collect(),
         };
-        let conform = self.conform;
+        if self.conform {
+            return self.listed_source(projection, filters, fetch);
+        }
         let Some(parts) = &self.partitions else {
-            let files = if self.file_stats.is_empty() { self.files.all()? } else { self.files.select(&self.keep_by_stats(filters, None))? };
-            let req = source::ScanRequest { files: &files, table_schema: &self.schema, projection, filters, fetch, conform, row_numbers: false, bound: None, joins: &[] };
+            let files = self.files.all()?;
+            let req = source::ScanRequest { files: &files, table_schema: &self.schema, projection, filters, fetch, conform: false, row_numbers: false, bound: None, joins: &[] };
             return Ok(Arc::new(ParquetSource::try_new(req)?));
         };
         // whole files are skipped by filters on partition columns (their footers are not even read)
-        let mut keep = parts.keep(filters);
-        if !self.file_stats.is_empty() {
-            keep = self.keep_by_stats(filters, Some(keep));
-        }
+        let keep = parts.keep(filters);
         let files = self.files.select(&keep)?;
         let (file_projection, layout) = split_projection(&projection, self.file_schema.fields().len());
-        let req = source::ScanRequest { files: &files, table_schema: &self.file_schema, projection: file_projection, filters, fetch, conform, row_numbers: false, bound: None, joins: &[] };
+        let req = source::ScanRequest { files: &files, table_schema: &self.file_schema, projection: file_projection, filters, fetch, conform: false, row_numbers: false, bound: None, joins: &[] };
         Ok(Arc::new(PartitionedSource {
-            inner: ParquetSource::try_new(req)?,
+            inner: Box::new(ParquetSource::try_new(req)?),
             partitions: parts.select(&keep)?,
             layout,
             schema: Arc::new(self.schema.project(&projection)?),

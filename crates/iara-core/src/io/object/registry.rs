@@ -73,12 +73,25 @@ pub fn open(url: &ObjectUrl, explicit: &StorageOptions) -> Result<Store> {
         return Ok(s.clone());
     }
     let raw: Arc<dyn ObjectStore> = match url.scheme.as_str() {
-        "memory" => memory_store(&url.bucket),
+        "memory" => slowed(memory_store(&url.bucket), &key.1),
         "s3" => build_s3(url, &key.1)?,
         other => return Err(WhError::Storage(format!("unsupported storage scheme '{other}://'"))),
     };
     let built = Store { store: CountingStore::wrap(raw, &key.0), id: NEXT_ID.fetch_add(1, Ordering::Relaxed) };
     Ok(STORES.lock().entry(key).or_insert(built).clone())
+}
+
+/// The storage option `latency_ms` of a `memory://` store: every request to it waits that
+/// long first, as a request to a real object store would (tests and benchmarks of how many
+/// requests a query has in flight).
+pub const LATENCY_MS: &str = "latency_ms";
+
+fn slowed(store: Arc<InMemory>, options: &StorageOptions) -> Arc<dyn ObjectStore> {
+    use object_store::throttle::{ThrottleConfig, ThrottledStore};
+    let Some(ms) = options.get(LATENCY_MS).and_then(|v| v.trim().parse::<u64>().ok()).filter(|&ms| ms > 0) else { return store };
+    let wait = std::time::Duration::from_millis(ms);
+    let config = ThrottleConfig { wait_get_per_call: wait, wait_list_per_call: wait, wait_list_with_delimiter_per_call: wait, wait_put_per_call: wait, ..Default::default() };
+    Arc::new(ThrottledStore::new(store, config))
 }
 
 pub fn store(url: &ObjectUrl, explicit: &StorageOptions) -> Result<Arc<dyn ObjectStore>> {

@@ -32,7 +32,7 @@ use crate::expr::{Expr, count_star, qcol};
 use crate::io::TableProvider;
 use crate::io::memory::MemTable;
 use crate::io::parquet::file::engine_schema;
-use crate::io::parquet::{ParquetTable, TableFile};
+use crate::io::parquet::{LogStats, ParquetTable, TableFile};
 use crate::logical::LogicalPlan;
 use crate::scalar::Scalar;
 use crate::session::{LazyFrame, SessionContext};
@@ -91,6 +91,8 @@ pub struct Target<'a> {
     /// what the columns of the table are called in expressions (`UPDATE t AS x`)
     pub alias: String,
     files: Vec<TableFile>,
+    /// what the log says of each file
+    stats: LogStats,
     /// the table's columns and the types the scan gives them
     pub columns: Vec<(String, DataType)>,
 }
@@ -99,9 +101,9 @@ impl<'a> Target<'a> {
     pub fn new(ctx: &'a SessionContext, table: &'a DeltaTable, alias: Option<&str>) -> Result<Target<'a>> {
         let snapshot = table.snapshot();
         check_writable(snapshot)?;
-        let (files, _) = table_files(table.root(), snapshot);
+        let (files, stats) = table_files(table.root(), snapshot);
         let columns = engine_schema(&snapshot.schema).fields().iter().map(|f| (f.name().clone(), f.data_type().clone())).collect();
-        Ok(Target { ctx, table, alias: alias.unwrap_or("target").to_string(), files, columns })
+        Ok(Target { ctx, table, alias: alias.unwrap_or("target").to_string(), files, stats, columns })
     }
 
     /// The summary of a statement that changed nothing.
@@ -116,7 +118,7 @@ impl<'a> Target<'a> {
 
     /// Rows of file `i` according to the log, if it says.
     pub fn num_records(&self, i: usize) -> Option<u64> {
-        self.files[i].stats.as_ref().and_then(|s| s.num_records)
+        self.stats.rows_of(i)
     }
 
     /// A column of the target in expressions.
@@ -167,7 +169,7 @@ impl<'a> Target<'a> {
                 .collect();
             let mut partitions = snapshot.partition_columns.clone();
             partitions.push(FILE_COLUMN.to_string());
-            Arc::new(ParquetTable::from_files(listed, &schema, &partitions, self.table.storage())?)
+            Arc::new(ParquetTable::from_files(listed, self.stats.select(files), &schema, &partitions, self.table.storage())?)
         };
         let plan = LogicalPlan::scan(&self.alias, Some(self.alias.clone()), provider, None, vec![], None)?;
         Ok(LazyFrame::new(Arc::new(plan), self.ctx.clone()))

@@ -171,18 +171,19 @@ impl ParquetSource {
         Some(if self.fetch.is_some() { prefetcher.with_lookahead(window) } else { prefetcher })
     }
 
-    /// Emit row counts only (no columns): answered from metadata.
-    fn emit_counts(&self, rows: usize, emit: Emit<'_>) -> Result<()> {
-        let bs = batch_size();
-        let mut left = rows;
-        while left > 0 {
-            let n = left.min(bs);
-            let opts = RecordBatchOptions::new().with_row_count(Some(n));
-            emit(RecordBatch::try_new_with_options(self.schema.clone(), vec![], &opts)?)?;
-            left -= n;
-        }
-        Ok(())
+}
+
+/// Emit `rows` rows of no columns (`schema` has none): a count answered from metadata.
+pub(super) fn emit_counts(schema: &SchemaRef, rows: usize, emit: Emit<'_>) -> Result<()> {
+    let bs = batch_size();
+    let mut left = rows;
+    while left > 0 {
+        let n = left.min(bs);
+        let opts = RecordBatchOptions::new().with_row_count(Some(n));
+        emit(RecordBatch::try_new_with_options(schema.clone(), vec![], &opts)?)?;
+        left -= n;
     }
+    Ok(())
 }
 
 fn surviving_row_groups(files: &[Arc<ParquetFile>], schema: &SchemaRef, filters: &[Expr]) -> Vec<Morsel> {
@@ -361,7 +362,7 @@ impl Source for ParquetSource {
     fn run_morsel(&self, morsel: usize, emit: Emit<'_>) -> Result<()> {
         let m = &self.morsels[morsel];
         if self.projection.is_empty() {
-            return self.emit_counts(self.fetch.map_or(m.rows, |f| m.rows.min(f)), emit);
+            return emit_counts(&self.schema, self.fetch.map_or(m.rows, |f| m.rows.min(f)), emit);
         }
         if let Some((bound, ranges)) = &self.bound {
             if ranges[morsel].is_some_and(|(min, max, nulls)| !bound.may_hold(min, max, nulls)) {

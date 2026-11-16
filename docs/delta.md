@@ -108,6 +108,23 @@ df.write_delta("warehouse/sales/copy", mode="append", schema_mode="merge")
 
 `iara.storage.delta_history(path)` and `iara.storage.delta_info(path)` return the commit list and the table details that `DESCRIBE HISTORY` and `DESCRIBE DETAIL` show.
 
+## Tables of many files
+
+A table loaded a little at a time has thousands of files. Planning a query on it reads the log only, never a data file:
+
+- Filters skip files by their partition values and by the statistics of the log (`minValues`, `maxValues`, `nullCount`).
+- The optimizer's row counts, value ranges and distinct counts come from the same statistics.
+- `count(*)`, `count(column)`, and `min` and `max` of integer, date and decimal columns are answered from the log. For a timestamp column the log's bounds are rounded to the millisecond, so they say which files can hold the value, and the footers of those files give it.
+- A `LIMIT` reads the first files that hold enough rows.
+
+The scan then opens each file it keeps when it reads it. On an object store the footers of up to `IARA_REMOTE_FILES` files (default 128) are requested at once, ahead of the threads that decode, and a file smaller than `IARA_FOOTER_GUESS_KB` costs one request, data included. A file larger than `IARA_SPLIT_MB` (default 128) is read as several morsels, so its row groups run on several threads.
+
+When a query keeps only a few files, they are opened while it is planned, as a table of plain Parquet files is.
+
+Statistics that a checkpoint keeps as a struct (`stats_parsed`, with `delta.checkpoint.writeStatsAsJson` off) are read too. A file without statistics is never skipped.
+
+`cargo run --release -p iara-core --example delta_many_files` times the plan and the run of a few queries on a table of 5,000 files, on a store that waits 20 ms per request.
+
 ## Limits
 
 These Delta features are not supported. A table that uses one fails to open with an error:
