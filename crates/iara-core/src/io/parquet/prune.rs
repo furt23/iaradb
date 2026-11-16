@@ -115,6 +115,20 @@ fn keep(filters: &[Expr], schema: &Schema, bounds: &dyn Bounds, units: usize) ->
     keep
 }
 
+/// Whether casting from `from` to `to` never puts a larger value before a smaller one,
+/// so the casts of a column's bounds bound its cast: a timestamp to its date
+/// (`cast(at as date) = date '2024-05-01'` skips by the bounds of `at`), and a date to
+/// a timestamp. Timestamps in a time zone other than UTC are left out: where clocks are
+/// set back across midnight, the local date goes back too.
+fn keeps_order(from: &DataType, to: &DataType) -> bool {
+    let utc = |tz: &Option<std::sync::Arc<str>>| tz.as_deref().is_none_or(|tz| matches!(tz, "UTC" | "utc" | "Z" | "+00:00" | "Etc/UTC"));
+    match (from, to) {
+        (DataType::Timestamp(_, tz), DataType::Date32) => utc(tz),
+        (DataType::Date32, DataType::Timestamp(_, tz)) => utc(tz),
+        _ => false,
+    }
+}
+
 /// Evaluate one pruning predicate against the bounds of the units.
 /// Returns `None` when the predicate cannot be used for pruning.
 fn prune_one(e: &Expr, schema: &Schema, b: &dyn Bounds) -> Option<BooleanArray> {
@@ -132,28 +146,36 @@ fn prune_one(e: &Expr, schema: &Schema, b: &dyn Bounds) -> Option<BooleanArray> 
             }
         }
         Expr::Binary { left, op, right } if op.is_comparison() => {
-            let (col, lit, op) = match (left.as_ref(), right.as_ref()) {
-                (Expr::Column(c), Expr::Literal(s)) => (c, s, *op),
-                (Expr::Literal(s), Expr::Column(c)) => (c, s, op.swap()),
+            // `via`: the bounds are cast as the column is, and compared in that type
+            let (col, lit, op, via) = match (left.as_ref(), right.as_ref()) {
+                (Expr::Column(c), Expr::Literal(s)) => (c, s, *op, None),
+                (Expr::Literal(s), Expr::Column(c)) => (c, s, op.swap(), None),
                 (Expr::Cast { expr, to, .. }, Expr::Literal(s)) => match expr.as_ref() {
-                    // numeric -> numeric casts preserve order (the literal is cast back exactly)
                     Expr::Column(c) => {
                         let ft = schema.field_with_name(&c.name).ok()?.data_type();
-                        if !(crate::types::is_numeric(ft) && crate::types::is_numeric(to)) {
-                            return None;
+                        if keeps_order(ft, to) {
+                            (c, s, *op, Some(to))
+                        } else {
+                            // numeric -> numeric casts preserve order (the literal is cast back exactly)
+                            if !(crate::types::is_numeric(ft) && crate::types::is_numeric(to)) {
+                                return None;
+                            }
+                            // fractional -> integer rounds, so the column's own range doesn't bound it
+                            if to.is_integer() && !ft.is_integer() {
+                                return None;
+                            }
+                            (c, s, *op, None)
                         }
-                        // fractional -> integer rounds, so the column's own range doesn't bound it
-                        if to.is_integer() && !ft.is_integer() {
-                            return None;
-                        }
-                        (c, s, *op)
                     }
                     _ => return None,
                 },
                 _ => return None,
             };
-            let mins = b.mins(&col.name)?;
-            let maxs = b.maxs(&col.name)?;
+            let (mut mins, mut maxs) = (b.mins(&col.name)?, b.maxs(&col.name)?);
+            if let Some(to) = via {
+                mins = arrow::compute::cast(&mins, to).ok()?;
+                maxs = arrow::compute::cast(&maxs, to).ok()?;
+            }
             let lit: Scalar = lit.cast_exact(mins.data_type())?;
             if lit.is_null() {
                 return None;

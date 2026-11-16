@@ -188,7 +188,10 @@ impl ParquetTable {
     /// table of Parquet files does, and their row groups are the morsels.
     /// Many are left to the scan, which opens each when it reads it: reading
     /// thousands of footers first would take longer than most queries.
-    fn listed_source(&self, projection: Vec<usize>, filters: &[Expr], fetch: Option<usize>) -> Result<Arc<dyn Source>> {
+    ///
+    /// `joins` are hash joins' build keys on columns of the table: a scan that opens its
+    /// files itself skips files with them. `None`: the scan cannot (it opens few files now).
+    fn listed_source(&self, projection: Vec<usize>, filters: &[Expr], fetch: Option<usize>, joins: Option<&[crate::io::ScanJoinKeys]>) -> Result<Option<Arc<dyn Source>>> {
         let mut keep = self.keep_by_stats(filters, self.partitions.as_ref().map(|p| p.keep(filters)));
         if let Some(rows) = fetch {
             self.keep_for_limit(&mut keep, rows as u64);
@@ -202,8 +205,10 @@ impl ParquetTable {
         let inner: Box<dyn FileScan> = match self.files.list().filter(|_| self.opens_in_scan(&kept, &file_projection, filters)) {
             Some(list) => {
                 let rows = kept.iter().map(|&i| self.log.rows_of(i)).collect();
-                Box::new(SplitSource::try_new(SplitRequest { list, kept, rows, table_schema: &self.file_schema, projection: file_projection, filters, fetch })?)
+                let gates = joins.unwrap_or_default().iter().map(|j| self.gate(j, &kept)).collect();
+                Box::new(SplitSource::try_new(SplitRequest { list, kept, rows, table_schema: &self.file_schema, projection: file_projection, filters, fetch, gates })?)
             }
+            None if joins.is_some() => return Ok(None),
             None => {
                 let files = self.files.select(&keep)?;
                 let req = source::ScanRequest { files: &files, table_schema: &self.file_schema, projection: file_projection, filters, fetch, conform: true, row_numbers: false, bound: None, joins: &[] };
@@ -212,15 +217,33 @@ impl ParquetTable {
         };
         let Some(parts) = &self.partitions else {
             let source: Box<dyn Source> = inner;
-            return Ok(Arc::from(source));
+            return Ok(Some(Arc::from(source)));
         };
-        Ok(Arc::new(PartitionedSource {
+        Ok(Some(Arc::new(PartitionedSource {
             inner,
             partitions: parts.select(&keep)?,
             layout,
             schema: Arc::new(self.schema.project(&projection)?),
             files: (files, self.files.len()),
-        }))
+        })))
+    }
+
+    /// The build keys of a join on a column of the table with, for each of the files
+    /// `kept`, the range of that column: a partition column's one value, or the bounds of
+    /// the log (where it has none, the row groups' own statistics still skip row groups).
+    fn gate(&self, join: &crate::io::ScanJoinKeys, kept: &[usize]) -> split_scan::Gate {
+        use arrow::array::{Array, AsArray};
+        let ranges = || -> Option<Vec<Option<(i64, i64)>>> {
+            let Some((parts, j)) = self.partition_column(join.column) else {
+                let all = self.log.key_ranges(self.file_schema.field(join.column))?;
+                return Some(kept.iter().map(|&i| all[i]).collect());
+            };
+            let values = crate::exec::join::to_i64(parts.values.column(j)).ok()?;
+            let values = values.as_primitive::<arrow::datatypes::Int64Type>();
+            // a null partition value matches no key
+            Some(kept.iter().map(|&i| Some(if values.is_valid(i) { (values.value(i), values.value(i)) } else { (1, 0) })).collect())
+        };
+        split_scan::Gate { keys: join.keys.clone(), ranges: ranges().unwrap_or_else(|| vec![None; kept.len()]) }
     }
 
     /// Whether the scan of the `kept` files opens them itself: when they make
@@ -407,10 +430,17 @@ impl TableProvider for ParquetTable {
         bound: Option<&crate::io::ScanBound>,
         joins: &[crate::io::ScanJoinKeys],
     ) -> Option<Result<Arc<dyn Source>>> {
-        if self.partitions.is_some() || self.conform {
+        let projection = projection.map_or_else(|| (0..self.schema.fields().len()).collect(), |p| p.to_vec());
+        if self.conform {
+            // the files of a table of many are skipped by a join's keys; a top k's bound is not taken
+            if bound.is_some() || joins.is_empty() {
+                return None;
+            }
+            return self.listed_source(projection, filters, None, Some(joins)).transpose();
+        }
+        if self.partitions.is_some() {
             return None;
         }
-        let projection = projection.map_or_else(|| (0..self.schema.fields().len()).collect(), |p| p.to_vec());
         let source = || -> Result<Arc<dyn Source>> {
             let files = self.files.all()?;
             let req = source::ScanRequest { files: &files, table_schema: &self.schema, projection, filters, fetch: None, conform: false, row_numbers: false, bound, joins };
@@ -433,7 +463,7 @@ impl TableProvider for ParquetTable {
             None => (0..self.schema.fields().len()).collect(),
         };
         if self.conform {
-            return self.listed_source(projection, filters, fetch);
+            return Ok(self.listed_source(projection, filters, fetch, None)?.expect("a scan without joins"));
         }
         let Some(parts) = &self.partitions else {
             let files = self.files.all()?;

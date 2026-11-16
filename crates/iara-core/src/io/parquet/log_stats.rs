@@ -13,12 +13,12 @@ use std::sync::Arc;
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, Decimal128Array, Float64Array, Int64Array, StringArray, UInt32Array};
 use arrow::compute::SortOptions;
 use arrow::compute::kernels::cmp;
-use arrow::datatypes::{DataType, Field, Float64Type, Schema};
+use arrow::datatypes::{DataType, Field, Float64Type, Int64Type, Schema};
 use parking_lot::Mutex;
 use rayon::prelude::*;
 
 use super::stats::extreme;
-use crate::delta::stats::{Bound, Leaves, RawStats, parse_bound};
+use crate::delta::stats::{Bound, Leaves, RawStats, parse_bound, upper_bound};
 use crate::io::{ColumnStats, StatsAgg};
 use crate::scalar::Scalar;
 
@@ -126,7 +126,9 @@ impl Part {
             for (section, upper) in [(raw.min_values, false), (raw.max_values, true)] {
                 let Some(section) = section else { continue };
                 leaves.walk(section, &mut |column, text| {
-                    let Some(bound) = parse_bound(&leaves.columns[column].1, text) else { return };
+                    let dt = &leaves.columns[column].1;
+                    let Some(bound) = parse_bound(dt, text) else { return };
+                    let bound = if upper { upper_bound(dt, bound) } else { bound };
                     let side = if upper { &mut part.columns[column].1 } else { &mut part.columns[column].0 };
                     side.get_or_insert_with(|| Values::empty(&bound, files)).set(file, bound);
                 });
@@ -213,6 +215,23 @@ impl LogStats {
         let mut cache = self.typed.lock();
         let sides = cache.entry(field.name().clone()).or_insert_with(|| [typed(&column.bounds[0]), typed(&column.bounds[1])]);
         sides[usize::from(upper)].clone().filter(|a| a.data_type() == field.data_type())
+    }
+
+    /// Per file, the range of an integer-like column's values as a hash join compares
+    /// them (`(1, 0)`, a range of nothing: the file has no value; `None`: unknown).
+    /// `None` when the log has no bounds of the column.
+    pub fn key_ranges(&self, field: &Field) -> Option<Vec<Option<(i64, i64)>>> {
+        let side = |upper: bool| crate::exec::join::to_i64(&self.bounds(field, upper)?).ok();
+        let (mins, maxs) = (side(false)?, side(true)?);
+        let (mins, maxs) = (mins.as_primitive::<Int64Type>(), maxs.as_primitive::<Int64Type>());
+        let range = |i: usize| {
+            if mins.is_valid(i) && maxs.is_valid(i) {
+                Some((mins.value(i), maxs.value(i)))
+            } else {
+                self.without_values(i, field.name()).then_some((1, 0))
+            }
+        };
+        Some((0..self.files).map(range).collect())
     }
 
     /// Whether the file has no value of the column: no rows, or only nulls.

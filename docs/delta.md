@@ -116,12 +116,26 @@ A table loaded a little at a time has thousands of files. Planning a query on it
 - The optimizer's row counts, value ranges and distinct counts come from the same statistics.
 - `count(*)`, `count(column)`, and `min` and `max` of integer, date and decimal columns are answered from the log. For a timestamp column the log's bounds are rounded to the millisecond, so they say which files can hold the value, and the footers of those files give it.
 - A `LIMIT` reads the first files that hold enough rows.
+- A cast of a timestamp column to a date skips files too: `cast(at as date) = date '2026-10-01'` is checked against the dates of the bounds of `at`.
 
 The scan then opens each file it keeps when it reads it. On an object store the footers of up to `IARA_REMOTE_FILES` files (default 128) are requested at once, ahead of the threads that decode, and a file smaller than `IARA_FOOTER_GUESS_KB` costs one request, data included. A file larger than `IARA_SPLIT_MB` (default 128) is read as several morsels, so its row groups run on several threads.
 
 When a query keeps only a few files, they are opened while it is planned, as a table of plain Parquet files is.
 
+### Joins
+
+A join on one integer, date or timestamp column skips files of the larger table with the keys of the smaller one. The smaller side is read first. The scan of the larger table then leaves out, before it requests anything of them:
+
+- the files whose bounds of the join column, in the log, hold none of the keys;
+- when the column is a partition column, the files of the partitions that are not among the keys.
+
+In the files it opens, it also skips the row groups whose statistics hold no key. Up to 65,536 distinct keys are checked one by one. More than that are checked as one range, from the smallest to the largest.
+
+This applies to joins that drop the rows without a match: inner joins, semi joins (`IN (subquery)`, `EXISTS`), and outer joins that keep the other side. The table may be filtered, or grouped by the join column, before the join. The plan shows `join_filter=[column]` on the join and on the scan, and `EXPLAIN ANALYZE` shows the morsels skipped. A `MERGE` or a join with a batch of new keys so reads only the files that can hold them.
+
 Statistics that a checkpoint keeps as a struct (`stats_parsed`, with `delta.checkpoint.writeStatsAsJson` off) are read too. A file without statistics is never skipped.
+
+Spark writes timestamp bounds in milliseconds, rounded down. A maximum on a whole millisecond is therefore read as the end of that millisecond.
 
 `cargo run --release -p iara-core --example delta_many_files` times the plan and the run of a few queries on a table of 5,000 files, on a store that waits 20 ms per request.
 

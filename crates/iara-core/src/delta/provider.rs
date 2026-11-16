@@ -198,6 +198,28 @@ impl TableProvider for DeltaTable {
         }
     }
 
+    fn create_gated_source(
+        &self,
+        projection: Option<&[usize]>,
+        filters: &[Expr],
+        bound: Option<&crate::io::ScanBound>,
+        joins: &[crate::io::ScanJoinKeys],
+    ) -> Option<Result<Arc<dyn Source>>> {
+        if let Some(next) = self.successor_table() {
+            return next.create_gated_source(projection, filters, bound, joins);
+        }
+        // a top k's bound is on a column of this table, as the files order them
+        if bound.is_some() {
+            return None;
+        }
+        let inner: Vec<usize> = match projection {
+            Some(p) => p.iter().map(|&i| self.to_inner[i]).collect(),
+            None => self.to_inner.clone(),
+        };
+        let joins: Vec<crate::io::ScanJoinKeys> = joins.iter().map(|j| crate::io::ScanJoinKeys { column: self.to_inner[j.column], keys: j.keys.clone() }).collect();
+        self.inner.create_gated_source(Some(&inner), filters, None, &joins)
+    }
+
     fn create_source(&self, projection: Option<&[usize]>, filters: &[Expr], fetch: Option<usize>) -> Result<Arc<dyn Source>> {
         if let Some(next) = self.successor_table() {
             return next.create_source(projection, filters, fetch);

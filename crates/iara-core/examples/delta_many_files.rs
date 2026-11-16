@@ -181,12 +181,18 @@ fn main() {
     let dim_ids: Vec<i64> = (0..100).map(|i| i * 997).collect();
     let segments: Vec<String> = dim_ids.iter().map(|i| format!("s{}", i % 5)).collect();
     let dim = RecordBatch::try_new(dim_schema.clone(), vec![Arc::new(Int64Array::from(dim_ids)), Arc::new(StringArray::from(segments))]).expect("a batch");
+    // the ids of a new batch: every fifth of the last 5,000
+    let recent_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+    let last = (files * rows) as i64;
+    let recent_ids: Vec<i64> = (last - 5_000..last).step_by(5).collect();
+    let recent = RecordBatch::try_new(recent_schema.clone(), vec![Arc::new(Int64Array::from(recent_ids))]).expect("a batch");
     // a session that has read nothing yet: no footer is cached
     let session = || {
         iara_core::io::object::clear_object_stores();
         let ctx = SessionContext::new();
         ctx.register_table("t", Arc::new(DeltaTable::open(&root, &storage, None).expect("the table"))).expect("registered");
         ctx.register_table("dim", Arc::new(iara_core::io::memory::MemTable::new(dim_schema.clone(), vec![dim.clone()]))).expect("registered");
+        ctx.register_table("recent", Arc::new(iara_core::io::memory::MemTable::new(recent_schema.clone(), vec![recent.clone()]))).expect("registered");
         ctx
     };
     let (before, started) = (requests(), Instant::now());
@@ -203,6 +209,7 @@ fn main() {
         ("ts range", format!("select sum(amount) from t where ts >= timestamp '{last_day} 00:00:00'")),
         ("min max", "select min(id), max(id), count(customer_id) from t".to_string()),
         ("join", "select d.segment, sum(t.amount) from t join dim d on t.customer_id = d.customer_id group by d.segment".to_string()),
+        ("join keys", "select count(*), sum(t.amount) from t join recent r on t.id = r.id".to_string()),
         ("full scan", "select region, sum(amount) from t group by region".to_string()),
     ];
     println!("{:<10} {:>10} {:>9} {:>10} {:>9}  plan", "query", "explain", "requests", "run", "requests");

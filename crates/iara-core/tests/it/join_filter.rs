@@ -179,8 +179,10 @@ fn the_key_reaches_the_scan_through_filters_and_projections() {
         "select count(*), sum(q.id) from (select id as id, k64 as kk, v from {p} where v > 100) q join dim d on q.kk = d.dk where d.dflag = 1",
         Some("k64"),
     );
-    // not through an aggregate, a limit or a window
-    check(&ctx, "select count(*), sum(q.m) from (select k64 as kk, max(id) as m from {p} group by k64) q join dim d on q.kk = d.dk where d.dflag = 1", None);
+    // through a grouping by the key: the groups the scan drops are the ones the join drops
+    check(&ctx, "select count(*), sum(q.m) from (select k64 as kk, max(id) as m from {p} group by k64) q join dim d on q.kk = d.dk where d.dflag = 1", Some("k64"));
+    // not through a grouping by something else, an aggregate as the key, or a limit
+    check(&ctx, "select count(*), sum(q.m) from (select g, max(k64) as kk, max(id) as m from {p} group by g) q join dim d on q.kk = d.dk where d.dflag = 1", None);
     check(&ctx, "select count(*), sum(q.id) from (select id, k64 as kk from {p} limit 30000) q join dim d on q.kk = d.dk where d.dflag = 1", None);
 }
 

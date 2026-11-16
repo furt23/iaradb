@@ -1127,7 +1127,7 @@ fn plan_join(j: &crate::logical::Join, _plan: &LogicalPlan) -> Result<PhysicalPl
 
 /// The scan a hash join can test its build keys on while the scan decodes:
 /// the scan under `probe` (through filters, plain column projections and
-/// aliases, which only drop rows or pass them on) that the join's probe key
+/// aliases, which only drop rows or pass them on, and groupings by the key) that the join's probe key
 /// `key` of type `key_type`, compared as `common`, reads as a column, and the
 /// build keys on its column. The key may be cast, if the cast keeps values.
 fn join_filter_target(probe: &LogicalPlan, key: &Expr, key_type: &DataType, common: &DataType) -> Option<(*const Scan, ScanJoinKeys)> {
@@ -1151,6 +1151,14 @@ fn join_filter_target(probe: &LogicalPlan, key: &Expr, key_type: &DataType, comm
             LogicalPlan::SubqueryAlias(a) => {
                 let i = a.schema.maybe_index_of(&col).ok()??;
                 col = a.input.schema().column(i);
+                plan = a.input.as_ref();
+            }
+            // a grouping by the key (a side of the join aggregated before it): the rows of a
+            // group share its key, so dropping the keys without a match drops whole groups,
+            // the ones the join drops
+            LogicalPlan::Aggregate(a) if !a.group_by.iter().chain(&a.aggs).any(|e| e.contains_subquery()) => {
+                let i = a.schema.maybe_index_of(&col).ok()??;
+                col = a.group_by.get(i)?.unalias_ref().as_column()?.clone();
                 plan = a.input.as_ref();
             }
             LogicalPlan::Scan(scan) if scan.fetch.is_none() => {

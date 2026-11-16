@@ -6,7 +6,8 @@
 //! and then, in order and under the prefetch memory budget, the column
 //! chunks of the row groups each split keeps. A worker waits only when its
 //! split has not arrived yet. A file as small as the footer request arrives
-//! whole with it, and costs that one request.
+//! whole with it, and costs that one request. A file the build keys of a
+//! join rule out costs none.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -22,7 +23,7 @@ use tokio::task::{JoinError, JoinHandle, JoinSet};
 
 use super::file::{ParquetFile, remote_file};
 use super::footer;
-use super::split_scan::{Scan, Split, SplitPlan};
+use super::split_scan::{Gate, Scan, Split, SplitPlan, gated_out};
 use super::table_files::FileList;
 use crate::error::{Result, WhError};
 use crate::exec::query::QueryHandle;
@@ -40,7 +41,8 @@ pub fn open_window() -> usize {
 /// A split ready to decode: its file, the row groups to read and their
 /// bytes. The memory budget they take is given back on drop.
 pub struct Fetched {
-    pub plan: SplitPlan,
+    /// `None`: the build keys of a join ruled the file out, and nothing was read
+    pub plan: Option<SplitPlan>,
     pub chunks: RangeChunks,
     _held: Option<Arc<Held>>,
 }
@@ -69,6 +71,7 @@ struct Shared {
     kept: Arc<Vec<usize>>,
     splits: Arc<Vec<Split>>,
     scan: Arc<Scan>,
+    gates: Arc<Vec<Gate>>,
     /// a file's footer, from its first split to its last
     opened: Vec<tokio::sync::Mutex<Option<Arc<ParquetFile>>>>,
     /// one per split
@@ -76,9 +79,13 @@ struct Shared {
 }
 
 impl Shared {
-    /// Open the file of split `i` (once for all its splits) and choose the row groups to read.
-    async fn plan(&self, i: usize) -> Result<SplitPlan> {
+    /// Open the file of split `i` (once for all its splits) and choose the row groups
+    /// to read. `None`: a join's build keys rule the file out.
+    async fn plan(&self, i: usize) -> Result<Option<SplitPlan>> {
         let split = &self.splits[i];
+        if gated_out(&self.gates, split.file) {
+            return Ok(None);
+        }
         let mut cell = self.opened[split.file].lock().await;
         let file = match &*cell {
             Some(f) => f.clone(),
@@ -98,11 +105,12 @@ impl Shared {
         let last = self.splits.get(i + 1).is_none_or(|next| next.file != split.file);
         *cell = (!last).then(|| file.clone());
         drop(cell);
-        Ok(self.scan.plan(file, &split.bytes))
+        Ok(Some(self.scan.plan(file, &split.bytes)))
     }
 
     /// The bytes of the column chunks `plan` reads (no request for a file held whole).
-    async fn fetch(plan: SplitPlan, held: Option<Arc<Held>>) -> Result<Fetched> {
+    async fn fetch(plan: Option<SplitPlan>, held: Option<Arc<Held>>) -> Result<Fetched> {
+        let Some(plan) = plan else { return Ok(Fetched { plan: None, chunks: RangeChunks::new(0, vec![]), _held: held }) };
         let ranges = plan.ranges();
         let size = plan.file.blob.len();
         let bytes = match plan.file.blob.object() {
@@ -110,7 +118,7 @@ impl Shared {
             _ => vec![],
         };
         let chunks = RangeChunks::new(size, ranges.iter().map(|r| r.start).zip(bytes).collect());
-        Ok(Fetched { plan, chunks, _held: held })
+        Ok(Fetched { plan: Some(plan), chunks, _held: held })
     }
 }
 
@@ -145,11 +153,11 @@ pub struct SplitFetcher {
 impl SplitFetcher {
     /// The `splits` of the files `kept` of `list`, all on an object store. With a
     /// `lookahead`, a scan that stops early (a LIMIT) leaves few fetched, unread splits behind.
-    pub(super) fn new(list: FileList, kept: Arc<Vec<usize>>, splits: Arc<Vec<Split>>, scan: Arc<Scan>, lookahead: Option<usize>) -> Self {
+    pub(super) fn new(list: FileList, kept: Arc<Vec<usize>>, splits: Arc<Vec<Split>>, scan: Arc<Scan>, gates: Arc<Vec<Gate>>, lookahead: Option<usize>) -> Self {
         let opened = kept.iter().map(|_| tokio::sync::Mutex::new(None)).collect();
         let slots = splits.iter().map(|_| Slot { state: Mutex::new(SlotState::Pending), ready: Condvar::new() }).collect();
         Self {
-            shared: Arc::new(Shared { list, kept, splits, scan, opened, slots }),
+            shared: Arc::new(Shared { list, kept, splits, scan, gates, opened, slots }),
             lookahead: lookahead.map(|n| n.max(1)),
             taken: watch::channel(0).0,
             started: AtomicBool::new(false),
@@ -219,7 +227,10 @@ async fn drive(shared: Arc<Shared>, lookahead: Option<usize>, mut taken: watch::
                 continue;
             }
         };
-        let held = Held::acquire(&sem, plan.bytes(), budget).await;
+        let held = match &plan {
+            Some(plan) => Held::acquire(&sem, plan.bytes(), budget).await,
+            None => None,
+        };
         let shared = shared.clone();
         fetches.spawn(async move { shared.slots[slot].fill(Shared::fetch(plan, held).await) });
         // finished fetches need no bookkeeping

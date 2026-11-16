@@ -81,6 +81,17 @@ impl JoinKeyFilter {
         self.attached.load(Ordering::Relaxed)
     }
 
+    /// The scanned column's type.
+    pub fn column_type(&self) -> &DataType {
+        &self.column_type
+    }
+
+    /// Whether rows whose keys all lie in `lo..=hi` (the column's values as the join
+    /// compares integers) may match a build key. True while no table is set: nothing is known.
+    pub fn may_match(&self, lo: i64, hi: i64) -> bool {
+        self.table.read().upgrade().and_then(|table| table.reaches(lo, hi)).unwrap_or(true)
+    }
+
     /// The rows of `keys` whose key is in the build table (None: all may be).
     pub fn mask(&self, keys: &ArrayRef) -> Option<BooleanArray> {
         if keys.data_type() != &self.column_type {
@@ -117,12 +128,30 @@ mod tests {
         // a column of another type is not tested
         let wide: ArrayRef = Arc::new(Int64Array::from(vec![1]));
         assert!(f.mask(&wide).is_none());
+        // ranges of the column: only those that hold a build key may match
+        assert!(f.may_match(2, 3) && f.may_match(4, 100) && f.may_match(i64::MIN, i64::MAX));
+        assert!(!f.may_match(3, 3) && !f.may_match(5, 100) && !f.may_match(-10, 1));
         // a spilled run, and the join being done
         f.clear();
+        assert!(f.may_match(3, 3));
         assert!(f.mask(&keys).is_none());
         f.set(&t);
         drop(t);
         assert!(!f.is_set() && f.mask(&keys).is_none());
+    }
+
+    #[test]
+    fn many_keys_are_known_by_their_range() {
+        let f = JoinKeyFilter::new("k", DataType::Int64);
+        let t = table((0..200_000).map(|k| Some(k * 2)).collect());
+        f.set(&t);
+        // inside the range every interval may match, even one that holds no key
+        assert!(f.may_match(1, 1) && f.may_match(399_998, 500_000));
+        assert!(!f.may_match(399_999, 500_000) && !f.may_match(-5, -1));
+        // no keys at all: nothing matches
+        let none = table(vec![None]);
+        f.set(&none);
+        assert!(!f.may_match(i64::MIN, i64::MAX));
     }
 
     #[test]

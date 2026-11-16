@@ -6,7 +6,9 @@
 //! columns whose names contain a dot get no statistics. Minimum and maximum
 //! are bounds, not necessarily values of the file: strings are cut at
 //! [`MAX_STRING_CHARS`], timestamps are written with millisecond precision
-//! (minimum rounded down, maximum up), as other Delta writers do.
+//! (minimum rounded down, maximum up). Other writers cut both down to the
+//! millisecond, so a maximum read back on a whole millisecond is taken to
+//! reach the end of it (see [`upper_bound`]).
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
@@ -87,7 +89,7 @@ impl FileStats {
         });
         let mut max = HashMap::new();
         walk(raw.max_values, &mut |path, dt, text| {
-            if let Some(v) = parse_scalar(dt, text) {
+            if let Some(v) = parse_bound(dt, text).and_then(|b| scalar_of(dt, upper_bound(dt, b))) {
                 max.insert(path, v);
             }
         });
@@ -388,9 +390,23 @@ pub(crate) fn parse_bound(dt: &DataType, text: &str) -> Option<Bound> {
     }
 }
 
+/// A maximum as read from the log, as a bound of the values: a timestamp on a whole
+/// millisecond may have lost its microseconds (Spark writes statistics in milliseconds,
+/// rounded down), so it bounds the values up to the end of that millisecond.
+pub(crate) fn upper_bound(dt: &DataType, bound: Bound) -> Bound {
+    match (dt, bound) {
+        (DataType::Timestamp(TimeUnit::Microsecond, _), Bound::Int(micros)) if micros % 1000 == 0 => Bound::Int(micros.saturating_add(999)),
+        (_, bound) => bound,
+    }
+}
+
 /// A bound read from JSON `text` as a value of type `dt`.
 fn parse_scalar(dt: &DataType, text: &str) -> Option<Scalar> {
-    match (dt, parse_bound(dt, text)?) {
+    scalar_of(dt, parse_bound(dt, text)?)
+}
+
+fn scalar_of(dt: &DataType, bound: Bound) -> Option<Scalar> {
+    match (dt, bound) {
         (DataType::Date32, Bound::Int(days)) => Some(Scalar::date32(days as i32)),
         (DataType::Timestamp(TimeUnit::Microsecond, tz), Bound::Int(micros)) => Some(Scalar::timestamp_us(micros, tz.clone())),
         (_, Bound::Int(v)) => Scalar::int64(v).cast_exact(dt),
@@ -464,7 +480,8 @@ mod tests {
         assert_eq!(back.min["name"], stats.min["name"]);
         assert_eq!(back.min["price"], stats.min["price"]);
         assert_eq!(back.min["at"], ts(1_000));
-        assert_eq!(back.max["at"], ts(2_000));
+        // read back as reaching the end of that millisecond
+        assert_eq!(back.max["at"], ts(2_999));
         assert_eq!(back.null_count, stats.null_count);
     }
 

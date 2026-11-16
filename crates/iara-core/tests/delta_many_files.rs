@@ -112,6 +112,9 @@ fn session(root: &str) -> SessionContext {
     let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true), Field::new("label", DataType::Utf8, true)]));
     let dim = RecordBatch::try_new(schema.clone(), vec![Arc::new(Int64Array::from(ids)), Arc::new(StringArray::from(labels))]).unwrap();
     ctx.register_table("dim", Arc::new(iara_core::io::memory::MemTable::new(schema, vec![dim]))).unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new("p", DataType::Int64, true)]));
+    let parts = RecordBatch::try_new(schema.clone(), vec![Arc::new(Int64Array::from(vec![Some(2), None]))]).unwrap();
+    ctx.register_table("parts", Arc::new(iara_core::io::memory::MemTable::new(schema, vec![parts]))).unwrap();
     ctx
 }
 
@@ -151,6 +154,8 @@ fn checks() -> Vec<(String, String)> {
         ("select p, count(*) from t group by p order by p limit 2".into(), format!("0,{0}|1,{0}", n / PARTITIONS)),
         ("select d.label, t.p, t.v from t join dim d on t.id = d.id order by d.label".into(), format!("a,0,3|b,4,null|c,7,{}", 4_799 % 7)),
         ("select name, count(*) from t where name is not null group by name order by name limit 1".into(), format!("n0,{}", (FILES / 2 * ROWS..n).filter(|i| i % 3 == 0).count())),
+        ("select count(*), sum(id) from t where id in (select id from dim)".into(), format!("3,{}", 3 + 1_000 + 4_799)),
+        ("select count(*), min(t.id) from t join parts d on t.p = d.p".into(), format!("{},{}", n / PARTITIONS, 2 * ROWS)),
     ]
 }
 
@@ -167,6 +172,15 @@ fn planning_a_query_opens_no_file() {
         let plan = ctx.sql(&sql).unwrap().explain(true).unwrap();
         assert_eq!(requests(bucket).since(before), StorageRequests::default(), "{sql}\n{plan}");
     }
+    // the bounds of a timestamp bound its date
+    let files = |sql: &str| {
+        let plan = ctx.sql(sql).unwrap().explain(true).unwrap();
+        let at = plan.find("files=").unwrap_or_else(|| panic!("{plan}")) + "files=".len();
+        plan[at..].split(|c: char| !c.is_ascii_digit()).next().unwrap().parse::<i64>().unwrap()
+    };
+    assert_eq!(files("select sum(v) from t where cast(at as date) = date '1970-01-01'"), FILES);
+    assert_eq!(files("select sum(v) from t where cast(at as date) >= date '1970-01-02'"), 0);
+    assert_eq!(requests(bucket).since(before), StorageRequests::default());
     // few files are left: they open with the plan, the others never do
     let plan = ctx.sql("select sum(v) from t where id >= 120 and id < 180").unwrap().explain(true).unwrap();
     assert!(plan.contains("files=2"), "{plan}");
@@ -216,6 +230,62 @@ fn counts_and_extremes_come_from_the_log() {
     // footer has the value
     assert_eq!(rows(&ctx, "select max(at) = timestamp '1970-01-01 00:00:07.198500' from t"), "true");
     assert_eq!(requests(bucket).since(before).get, 1);
+}
+
+#[test]
+fn the_build_keys_of_a_join_skip_files_before_they_are_opened() {
+    init();
+    let bucket = "many-join";
+    let root = format!("memory://{bucket}/t");
+    build(&root);
+    let fresh = || {
+        clear_object_stores();
+        (session(&root), requests(bucket))
+    };
+    // three files hold a key of `dim`, by the bounds of `id` in the log
+    let sql = "select d.label, t.v from t join dim d on t.id = d.id order by d.label";
+    let (ctx, before) = fresh();
+    let plan = ctx.sql(sql).unwrap().explain(true).unwrap();
+    assert_eq!(plan.matches("join_filter=[id]").count(), 2, "on the join and the scan in\n{plan}");
+    assert_eq!(rows(&ctx, sql), format!("a,3|b,null|c,{}", 4_799 % 7));
+    let scan = requests(bucket).since(before);
+    assert!((1..=3).contains(&scan.get), "{scan:?}");
+    // a semi join does the same
+    let (ctx, before) = fresh();
+    assert_eq!(rows(&ctx, "select count(*) from t where id in (select id from dim)"), "3");
+    assert!(requests(bucket).since(before).get <= 3);
+    // keys on a partition column: only the files of the partitions among them
+    let (ctx, before) = fresh();
+    assert_eq!(rows(&ctx, "select count(*), max(t.v) from t join parts d on t.p = d.p"), format!("{},6", total_rows() / PARTITIONS));
+    let scan = requests(bucket).since(before);
+    assert!((1..=(FILES / PARTITIONS) as u64).contains(&scan.get), "{scan:?}");
+    // a left join keeps every row of the table: nothing is skipped (`v` is null where id is 1000)
+    let (ctx, before) = fresh();
+    assert_eq!(rows(&ctx, "select count(*), count(d.id) from t left join dim d on t.id = d.id where t.v >= 0"), format!("{},2", total_rows() - total_rows() / 5));
+    assert!(requests(bucket).since(before).get >= FILES as u64 - 1);
+}
+
+#[test]
+fn a_merge_reads_the_files_its_keys_can_be_in() {
+    init();
+    let bucket = "many-merge";
+    let root = format!("memory://{bucket}/t");
+    build(&root);
+    clear_object_stores();
+    let ctx = SessionContext::new();
+    ctx.register_delta("t", &root, &StorageOptions::default(), None, false).unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true), Field::new("v", DataType::Int64, true)]));
+    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(Int64Array::from(vec![3, 1_000, 4_799])), Arc::new(Int64Array::from(vec![100, 200, 300]))]).unwrap();
+    ctx.register_table("batch", Arc::new(iara_core::io::memory::MemTable::new(schema, vec![batch]))).unwrap();
+    let before = requests(bucket);
+    let merged = rows(&ctx, "merge into t using batch b on t.id = b.id when matched then update set v = b.v");
+    // three rows, in version 1, of three files that are rewritten
+    assert!(merged.contains(",3,delta,1,3,3,"), "{merged}");
+    // the three files that hold a key are read (to find the rows, then to rewrite them), not all 96
+    let read = requests(bucket).since(before);
+    assert!(read.get <= 24, "{read:?}");
+    assert_eq!(rows(&ctx, "select id, v from t where id in (3, 1000, 4799) order by id"), "3,100|1000,200|4799,300");
+    assert_eq!(rows(&ctx, "select count(*), count(v) from t where id >= 0"), format!("{0},{1}", total_rows(), total_rows() - total_rows() / 5 + 1));
 }
 
 #[test]

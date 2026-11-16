@@ -55,7 +55,7 @@ pub fn int_like(dt: &DataType) -> bool {
     )
 }
 
-fn to_i64(a: &ArrayRef) -> Result<ArrayRef> {
+pub(crate) fn to_i64(a: &ArrayRef) -> Result<ArrayRef> {
     Ok(match a.data_type() {
         DataType::Int64 => a.clone(),
         DataType::Timestamp(_, _) | DataType::Date64 => {
@@ -90,6 +90,46 @@ enum BuildKeys {
     Rows { conv: RowConverter, rows: Rows, hashes: Vec<u64>, chains: Chains },
 }
 
+/// Build keys with more distinct values than this are known by their range only.
+const KEY_SET_MAX: usize = 1 << 16;
+
+/// The values of a single integer build key.
+#[derive(Debug, PartialEq)]
+enum KeyDomain {
+    /// sorted and distinct (possibly none)
+    Set(Vec<i64>),
+    /// too many to list: the smallest and the largest
+    Range(i64, i64),
+}
+
+impl KeyDomain {
+    fn of(values: &[i64], valid: Option<&NullBuffer>) -> KeyDomain {
+        let mut keys: Vec<i64> = match valid {
+            Some(v) => values.iter().zip(v.iter()).filter(|(_, ok)| *ok).map(|(k, _)| *k).collect(),
+            None => values.to_vec(),
+        };
+        if keys.len() > 4 * KEY_SET_MAX {
+            // not worth sorting to find out there are too many
+            let (lo, hi) = keys.iter().fold((i64::MAX, i64::MIN), |(lo, hi), &k| (lo.min(k), hi.max(k)));
+            return KeyDomain::Range(lo, hi);
+        }
+        keys.sort_unstable();
+        keys.dedup();
+        match (keys.first(), keys.last()) {
+            (Some(&lo), Some(&hi)) if keys.len() > KEY_SET_MAX => KeyDomain::Range(lo, hi),
+            _ => KeyDomain::Set(keys),
+        }
+    }
+
+    /// Whether a key may lie in `lo..=hi`.
+    fn reaches(&self, lo: i64, hi: i64) -> bool {
+        match self {
+            KeyDomain::Set(keys) => keys.get(keys.partition_point(|&k| k < lo)).is_some_and(|&k| k <= hi),
+            KeyDomain::Range(min, max) => lo <= *max && hi >= *min,
+        }
+    }
+}
+
 /// A chained hash table over row-format keys: bucket heads and the next row
 /// of each row's chain (row + 1; 0 ends a chain).
 struct Chains {
@@ -101,6 +141,8 @@ struct Chains {
 pub struct JoinHashTable {
     pub batch: RecordBatch,
     keys: BuildKeys,
+    /// the keys of a table on one integer column, for skipping what cannot match
+    domain: Option<KeyDomain>,
     matched: Option<Vec<AtomicBool>>,
     /// memory accounted for the table (released with it)
     memory: Option<Reservation>,
@@ -123,10 +165,12 @@ impl JoinHashTable {
         let valid = combined_nulls(&key_cols);
         let all_int = key_cols.iter().all(|c| int_like(c.data_type()));
         let mut ints = None;
+        let mut domain = None;
         if all_int {
             let cols = key_cols.iter().map(to_i64).collect::<Result<Vec<_>>>()?;
             if cols.len() == 1 {
                 ints = Some((cols[0].as_primitive::<arrow::datatypes::Int64Type>().values().clone(), None));
+                domain = ints.as_ref().map(|(values, _)| KeyDomain::of(values, valid.as_ref()));
             } else if let Some(packing) = packing_of(&cols) {
                 let KeyBatch::Int { values, .. } = pack(&cols, &packing, n) else { unreachable!() };
                 ints = Some((values, Some(packing)));
@@ -148,7 +192,7 @@ impl JoinHashTable {
             }
         }
         let matched = track_matches.then(|| (0..n).map(|_| AtomicBool::new(false)).collect());
-        Ok(Self { batch, keys, matched, memory: None })
+        Ok(Self { batch, keys, domain, matched, memory: None })
     }
 
     /// Keep `r` (the memory the table was built in) for as long as the table lives.
@@ -175,6 +219,13 @@ impl JoinHashTable {
             out.push(crate::exec::sort::take_batch(&self.batch, chunk)?);
         }
         Ok(out)
+    }
+
+    /// Whether a build key may lie in `lo..=hi` (as [`to_i64`] gives the values of the
+    /// probe column of a join on this one column). None when the table is not on a single
+    /// integer column.
+    pub fn reaches(&self, lo: i64, hi: i64) -> Option<bool> {
+        Some(self.domain.as_ref()?.reaches(lo, hi))
     }
 
     /// Whether each of `keys`, the probe column of a join on this one column,
