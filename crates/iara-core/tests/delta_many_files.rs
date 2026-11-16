@@ -281,9 +281,10 @@ fn a_merge_reads_the_files_its_keys_can_be_in() {
     let merged = rows(&ctx, "merge into t using batch b on t.id = b.id when matched then update set v = b.v");
     // three rows, in version 1, of three files that are rewritten
     assert!(merged.contains(",3,delta,1,3,3,"), "{merged}");
-    // the three files that hold a key are read (to find the rows, then to rewrite them), not all 96
+    // the three files that hold a key are read (to find the rows, then to rewrite them) with
+    // the log: 10 requests, where reading all 96 files took 103
     let read = requests(bucket).since(before);
-    assert!(read.get <= 24, "{read:?}");
+    assert!(read.get <= 12, "{read:?}");
     assert_eq!(rows(&ctx, "select id, v from t where id in (3, 1000, 4799) order by id"), "3,100|1000,200|4799,300");
     assert_eq!(rows(&ctx, "select count(*), count(v) from t where id >= 0"), format!("{0},{1}", total_rows(), total_rows() - total_rows() / 5 + 1));
 }
