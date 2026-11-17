@@ -271,12 +271,17 @@ fn fold_bytes(parts: usize) -> usize {
 /// (more, smaller partitions cost more slices and folds per row).
 const GROUPS_PER_PARTITION: f64 = 65536.0;
 
-/// Partitions for about `groups` groups in all.
+/// Partitions for about `groups` groups in all: as many as keep each table in cache,
+/// and at least a couple per thread (up to 64), so that every thread has one to work
+/// on. Not more for few groups: a partition makes a table of its own and gets its rows
+/// in slices, and 64 partitions of a hundred thousand groups spend more on tables and
+/// slices of a hundred rows than on the groups.
 fn num_partitions(groups: f64) -> usize {
     if let Some(p) = std::env::var("IARA_AGG_PARTITIONS").ok().and_then(|v| v.parse::<usize>().ok()) {
         return p.next_power_of_two();
     }
-    ((groups / GROUPS_PER_PARTITION).ceil().min(1e6) as usize).next_power_of_two().clamp(64, 1024)
+    let per_thread = (rayon::current_num_threads() * 2).next_power_of_two().clamp(2, 64);
+    ((groups / GROUPS_PER_PARTITION).ceil().min(1e6) as usize).next_power_of_two().clamp(per_thread, 1024)
 }
 
 #[inline(always)]
@@ -909,8 +914,9 @@ impl AggregateSink {
         }
         let nparts = parts.len();
         let shift = 64 - nparts.trailing_zeros();
-        // pre-aggregated tables: emit keys once and bucket their groups by partition
-        let prepared: Vec<Option<(Vec<ArrayRef>, Vec<Vec<u32>>)>> = locals
+        // pre-aggregated tables: emit keys once, in the order of their groups' partitions (one
+        // `take` per column: a partition's keys are then a slice), with the groups of each
+        let prepared: Vec<Option<(Vec<ArrayRef>, Vec<u32>, Vec<usize>)>> = locals
             .par_iter()
             .map(|l| -> Result<_> {
                 if l.num_groups() == 0 {
@@ -919,11 +925,24 @@ impl AggregateSink {
                 let keys = l.keys.as_ref().unwrap().emit()?;
                 let mut hashes = vec![];
                 self.partition_hashes(&keys, &mut hashes)?;
-                let mut idx: Vec<Vec<u32>> = vec![vec![]; nparts];
-                for (g, &h) in hashes.iter().enumerate() {
-                    idx[partition_of(h, shift)].push(g as u32);
+                // a counting sort of the groups by partition
+                let mut starts = vec![0usize; nparts + 1];
+                for &h in &hashes {
+                    starts[partition_of(h, shift) + 1] += 1;
                 }
-                Ok(Some((keys, idx)))
+                for p in 0..nparts {
+                    starts[p + 1] += starts[p];
+                }
+                let mut at = starts.clone();
+                let mut order = vec![0u32; hashes.len()];
+                for (g, &h) in hashes.iter().enumerate() {
+                    let p = partition_of(h, shift);
+                    order[at[p]] = g as u32;
+                    at[p] += 1;
+                }
+                let sel = UInt32Array::from(order.clone());
+                let keys = keys.iter().map(|k| take(k, &sel, None)).collect::<Result<Vec<_>, _>>()?;
+                Ok(Some((keys, order, starts)))
             })
             .collect::<Result<_>>()?;
         let finish = |p: usize, table: &mut Option<PartTable>, waiting: &mut Waiting| -> Result<Option<RecordBatch>> {
@@ -956,13 +975,13 @@ impl AggregateSink {
                 }
                 // partial states of pre-aggregated tables
                 for (li, l) in locals.iter().enumerate() {
-                    let Some((lkeys, idx)) = &prepared[li] else { continue };
-                    let src = &idx[p];
+                    let Some((lkeys, order, starts)) = &prepared[li] else { continue };
+                    let (from, to) = (starts[p], starts[p + 1]);
+                    let src = &order[from..to];
                     if src.is_empty() {
                         continue;
                     }
-                    let sel = UInt32Array::from(src.clone());
-                    let part_keys = lkeys.iter().map(|k| take(k, &sel, None)).collect::<Result<Vec<_>, _>>()?;
+                    let part_keys: Vec<ArrayRef> = lkeys.iter().map(|k| k.slice(from, to - from)).collect();
                     t.keys.intern(&part_keys, &mut t.gids)?;
                     let ng = t.keys.len();
                     t.accs.merge(&l.accs, src, &t.gids, ng)?;

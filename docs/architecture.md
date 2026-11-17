@@ -32,6 +32,7 @@ packages/ui             Studio UI components
 
 - A pipeline starts at a source split into morsels: a Parquet row group, a byte range of a CSV file, or a slice of an in-memory table. Worker threads take morsels from a Rayon pool and push them through the pipeline's operators into a thread-local sink. The sinks are merged when the input is exhausted.
 - Batches are 8,192 rows by default.
+- A small input still runs on every thread. An in-memory table is cut into morsels of 131,072 rows, or finer when that would leave fewer than a few per thread, down to one batch each. A Parquet row group too small to be read in row ranges (a page or two per column) is decoded once, and its batches are shared out among several morsels, so a join or a grouping above the scan is not left to one thread. The plan shows `decodes=` next to `morsels=` then.
 - Results reach the consumer in morsel order. `sink_parquet`, `sink_csv` and `sink_ndjson` write while the query runs, and `lf.iter_batches()` yields batches through a bounded channel.
 - Parquet strings are read as Arrow `Utf8View`.
 - Hive-style `key=value` directories become partition columns. Filters on them skip directories before any file is read.
@@ -85,7 +86,7 @@ Tables live in named schemas (`sales.orders`), and `main` is the default. When S
 |---|---|---|
 | `IARA_BATCH_SIZE` | `8192` | Rows per batch. |
 | `IARA_STRING_VIEW` | `1` | `0` reads Parquet strings as `Utf8`. |
-| `IARA_AGG_PARTITIONS` | `4 x threads` | Partitions of the shared tables a high-cardinality aggregation uses. |
+| `IARA_AGG_PARTITIONS` | 2 per thread, up to 64; more for many groups | Partitions of the shared tables a high-cardinality aggregation uses. |
 | `IARA_MEMORY_LIMIT` | 75% of RAM on Linux, none elsewhere | Bytes, a unit (`4GB`) or a percentage (`60%`). |
 | `IARA_SPILL_DIR` | system temp dir | Where spill files go. |
 | `IARA_PROFILE` | `0` | `1` prints pipeline timings to stderr. |

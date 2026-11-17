@@ -2,12 +2,20 @@
 //! row ranges when there are too few for the threads), with the column
 //! chunks of remote files prefetched ahead of the workers, several row
 //! groups of a file per fetch to keep the number of requests down.
+//!
+//! A small table is one or two row groups, of a page or two per column: its
+//! rows cannot be read in ranges without every range decompressing the same
+//! pages. Such a row group is decoded once and its batches are shared out
+//! among several morsels ([`Share`]), so the operators above the scan (a
+//! join, a grouping by a dozen keys) still run on every thread.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use arrow::array::Array;
 use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use parking_lot::Mutex;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::{ProjectionMask, RowNumber};
@@ -37,7 +45,36 @@ struct Morsel {
     /// (first row, row count) inside the row group
     range: Option<(usize, usize)>,
     rows: usize,
+    /// one of several morsels that share what one decode of these rows gives
+    share: Option<Share>,
 }
+
+/// A morsel's part of rows that are decoded once for several morsels: the
+/// `part`-th of `of` runs of the decoded batches.
+#[derive(Debug, Clone, Copy)]
+struct Share {
+    /// index into the source's decoded rows
+    decoded: usize,
+    part: usize,
+    of: usize,
+}
+
+/// Rows decoded once for the morsels that share them.
+struct Decoded {
+    /// the morsel whose bytes are fetched for all of them
+    first: usize,
+    /// the batches, from the first of the morsels to run to the last
+    batches: Mutex<Option<Arc<Vec<RecordBatch>>>>,
+    /// the morsels that share them
+    of: usize,
+    /// morsels that have not run yet
+    left: AtomicUsize,
+}
+
+/// Rows are decoded once for several morsels only while their columns take
+/// no more than this, uncompressed: they are all held until the last of the
+/// morsels has run.
+const SHARED_DECODE_BYTES: u64 = 128 << 20;
 
 pub struct ParquetSource {
     files: Vec<Arc<ParquetFile>>,
@@ -59,6 +96,8 @@ pub struct ParquetSource {
     /// a top k's bound, and per morsel the ordinal range (and NULLs) of the
     /// bound column's statistics: morsels past the bound are skipped
     bound: Option<(Arc<TopKBound>, Vec<Option<(i64, i64, bool)>>)>,
+    /// rows decoded once for several morsels (see [`Share`])
+    decoded: Vec<Decoded>,
 }
 
 pub struct ScanRequest<'a> {
@@ -101,6 +140,13 @@ impl ParquetSource {
         if let (true, Some(rows)) = (remote, req.fetch) {
             morsels = enough_rows(morsels, rows);
         }
+        // still too few for the threads: what a morsel decodes is shared out. Not where a
+        // morsel's rows are told by where it starts (row numbers), or skipped as a whole (a
+        // top k's bound)
+        let mut decoded = vec![];
+        if req.fetch.is_none() && !req.projection.is_empty() && !req.row_numbers && req.bound.is_none() {
+            (morsels, decoded) = share_for_parallelism(morsels, |m| decoded_bytes(req.files, m, req.table_schema, &req.projection));
+        }
         let mut src = ParquetSource {
             files: req.files.to_vec(),
             projection: req.projection,
@@ -115,6 +161,7 @@ impl ParquetSource {
             late_filter: None,
             numbered,
             bound: None,
+            decoded,
         };
         let bound = req.bound.filter(|_| !req.conform);
         if !req.conform && req.fetch.is_none() {
@@ -163,9 +210,12 @@ impl ParquetSource {
         // a LIMIT fetches them one by one
         let target = if self.fetch.is_some() { 0 } else { config::fetch_target() };
         let mut groups = FetchGroups::new(target);
-        for m in &self.morsels {
+        for (i, m) in self.morsels.iter().enumerate() {
             let f = &self.files[m.file];
-            groups.push(m.file, f.blob.object()?, chunk_ranges(&f.meta, m.row_group, &self.mask(m.file)));
+            // the bytes of rows decoded for several morsels are the first one's
+            let fetched = m.share.is_none_or(|s| self.decoded[s.decoded].first == i);
+            let ranges = if fetched { chunk_ranges(&f.meta, m.row_group, &self.mask(m.file)) } else { vec![] };
+            groups.push(m.file, f.blob.object()?, ranges);
         }
         let prefetcher = Prefetcher::grouped(groups.finish(), window);
         Some(if self.fetch.is_some() { prefetcher.with_lookahead(window) } else { prefetcher })
@@ -198,7 +248,7 @@ fn surviving_row_groups(files: &[Arc<ParquetFile>], schema: &SchemaRef, filters:
                 .iter()
                 .enumerate()
                 .filter(|(i, _)| keep[*i])
-                .map(|(i, rg)| Morsel { file: fi, row_group: i, range: None, rows: rg.num_rows() as usize })
+                .map(|(i, rg)| Morsel { file: fi, row_group: i, range: None, rows: rg.num_rows() as usize, share: None })
                 .collect()
         })
         .collect();
@@ -314,6 +364,39 @@ fn max_parts(files: &[Arc<ParquetFile>], first: Option<&Morsel>, projection: &[u
     pages().map_or(usize::MAX, |p| 1 + p / PAGES_PER_PART)
 }
 
+/// Uncompressed bytes of the columns a morsel decodes.
+fn decoded_bytes(files: &[Arc<ParquetFile>], m: &Morsel, schema: &SchemaRef, projection: &[usize]) -> u64 {
+    let rg = files[m.file].meta.metadata().row_group(m.row_group);
+    let read = |name: &str| projection.iter().any(|&c| schema.field(c).name() == name);
+    let bytes: i64 = rg.columns().iter().filter(|c| c.column_path().parts().first().is_some_and(|n| read(n))).map(|c| c.uncompressed_size()).sum();
+    (bytes.max(0) as u64).saturating_mul(m.rows as u64) / (rg.num_rows().max(1) as u64)
+}
+
+/// When the morsels are too few for the threads, each of those that decode
+/// little enough (see [`SHARED_DECODE_BYTES`], by `bytes`) becomes several
+/// that share its decoded batches: the morsels, and the rows decoded once.
+fn share_for_parallelism(morsels: Vec<Morsel>, bytes: impl Fn(&Morsel) -> u64) -> (Vec<Morsel>, Vec<Decoded>) {
+    let target = rayon::current_num_threads() * 3;
+    if morsels.is_empty() || morsels.len() >= target {
+        return (morsels, vec![]);
+    }
+    let total_rows: usize = morsels.iter().map(|m| m.rows).sum();
+    // a morsel is a batch or more: sharing one batch out would only copy it
+    let per = (total_rows / target).max(batch_size());
+    let (mut out, mut decoded) = (Vec::with_capacity(target), vec![]);
+    for m in morsels {
+        let of = m.rows / per;
+        if of < 2 || bytes(&m) > SHARED_DECODE_BYTES {
+            out.push(m);
+            continue;
+        }
+        decoded.push(Decoded { first: out.len(), batches: Mutex::new(None), of, left: AtomicUsize::new(of) });
+        let rows = m.rows.div_ceil(of);
+        out.extend((0..of).map(|part| Morsel { rows, share: Some(Share { decoded: decoded.len() - 1, part, of }), ..m.clone() }));
+    }
+    (out, decoded)
+}
+
 /// Split row groups into row ranges (at most `max_parts` each) if there is
 /// not enough parallelism.
 fn split_for_parallelism(morsels: Vec<Morsel>, max_parts: usize) -> Vec<Morsel> {
@@ -354,12 +437,42 @@ impl ParquetSource {
     }
 }
 
-impl Source for ParquetSource {
-    fn num_morsels(&self) -> usize {
-        self.morsels.len()
+impl ParquetSource {
+    /// The batches of the rows decoded once for several morsels (`self.decoded[at]`). The
+    /// first of the morsels to ask decodes them. One that asks meanwhile decodes the rows
+    /// later morsels share, which no thread has reached yet, and then waits: the scan
+    /// decodes on as many threads as it has such rows, and still gives them in order.
+    fn shared_batches(&self, at: usize) -> Result<Arc<Vec<RecordBatch>>> {
+        let decode = |d: &Decoded, cell: &mut Option<Arc<Vec<RecordBatch>>>| -> Result<Arc<Vec<RecordBatch>>> {
+            if let Some(batches) = cell {
+                return Ok(batches.clone());
+            }
+            let mut batches = vec![];
+            self.read_morsel(d.first, &mut |b| {
+                batches.push(b);
+                Ok(())
+            })?;
+            Ok(cell.insert(Arc::new(batches)).clone())
+        };
+        let mine = &self.decoded[at];
+        loop {
+            if let Some(mut cell) = mine.batches.try_lock() {
+                return decode(mine, &mut cell);
+            }
+            // rows no morsel has asked for yet (all of their morsels are left, none decoded)
+            let later = self.decoded[at + 1..].iter().find_map(|d| {
+                let cell = d.batches.try_lock()?;
+                (cell.is_none() && d.left.load(Ordering::Acquire) == d.of).then_some((d, cell))
+            });
+            match later {
+                Some((d, mut cell)) => decode(d, &mut cell)?,
+                None => return decode(mine, &mut mine.batches.lock()),
+            };
+        }
     }
 
-    fn run_morsel(&self, morsel: usize, emit: Emit<'_>) -> Result<()> {
+    /// Fetch (or take what was fetched for) a morsel and decode its rows.
+    fn read_morsel(&self, morsel: usize, emit: Emit<'_>) -> Result<()> {
         let m = &self.morsels[morsel];
         if self.projection.is_empty() {
             return emit_counts(&self.schema, self.fetch.map_or(m.rows, |f| m.rows.min(f)), emit);
@@ -387,7 +500,8 @@ impl Source for ParquetSource {
             // timed with the operators above: they filter what the scan did not
             let rg = f.meta.metadata().row_group(m.row_group);
             let chunks: i64 = (0..rg.num_columns()).filter(|&c| mask.leaf_included(c)).map(|c| rg.column(c).uncompressed_size()).sum();
-            let bytes = (chunks.max(0) as u64).saturating_mul(m.rows as u64) / (rg.num_rows().max(1) as u64);
+            let rows = m.share.map_or(m.rows, |s| m.rows * s.of).min(rg.num_rows() as usize);
+            let bytes = (chunks.max(0) as u64).saturating_mul(rows as u64) / (rg.num_rows().max(1) as u64);
             let mode = late.choose();
             let start = std::time::Instant::now();
             decode(input, mask, &part, mode.early().then_some(late), emit)?;
@@ -398,6 +512,33 @@ impl Source for ParquetSource {
         let part = Part { meta, row_group: m.row_group, rows: m.range, limit: self.fetch, schema: &c.decoded };
         decode(input, mask, &part, None, &mut |b| emit(c.adapt(b, &self.schema)?))
     }
+}
+
+impl Source for ParquetSource {
+    fn num_morsels(&self) -> usize {
+        self.morsels.len()
+    }
+
+    fn run_morsel(&self, morsel: usize, emit: Emit<'_>) -> Result<()> {
+        let Some(share) = self.morsels[morsel].share else { return self.read_morsel(morsel, emit) };
+        let decoded = &self.decoded[share.decoded];
+        if morsel != decoded.first {
+            // its slot holds no bytes, but is still taken, or the prefetch window stalls
+            if let Some(p) = &self.prefetch {
+                p.take(morsel, self.cancel.as_deref())?;
+            }
+        }
+        let batches = self.shared_batches(share.decoded)?;
+        if decoded.left.fetch_sub(1, Ordering::AcqRel) == 1 {
+            *decoded.batches.lock() = None;
+        }
+        // batches in the scan's order: morsel after morsel gives the rows as one decode would
+        let n = batches.len();
+        for b in &batches[share.part * n / share.of..(share.part + 1) * n / share.of] {
+            emit(b.clone())?;
+        }
+        Ok(())
+    }
 
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
@@ -405,7 +546,7 @@ impl Source for ParquetSource {
 
     fn morsel_confined(&self, col: usize) -> bool {
         // whole row groups of files laid out like the table (one type in all)
-        if self.columns.is_some() || self.morsels.iter().any(|m| m.range.is_some()) {
+        if self.columns.is_some() || self.morsels.iter().any(|m| m.range.is_some() || m.share.is_some()) {
             return false;
         }
         let Some(field) = self.schema.fields().get(col) else { return false };
@@ -423,8 +564,10 @@ impl Source for ParquetSource {
 
     fn describe(&self) -> String {
         let joins = self.late_filter.as_ref().map(|l| l.join_columns()).unwrap_or_default();
+        // morsels that share one decode of their rows
+        let shared = if self.decoded.is_empty() { String::new() } else { format!(", decodes={}", self.morsels.len() - self.decoded.iter().map(|d| d.of - 1).sum::<usize>()) };
         format!(
-            "ParquetScan[{}, files={}, row_groups={}/{}, morsels={}, columns={}{}]",
+            "ParquetScan[{}, files={}, row_groups={}/{}, morsels={}{shared}, columns={}{}]",
             scanned(&self.files),
             self.files.len(),
             self.row_groups_kept,
@@ -441,7 +584,7 @@ mod tests {
     use super::*;
 
     fn morsels(rows: &[usize]) -> Vec<Morsel> {
-        rows.iter().enumerate().map(|(i, &rows)| Morsel { file: 0, row_group: i, range: None, rows }).collect()
+        rows.iter().enumerate().map(|(i, &rows)| Morsel { file: 0, row_group: i, range: None, rows, share: None }).collect()
     }
 
     #[test]
