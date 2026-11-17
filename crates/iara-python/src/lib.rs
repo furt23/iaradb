@@ -26,6 +26,7 @@ mod analyze;
 mod delta;
 mod file_options;
 mod memory;
+mod pyobjects;
 mod runtime;
 mod storage;
 mod stream;
@@ -460,6 +461,63 @@ impl PyDataFrame {
     fn from_arrow(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
         let (schema, batches) = import_stream(obj)?;
         Ok(Self::new(schema, batches))
+    }
+
+    /// A frame from a dict of columns. Lists of plain values (integers, floats, booleans,
+    /// strings) are converted here; every other column by pyarrow, as `pyarrow.table` does.
+    #[staticmethod]
+    fn from_pydict(data: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let py = data.py();
+        let mut columns: Vec<(String, Option<arrow::array::ArrayRef>)> = Vec::with_capacity(data.len());
+        let others = PyDict::new(py);
+        for (name, values) in data.iter() {
+            let column = pyobjects::column_from_py(&values)?;
+            if column.is_none() {
+                others.set_item(&name, &values)?;
+            }
+            columns.push((name.extract()?, column));
+        }
+        if !others.is_empty() {
+            let (schema, batches) = import_stream(&py.import("pyarrow")?.call_method1("table", (others,))?)?;
+            let table = arrow::compute::concat_batches(&schema, &batches).py()?;
+            for (name, column) in columns.iter_mut().filter(|(_, c)| c.is_none()) {
+                *column = table.column_by_name(name).cloned();
+            }
+        }
+        let mut fields = Vec::with_capacity(columns.len());
+        let mut arrays = Vec::with_capacity(columns.len());
+        for (name, column) in columns {
+            let column = column.ok_or_else(|| PyValueError::new_err(format!("column '{name}' could not be converted")))?;
+            if arrays.first().is_some_and(|first: &arrow::array::ArrayRef| first.len() != column.len()) {
+                return Err(PyValueError::new_err(format!("column '{name}' has {} values, the columns before it {}", column.len(), arrays[0].len())));
+            }
+            fields.push(arrow::datatypes::Field::new(name, column.data_type().clone(), true));
+            arrays.push(column);
+        }
+        let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(fields));
+        let batch = if arrays.is_empty() { RecordBatch::new_empty(schema.clone()) } else { RecordBatch::try_new(schema.clone(), arrays).py()? };
+        Ok(Self::new(schema, vec![batch]))
+    }
+
+    /// One dict per row of columns given as lists (see [`pyobjects::rows_as_dicts`]).
+    #[staticmethod]
+    fn rows_as_dicts<'py>(names: &Bound<'py, pyo3::types::PyList>, columns: &Bound<'py, pyo3::types::PyList>) -> PyResult<Bound<'py, pyo3::types::PyList>> {
+        pyobjects::rows_as_dicts(names, columns)
+    }
+
+    /// Each column as a Python list, or `None` for a column whose type pyarrow converts
+    /// (see [`pyobjects`]).
+    fn to_pylists<'py>(&self, py: Python<'py>) -> PyResult<Vec<Option<Bound<'py, pyo3::types::PyList>>>> {
+        let batches = self.batches()?;
+        (0..self.schema.fields().len())
+            .map(|c| {
+                let chunks: Vec<arrow::array::ArrayRef> = batches.iter().map(|b| b.column(c).clone()).collect();
+                if chunks.is_empty() {
+                    return Ok(Some(pyo3::types::PyList::empty(py)));
+                }
+                pyobjects::column_to_py(py, &chunks)
+            })
+            .collect()
     }
 
     #[pyo3(signature = (requested_schema=None))]

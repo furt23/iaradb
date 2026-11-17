@@ -1162,15 +1162,23 @@ class DataFrame:
 
         return pl.from_arrow(self.to_arrow())
 
+    def _pylists(self) -> list[list[Any]]:
+        """Each column as a list of Python values. Integers, floats, booleans and strings
+        are converted by the engine; the other types by pyarrow."""
+        lists = self._df.to_pylists()
+        if any(values is None for values in lists):
+            table = self.to_arrow()
+            lists = [table.column(i).to_pylist() if values is None else values for i, values in enumerate(lists)]
+        return lists
+
     def to_pydict(self) -> dict[str, list[Any]]:
-        return self.to_arrow().to_pydict()
+        return dict(zip(self.columns, self._pylists()))
 
     def to_dicts(self) -> list[dict[str, Any]]:
-        return self.to_arrow().to_pylist()
+        return PyDataFrame.rows_as_dicts(self.columns, self._pylists())
 
     def rows(self) -> list[tuple[Any, ...]]:
-        d = self.to_pydict()
-        return list(zip(*d.values())) if d else []
+        return list(zip(*self._pylists()))
 
     def item(self) -> Any:
         if self.shape != (1, 1):
@@ -1447,9 +1455,9 @@ def from_polars(df: Any) -> DataFrame:
 
 
 def from_dict(data: Mapping[str, Sequence[Any]]) -> DataFrame:
-    import pyarrow as pa
-
-    return from_arrow(pa.table(dict(data)))
+    """From columns given by name. Lists of integers, floats, booleans or strings are
+    converted by the engine; every other column by pyarrow."""
+    return DataFrame(PyDataFrame.from_pydict(dict(data)))
 
 
 def _register(ctx: PySessionContext, name: str, obj: Any) -> None:
