@@ -194,6 +194,65 @@ mod tests {
     }
 
     #[test]
+    fn statistics_kept_as_a_struct_are_read_when_the_json_is_absent() {
+        use arrow::array::{Date32Array, Decimal128Array, TimestampMicrosecondArray};
+        use arrow::datatypes::{DataType, TimeUnit};
+
+        use crate::delta::stats::FileStats;
+        use crate::scalar::Scalar;
+
+        let strs = |v: Vec<Option<&str>>| -> ArrayRef { Arc::new(StringArray::from(v)) };
+        let longs = |v: Vec<Option<i64>>| -> ArrayRef { Arc::new(Int64Array::from(v)) };
+        let bounds = |id: i64, name: &str, day: i32, at: i64, price: i128| {
+            let at: ArrayRef = Arc::new(TimestampMicrosecondArray::from(vec![Some(at), None]).with_timezone("UTC"));
+            let price: ArrayRef = Arc::new(Decimal128Array::from(vec![Some(price), None]).with_precision_and_scale(10, 2).unwrap());
+            let day: ArrayRef = Arc::new(Date32Array::from(vec![Some(day), None]));
+            structure(vec![true, false], vec![("id", longs(vec![Some(id), None])), ("name", strs(vec![Some(name), None])), ("day", day), ("at", at), ("price", price)])
+        };
+        let nulls = structure(vec![true, false], vec![("id", longs(vec![Some(0), None])), ("name", longs(vec![Some(2), None]))]);
+        let parsed = structure(
+            vec![true, false],
+            vec![
+                ("numRecords", longs(vec![Some(3), None])),
+                ("minValues", bounds(-4, "a\"b", 19_737, 1_705_312_800_123_456, -5)),
+                ("maxValues", bounds(9, "z", 19_738, 1_705_312_800_123_457, 12_345)),
+                ("nullCount", nulls),
+            ],
+        );
+        let add_col = |stats: ArrayRef| {
+            structure(
+                vec![true, false],
+                vec![("path", strs(vec![Some("f.parquet"), None])), ("size", longs(vec![Some(11), None])), ("stats", stats), ("stats_parsed", parsed.clone())],
+            )
+        };
+        let protocol = structure(vec![false, true], vec![("minReaderVersion", longs(vec![None, Some(1)])), ("minWriterVersion", longs(vec![None, Some(2)]))]);
+        let stats_of = |stats: ArrayRef| {
+            let actions = parse_checkpoint(write(vec![("add", add_col(stats)), ("protocol", protocol.clone())])).unwrap();
+            actions.into_iter().find_map(|a| if let Action::Add(a) = a { a.stats } else { None })
+        };
+        // the JSON text wins when a file has it
+        assert_eq!(stats_of(strs(vec![Some("{\"numRecords\":7}"), None])).as_deref(), Some("{\"numRecords\":7}"));
+        let json = stats_of(strs(vec![None, None])).expect("statistics from the struct");
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("name", DataType::Utf8, true),
+            Field::new("day", DataType::Date32, true),
+            Field::new("at", DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())), true),
+            Field::new("price", DataType::Decimal128(10, 2), true),
+        ]);
+        let stats = FileStats::parse(&json, &schema).unwrap();
+        assert_eq!(stats.num_records, Some(3));
+        assert_eq!((stats.min["id"].as_i64(), stats.max["id"].as_i64()), (Some(-4), Some(9)));
+        assert_eq!((stats.min["name"].as_str(), stats.max["name"].as_str()), (Some("a\"b"), Some("z")));
+        assert_eq!((stats.min["day"].clone(), stats.max["day"].clone()), (Scalar::date32(19_737), Scalar::date32(19_738)));
+        // timestamps keep their microseconds
+        assert_eq!(stats.min["at"], Scalar::timestamp_us(1_705_312_800_123_456, Some("UTC".into())));
+        assert_eq!(stats.max["at"], Scalar::timestamp_us(1_705_312_800_123_457, Some("UTC".into())));
+        assert_eq!((stats.min["price"].clone(), stats.max["price"].clone()), (Scalar::decimal128(-5, 10, 2).unwrap(), Scalar::decimal128(12_345, 10, 2).unwrap()));
+        assert_eq!((stats.null_count["id"], stats.null_count["name"]), (0, 2));
+    }
+
+    #[test]
     fn v2_checkpoints_are_refused() {
         let strs = |v: Vec<Option<&str>>| -> ArrayRef { Arc::new(StringArray::from(v)) };
         let longs = |v: Vec<Option<i64>>| -> ArrayRef { Arc::new(Int64Array::from(v)) };

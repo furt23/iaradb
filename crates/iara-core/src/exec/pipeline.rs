@@ -22,6 +22,16 @@ use crate::exec::query::{PipelineProgress, QueryHandle};
 /// Target number of rows per morsel for in-memory sources.
 pub const MORSEL_ROWS: usize = 1 << 17;
 
+/// Rows per morsel for an in-memory input of `rows` rows. A large input is
+/// cut into morsels of [`MORSEL_ROWS`]. A small one would then be one or two
+/// morsels, read by one or two threads whatever the query does with the
+/// rows: it is cut finer, down to one batch per morsel, so that every thread
+/// gets a few.
+pub fn morsel_rows(rows: usize) -> usize {
+    let per_thread = rows / (rayon::current_num_threads() * 4).max(1);
+    per_thread.clamp(crate::io::parquet::batch_size().min(MORSEL_ROWS), MORSEL_ROWS)
+}
+
 pub type Emit<'a> = &'a mut dyn FnMut(RecordBatch) -> Result<()>;
 
 pub trait Source: Send + Sync {
@@ -469,7 +479,8 @@ pub struct MemorySource {
 
 impl MemorySource {
     pub fn new(batches: Vec<RecordBatch>, schema: SchemaRef, label: impl Into<String>) -> Self {
-        let batches = rechunk(batches, MORSEL_ROWS).into_iter().map(|b| parking_lot::Mutex::new(Some(b))).collect();
+        let rows = batches.iter().map(|b| b.num_rows()).sum();
+        let batches = rechunk(batches, morsel_rows(rows)).into_iter().map(|b| parking_lot::Mutex::new(Some(b))).collect();
         Self { batches, once: false, schema, label: label.into(), node: None }
     }
 

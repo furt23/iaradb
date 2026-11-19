@@ -93,9 +93,20 @@ impl FetchGroups {
 
 /// A fetched group's share of the prefetch budget, given back when the last
 /// of its morsels is done with its bytes.
-struct Held {
+pub(crate) struct Held {
     sem: Arc<Semaphore>,
     kib: usize,
+}
+
+impl Held {
+    /// Take `bytes` of the budget behind `sem` (in KiB; all of it for more than `budget`),
+    /// waiting until that much is free. `None` once the semaphore is closed.
+    pub(crate) async fn acquire(sem: &Arc<Semaphore>, bytes: u64, budget: u64) -> Option<Arc<Held>> {
+        let kib = (bytes.min(budget) >> 10).max(1) as u32;
+        let permit = sem.clone().acquire_many_owned(kib).await.ok()?;
+        permit.forget();
+        Some(Arc::new(Held { sem: sem.clone(), kib: kib as usize }))
+    }
 }
 
 impl Drop for Held {
@@ -238,14 +249,7 @@ impl Prefetcher {
                         }
                         let group = &groups[g];
                         // a group larger than the whole budget goes alone
-                        let kib = (group.bytes.min(budget) >> 10).max(1) as u32;
-                        let held = match sem.clone().acquire_many_owned(kib).await {
-                            Ok(permit) => {
-                                permit.forget();
-                                Some(Arc::new(Held { sem, kib: kib as usize }))
-                            }
-                            Err(_) => None,
-                        };
+                        let held = Held::acquire(&sem, group.bytes, budget).await;
                         fill(&slots[firsts[g]..firsts[g] + group.parts.len()], group.run().await, held);
                     }
                 })

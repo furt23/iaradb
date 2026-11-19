@@ -75,7 +75,7 @@ cargo test -p iara-core
 | `IARA_PROFILE` | `0` | `1` prints pipeline timings to stderr. |
 | `IARA_BATCH_SIZE` | `8192` | Rows per batch. |
 | `IARA_STRING_VIEW` | `1` | `0` reads Parquet strings as `Utf8`. |
-| `IARA_AGG_PARTITIONS` | `4 x threads` | Partitions of the shared tables a high-cardinality aggregation uses. |
+| `IARA_AGG_PARTITIONS` | 2 per thread, up to 64; more for many groups | Partitions of the shared tables a high-cardinality aggregation uses. |
 | `IARA_MEMORY_LIMIT` | 75% of RAM on Linux, none elsewhere | Bytes, a unit (`4GB`) or a percentage (`60%`). |
 | `IARA_SPILL_DIR` | system temp dir | Where spill files go. |
 | `IARA_RESULT_MEMORY` | `128MB` | Notebook results larger than this are kept on disk instead of in memory. |

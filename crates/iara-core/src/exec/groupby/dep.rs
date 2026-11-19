@@ -470,7 +470,7 @@ impl DepRecords {
                     }
                     offsets.push(data.len());
                 }
-                bytes_array(&field.dt, &data, &offsets, nulls)
+                bytes_array(&field.dt, std::borrow::Cow::Owned(data), &offsets, nulls)
             }
         }
     }

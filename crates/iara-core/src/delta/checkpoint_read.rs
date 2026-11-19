@@ -1,13 +1,19 @@
 //! Checkpoint Parquet files into actions. Reads what Spark, delta-rs and
 //! this crate write: the columns `txn`, `add`, `remove`, `metaData` and
 //! `protocol` (one non-null action per row); `commitInfo`, `domainMetadata`
-//! and the `*_parsed` statistics columns are not read. A checkpoint of the
-//! v2 layout (`checkpointMetadata` / `sidecar` rows) is refused.
+//! and `partitionValues_parsed` are not read. A checkpoint of the v2 layout
+//! (`checkpointMetadata` / `sidecar` rows) is refused.
+//!
+//! A table can keep the files' statistics as a struct (`add.stats_parsed`,
+//! `delta.checkpoint.writeStatsAsStruct`) and leave the JSON text out
+//! (`delta.checkpoint.writeStatsAsJson = false`). The struct is read only
+//! then, and turned into the JSON text an `add` carries: without it no
+//! filter could skip a file of such a table.
 
 use std::collections::BTreeMap;
 
 use arrow::array::{Array, ArrayRef, AsArray, RecordBatch};
-use arrow::datatypes::{DataType, Int32Type, Int64Type};
+use arrow::datatypes::{DataType, Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, TimeUnit, TimestampMicrosecondType};
 use bytes::Bytes;
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -17,12 +23,14 @@ use crate::error::{Result, WhError};
 
 const ACTION_COLUMNS: [&str; 5] = ["txn", "add", "remove", "metaData", "protocol"];
 const V2_COLUMNS: [&str; 2] = ["checkpointMetadata", "sidecar"];
-const SKIPPED_FIELDS: [&str; 2] = ["stats_parsed", "partitionValues_parsed"];
+const STATS_PARSED: &str = "stats_parsed";
+const PARTITION_VALUES_PARSED: &str = "partitionValues_parsed";
 
 /// The actions of one checkpoint file.
 pub fn parse_checkpoint(bytes: Bytes) -> Result<Vec<Action>> {
     let builder = ParquetRecordBatchReaderBuilder::try_new(bytes)?;
     let descr = builder.parquet_schema();
+    let parsed_stats = !has_json_stats(builder.metadata());
     let leaves: Vec<usize> = descr
         .columns()
         .iter()
@@ -30,7 +38,8 @@ pub fn parse_checkpoint(bytes: Bytes) -> Result<Vec<Action>> {
         .filter(|(_, c)| {
             let parts = c.path().parts();
             let root = parts[0].as_str();
-            (ACTION_COLUMNS.contains(&root) || V2_COLUMNS.contains(&root)) && !parts.iter().any(|p| SKIPPED_FIELDS.contains(&p.as_str()))
+            let skipped = |p: &String| p == PARTITION_VALUES_PARSED || (p == STATS_PARSED && !parsed_stats);
+            (ACTION_COLUMNS.contains(&root) || V2_COLUMNS.contains(&root)) && !parts.iter().any(skipped)
         })
         .map(|(i, _)| i)
         .collect();
@@ -43,6 +52,63 @@ pub fn parse_checkpoint(bytes: Bytes) -> Result<Vec<Action>> {
         read_batch(&batch?, &mut actions)?;
     }
     Ok(actions)
+}
+
+/// Whether any `add` of the checkpoint may carry its statistics as JSON text: the column
+/// `add.stats` exists and is not all nulls (by the row groups' statistics, where they say).
+fn has_json_stats(meta: &parquet::file::metadata::ParquetMetaData) -> bool {
+    let descr = meta.file_metadata().schema_descr();
+    let Some(leaf) = descr.columns().iter().position(|c| c.path().parts() == ["add", "stats"]) else { return false };
+    meta.row_groups().iter().any(|rg| {
+        let column = rg.column(leaf);
+        column.statistics().and_then(|s| s.null_count_opt()).is_none_or(|nulls| (nulls as i64) < column.num_values())
+    })
+}
+
+/// The JSON value of row `i` of a statistics column: structs as objects of their non-null
+/// fields, bounds as [`FileStats::parse`](super::stats::FileStats::parse) reads them (timestamps
+/// keep their microseconds). `None` for a null or a type statistics have no form for.
+fn stats_value(a: &ArrayRef, i: usize) -> Option<String> {
+    if a.is_null(i) {
+        return None;
+    }
+    let text = |v: &dyn std::fmt::Display| Some(v.to_string());
+    match a.data_type() {
+        DataType::Struct(fields) => {
+            let s = a.as_struct();
+            let items: Vec<String> = fields
+                .iter()
+                .zip(s.columns())
+                .filter_map(|(f, c)| Some(format!("{}:{}", serde_json::to_string(f.name()).ok()?, stats_value(c, i)?)))
+                .collect();
+            Some(format!("{{{}}}", items.join(",")))
+        }
+        DataType::Boolean => text(&a.as_boolean().value(i)),
+        DataType::Int8 => text(&a.as_primitive::<Int8Type>().value(i)),
+        DataType::Int16 => text(&a.as_primitive::<Int16Type>().value(i)),
+        DataType::Int32 => text(&a.as_primitive::<Int32Type>().value(i)),
+        DataType::Int64 => text(&a.as_primitive::<Int64Type>().value(i)),
+        DataType::Float32 => Some(a.as_primitive::<Float32Type>().value(i)).filter(|v| v.is_finite()).map(|v| v.to_string()),
+        DataType::Float64 => Some(a.as_primitive::<Float64Type>().value(i)).filter(|v| v.is_finite()).map(|v| v.to_string()),
+        DataType::Utf8 => serde_json::to_string(a.as_string::<i32>().value(i)).ok(),
+        DataType::LargeUtf8 => serde_json::to_string(a.as_string::<i64>().value(i)).ok(),
+        DataType::Date32 => {
+            let day = chrono::DateTime::from_timestamp(i64::from(a.as_primitive::<Date32Type>().value(i)) * 86_400, 0)?;
+            Some(format!("\"{}\"", day.format("%Y-%m-%d")))
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, tz) => {
+            let at = chrono::DateTime::from_timestamp_micros(a.as_primitive::<TimestampMicrosecondType>().value(i))?;
+            Some(format!("\"{}{}\"", at.format("%Y-%m-%dT%H:%M:%S%.6f"), if tz.is_some() { "Z" } else { "" }))
+        }
+        DataType::Decimal128(_, scale) => {
+            let v = a.as_primitive::<Decimal128Type>().value(i);
+            let (sign, digits, scale) = (if v < 0 { "-" } else { "" }, v.unsigned_abs().to_string(), (*scale).max(0) as usize);
+            let padded = format!("{digits:0>width$}", width = scale + 1);
+            let (int, frac) = padded.split_at(padded.len() - scale);
+            Some(if scale == 0 { format!("{sign}{int}") } else { format!("{sign}{int}.{frac}") })
+        }
+        _ => None,
+    }
 }
 
 fn invalid(what: &str) -> WhError {
@@ -154,7 +220,7 @@ fn read_add(c: Col, i: usize) -> Result<Add> {
         size: need(c.sub("size").i64(i), "add.size")?,
         modification_time: c.sub("modificationTime").i64(i).unwrap_or(0),
         data_change: c.sub("dataChange").bool(i).unwrap_or(true),
-        stats: c.sub("stats").str(i),
+        stats: c.sub("stats").str(i).or_else(|| c.sub(STATS_PARSED).0.and_then(|parsed| stats_value(parsed, i))),
         tags: c.sub("tags").map(i),
         deletion_vector: read_deletion_vector(c.sub("deletionVector"), i)?,
         base_row_id: c.sub("baseRowId").i64(i),

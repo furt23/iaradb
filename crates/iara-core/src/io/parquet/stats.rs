@@ -200,7 +200,7 @@ fn concat(arrays: &[ArrayRef]) -> Option<ArrayRef> {
 }
 
 /// The smallest (or largest) non-null value, displayed.
-fn extreme(a: &ArrayRef, largest: bool) -> Option<String> {
+pub(super) fn extreme(a: &ArrayRef, largest: bool) -> Option<String> {
     let order = SortOptions { descending: largest, nulls_first: false };
     let idx = arrow::compute::sort_to_indices(a, Some(order), Some(1)).ok()?;
     let i = idx.values().first().copied()? as usize;

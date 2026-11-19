@@ -27,7 +27,8 @@ struct Entry {
 }
 
 pub struct TableFiles {
-    entries: Vec<Entry>,
+    /// shared with the scans that open the files themselves
+    entries: Arc<Vec<Entry>>,
     /// the first file, whose schema the others must match
     first: Arc<ParquetFile>,
     /// files may differ from each other (a Delta table: the scan projects
@@ -70,8 +71,8 @@ impl TableFiles {
                 source: Some(DataFile::Object(o)),
                 file: if i == 0 { OnceLock::from(first.clone()) } else { OnceLock::new() },
             })
-            .collect();
-        Ok(Self { entries, first, conform: false })
+            .collect::<Vec<_>>();
+        Ok(Self { entries: Arc::new(entries), first, conform: false })
     }
 
     /// The `listed` files (with their sizes), only the first opened now: a file whose footer
@@ -87,8 +88,8 @@ impl TableFiles {
                 source: Some(f),
                 file: if i == 0 { OnceLock::from(first.clone()) } else { OnceLock::new() },
             })
-            .collect();
-        Ok(Self { entries, first, conform: true })
+            .collect::<Vec<_>>();
+        Ok(Self { entries: Arc::new(entries), first, conform: true })
     }
 
     /// Files opened already, in order; they must share one schema.
@@ -97,8 +98,8 @@ impl TableFiles {
         for f in &files[1..] {
             check_schema(&first, f)?;
         }
-        let entries = files.into_iter().map(|f| Entry { name: f.name.clone(), size: f.blob.len(), source: None, file: OnceLock::from(f) }).collect();
-        Ok(Self { entries, first, conform: false })
+        let entries: Vec<Entry> = files.into_iter().map(|f| Entry { name: f.name.clone(), size: f.blob.len(), source: None, file: OnceLock::from(f) }).collect();
+        Ok(Self { entries: Arc::new(entries), first, conform: false })
     }
 
     pub fn len(&self) -> usize {
@@ -144,6 +145,17 @@ impl TableFiles {
         Ok(self.entries.iter().zip(keep).filter(|(_, k)| **k).filter_map(|(e, _)| e.file.get().cloned()).collect())
     }
 
+    /// The list of the files, for a scan that opens them itself. `None`: a table whose
+    /// files are open already.
+    pub fn list(&self) -> Option<FileList> {
+        self.conform.then(|| FileList(self.entries.clone()))
+    }
+
+    /// Listed size of a file.
+    pub fn size(&self, i: usize) -> u64 {
+        self.entries[i].size
+    }
+
     /// Rows of the table: exact once every file is open, else estimated from
     /// the first file and the listed sizes.
     pub fn rows(&self) -> usize {
@@ -154,6 +166,25 @@ impl TableFiles {
         let total: u64 = self.entries.iter().map(|e| e.size).sum();
         let per_byte = rows(&self.first) as f64 / self.first.blob.len().max(1) as f64;
         (per_byte * total as f64).round() as usize
+    }
+}
+
+/// The files of a table that lists them (each has a place to open it from).
+#[derive(Clone)]
+pub struct FileList(Arc<Vec<Entry>>);
+
+impl FileList {
+    pub fn source(&self, i: usize) -> &DataFile {
+        self.0[i].source.as_ref().expect("a listed file has a source")
+    }
+
+    /// Path or URL.
+    pub fn name(&self, i: usize) -> &str {
+        &self.0[i].name
+    }
+
+    pub fn size(&self, i: usize) -> u64 {
+        self.0[i].size
     }
 }
 

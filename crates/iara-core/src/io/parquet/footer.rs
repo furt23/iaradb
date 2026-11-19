@@ -28,7 +28,8 @@ pub fn load_all(files: &[ObjectFile]) -> Result<Vec<Footer>> {
     block_on(stream::iter(files).map(load).buffered(CONCURRENT).try_collect())
 }
 
-async fn load(file: &ObjectFile) -> Result<Footer> {
+/// The footer of one file: from the cache, else one request (two for a large footer).
+pub async fn load(file: &ObjectFile) -> Result<Footer> {
     let key = file.version_key();
     if let Some(meta) = meta_cache::get(&key) {
         return Ok(Footer { meta, content: None });

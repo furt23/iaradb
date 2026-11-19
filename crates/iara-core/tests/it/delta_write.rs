@@ -276,7 +276,9 @@ fn a_failing_query_changes_nothing() {
 
     for (mode, parts) in [(WriteMode::Append, vec![]), (WriteMode::Overwrite, vec![]), (WriteMode::Replace, vec![]), (WriteMode::Replace, vec!["id"])] {
         let err = write(&bad, &path, mode, &parts, false).unwrap_err().to_string();
-        assert!(err.to_lowercase().contains("cast") || err.contains("oops"), "{err}");
+        // by `id` the query also has too many partitions: threads meet either error first
+        let too_many = !parts.is_empty() && err.contains("partitions");
+        assert!(err.to_lowercase().contains("cast") || err.contains("oops") || too_many, "{err}");
         assert_eq!(files_under(&path), before, "{mode:?}: no data file, no commit");
         assert_eq!(snapshot(&path).version, 0);
     }

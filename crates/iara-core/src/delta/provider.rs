@@ -12,7 +12,6 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 
 use super::snapshot::{Snapshot, latest_version};
-use super::stats::FileStats;
 use super::LogStore;
 use crate::error::Result;
 use crate::exec::pipeline::Source;
@@ -21,8 +20,8 @@ use crate::expr::Expr;
 use crate::io::location::url_scheme;
 use crate::io::memory::MemTable;
 use crate::io::options::StorageOptions;
-use crate::io::parquet::{ParquetTable, TableFile, file::engine_schema};
-use crate::io::{ColumnStats, TableProvider};
+use crate::io::parquet::{LogStats, ParquetTable, TableFile, file::engine_schema};
+use crate::io::{ColumnStats, StatsAgg, TableProvider};
 
 /// Which version of a table to read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,11 +84,12 @@ impl DeltaTable {
 
     pub fn from_snapshot(location: &str, storage: &StorageOptions, snapshot: Snapshot) -> Result<DeltaTable> {
         let schema = Arc::new(engine_schema(&snapshot.schema));
-        let (files, rows) = table_files(location, &snapshot);
+        let (files, stats) = table_files(location, &snapshot);
+        let rows = stats.rows().map(|n| n as usize);
         let (inner, to_inner): (Arc<dyn TableProvider>, Vec<usize>) = if files.is_empty() {
             (Arc::new(MemTable::new(schema.clone(), vec![])), (0..schema.fields().len()).collect())
         } else {
-            let table = ParquetTable::from_files(files, &snapshot.schema, &snapshot.partition_columns, storage)?;
+            let table = ParquetTable::from_files(files, stats, &snapshot.schema, &snapshot.partition_columns, storage)?;
             let placed = table.schema();
             let to_inner = schema.fields().iter().map(|f| Ok(placed.index_of(f.name())?)).collect::<Result<Vec<_>>>()?;
             (Arc::new(table), to_inner)
@@ -130,26 +130,19 @@ fn resolve(root: &str, path: &str) -> String {
     Path::new(root).join(path).display().to_string()
 }
 
-/// The files of the snapshot, and the table's row count if the log gives it.
-pub(crate) fn table_files(root: &str, snapshot: &Snapshot) -> (Vec<TableFile>, Option<usize>) {
-    let mut rows = Some(0usize);
+/// The files of the snapshot, and what the log says of each.
+pub(crate) fn table_files(root: &str, snapshot: &Snapshot) -> (Vec<TableFile>, LogStats) {
     let files = snapshot
         .files
         .iter()
         .map(|add| {
-            let stats = add.stats.as_deref().and_then(|s| FileStats::parse(s, &snapshot.schema).ok());
-            rows = rows.zip(stats.as_ref().and_then(|s| s.num_records)).map(|(a, b)| a + b as usize);
             // an empty value is a null (Delta writers write it for nulls)
             let value = |c: &String| add.partition_values.get(c).cloned().flatten().filter(|v| !v.is_empty());
-            TableFile {
-                path: resolve(root, &add.file_path()),
-                size: add.size.max(0) as u64,
-                partition_values: snapshot.partition_columns.iter().map(value).collect(),
-                stats,
-            }
+            TableFile { path: resolve(root, &add.file_path()), size: add.size.max(0) as u64, partition_values: snapshot.partition_columns.iter().map(value).collect() }
         })
         .collect();
-    (files, rows)
+    let stats: Vec<Option<&str>> = snapshot.files.iter().map(|add| add.stats.as_deref()).collect();
+    (files, LogStats::parse(&stats, &snapshot.schema))
 }
 
 impl TableProvider for DeltaTable {
@@ -182,11 +175,49 @@ impl TableProvider for DeltaTable {
         Some(self.schema.fields().iter().filter_map(|f| stats.iter().find(|s| s.column == *f.name()).cloned()).collect())
     }
 
+    fn stats_aggregates(&self, aggs: &[StatsAgg]) -> Option<Vec<crate::scalar::Scalar>> {
+        if let Some(next) = self.successor_table() {
+            return next.stats_aggregates(aggs);
+        }
+        let inner: Vec<StatsAgg> = aggs
+            .iter()
+            .map(|a| match *a {
+                StatsAgg::Rows => StatsAgg::Rows,
+                StatsAgg::NonNull(c) => StatsAgg::NonNull(self.to_inner[c]),
+                StatsAgg::Min(c) => StatsAgg::Min(self.to_inner[c]),
+                StatsAgg::Max(c) => StatsAgg::Max(self.to_inner[c]),
+            })
+            .collect();
+        self.inner.stats_aggregates(&inner)
+    }
+
     fn origin(&self) -> Option<TableRead> {
         match self.successor_table() {
             Some(next) => next.origin(),
             None => Some(TableRead { location: self.root.clone(), version: Some(self.snapshot.version) }),
         }
+    }
+
+    fn create_gated_source(
+        &self,
+        projection: Option<&[usize]>,
+        filters: &[Expr],
+        bound: Option<&crate::io::ScanBound>,
+        joins: &[crate::io::ScanJoinKeys],
+    ) -> Option<Result<Arc<dyn Source>>> {
+        if let Some(next) = self.successor_table() {
+            return next.create_gated_source(projection, filters, bound, joins);
+        }
+        // a top k's bound is on a column of this table, as the files order them
+        if bound.is_some() {
+            return None;
+        }
+        let inner: Vec<usize> = match projection {
+            Some(p) => p.iter().map(|&i| self.to_inner[i]).collect(),
+            None => self.to_inner.clone(),
+        };
+        let joins: Vec<crate::io::ScanJoinKeys> = joins.iter().map(|j| crate::io::ScanJoinKeys { column: self.to_inner[j.column], keys: j.keys.clone() }).collect();
+        self.inner.create_gated_source(Some(&inner), filters, None, &joins)
     }
 
     fn create_source(&self, projection: Option<&[usize]>, filters: &[Expr], fetch: Option<usize>) -> Result<Arc<dyn Source>> {

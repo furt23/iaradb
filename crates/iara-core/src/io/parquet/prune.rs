@@ -2,7 +2,7 @@
 //! of a file (its Parquet footer) and the files of a Delta table (the
 //! statistics in its log). Both give per-unit bounds through [`Bounds`].
 
-use arrow::array::{Array, ArrayRef, BooleanArray, new_null_array};
+use arrow::array::{Array, ArrayRef, BooleanArray};
 use arrow::compute::kernels::cmp;
 use arrow::compute::{and, or};
 use arrow::datatypes::{DataType, Schema};
@@ -10,7 +10,7 @@ use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::file::metadata::RowGroupMetaData;
 
 use super::file::ParquetFile;
-use crate::delta::stats::FileStats;
+use super::log_stats::LogStats;
 use crate::expr::{Expr, Operator};
 use crate::scalar::Scalar;
 
@@ -56,41 +56,36 @@ impl Bounds for RowGroups<'_> {
 /// The files of a Delta table, by the statistics of their `add` actions.
 struct Files<'a> {
     schema: &'a Schema,
-    stats: &'a [Option<FileStats>],
+    stats: &'a LogStats,
 }
 
 impl Files<'_> {
-    /// One value per file (null where unknown) as an array of the column's type.
-    fn column(&self, name: &str, pick: impl Fn(&FileStats) -> Option<&Scalar>) -> Option<ArrayRef> {
-        // statistics are keyed by dotted path; floats are left out (NaN is not part of the bounds)
-        let ty = self.schema.field_with_name(name).ok()?.data_type();
-        if name.contains('.') || matches!(ty, DataType::Float16 | DataType::Float32 | DataType::Float64) {
+    /// The bounds of a column that can skip files: statistics are keyed by dotted path, and
+    /// floats are left out (NaN is not part of the bounds).
+    fn bounds(&self, name: &str, upper: bool) -> Option<ArrayRef> {
+        let field = self.schema.field_with_name(name).ok()?;
+        if name.contains('.') || matches!(field.data_type(), DataType::Float16 | DataType::Float32 | DataType::Float64) {
             return None;
         }
-        let values: Vec<Option<&Scalar>> = self.stats.iter().map(|s| s.as_ref().and_then(&pick)).collect();
-        let native = values.iter().flatten().next()?.data_type().clone();
-        let parts: Vec<ArrayRef> = values.iter().map(|v| v.map_or_else(|| new_null_array(&native, 1), |v| v.array().clone())).collect();
-        let parts: Vec<&dyn Array> = parts.iter().map(|a| a.as_ref()).collect();
-        let all = arrow::compute::concat(&parts).ok()?;
-        if &native == ty { Some(all) } else { arrow::compute::cast(&all, ty).ok() }
+        self.stats.bounds(field, upper)
     }
 }
 
 impl Bounds for Files<'_> {
     fn mins(&self, column: &str) -> Option<ArrayRef> {
-        self.column(column, |s| s.min.get(column))
+        self.bounds(column, false)
     }
 
     fn maxs(&self, column: &str) -> Option<ArrayRef> {
-        self.column(column, |s| s.max.get(column))
+        self.bounds(column, true)
     }
 
     fn null_counts(&self, column: &str) -> Option<Vec<Option<u64>>> {
-        (!column.contains('.')).then(|| self.stats.iter().map(|s| s.as_ref().and_then(|s| s.null_count.get(column).copied())).collect())
+        (!column.contains('.')).then(|| self.stats.null_counts(column))
     }
 
     fn row_counts(&self) -> Option<Vec<Option<u64>>> {
-        Some(self.stats.iter().map(|s| s.as_ref().and_then(|s| s.num_records)).collect())
+        Some(self.stats.row_counts())
     }
 }
 
@@ -100,9 +95,9 @@ pub fn keep_row_groups(filters: &[Expr], schema: &Schema, file: &ParquetFile) ->
     keep(filters, schema, &RowGroups { schema, file, rgs }, rgs.len())
 }
 
-/// Which files (by their log statistics, `None`: unknown) may hold rows passing all `filters`.
-pub fn keep_files(filters: &[Expr], schema: &Schema, stats: &[Option<FileStats>]) -> Vec<bool> {
-    keep(filters, schema, &Files { schema, stats }, stats.len())
+/// Which of `files` files (by their log statistics) may hold rows passing all `filters`.
+pub fn keep_files(filters: &[Expr], schema: &Schema, stats: &LogStats, files: usize) -> Vec<bool> {
+    keep(filters, schema, &Files { schema, stats }, files)
 }
 
 fn keep(filters: &[Expr], schema: &Schema, bounds: &dyn Bounds, units: usize) -> Vec<bool> {
@@ -118,6 +113,20 @@ fn keep(filters: &[Expr], schema: &Schema, bounds: &dyn Bounds, units: usize) ->
         }
     }
     keep
+}
+
+/// Whether casting from `from` to `to` never puts a larger value before a smaller one,
+/// so the casts of a column's bounds bound its cast: a timestamp to its date
+/// (`cast(at as date) = date '2024-05-01'` skips by the bounds of `at`), and a date to
+/// a timestamp. Timestamps in a time zone other than UTC are left out: where clocks are
+/// set back across midnight, the local date goes back too.
+fn keeps_order(from: &DataType, to: &DataType) -> bool {
+    let utc = |tz: &Option<std::sync::Arc<str>>| tz.as_deref().is_none_or(|tz| matches!(tz, "UTC" | "utc" | "Z" | "+00:00" | "Etc/UTC"));
+    match (from, to) {
+        (DataType::Timestamp(_, tz), DataType::Date32) => utc(tz),
+        (DataType::Date32, DataType::Timestamp(_, tz)) => utc(tz),
+        _ => false,
+    }
 }
 
 /// Evaluate one pruning predicate against the bounds of the units.
@@ -137,28 +146,36 @@ fn prune_one(e: &Expr, schema: &Schema, b: &dyn Bounds) -> Option<BooleanArray> 
             }
         }
         Expr::Binary { left, op, right } if op.is_comparison() => {
-            let (col, lit, op) = match (left.as_ref(), right.as_ref()) {
-                (Expr::Column(c), Expr::Literal(s)) => (c, s, *op),
-                (Expr::Literal(s), Expr::Column(c)) => (c, s, op.swap()),
+            // `via`: the bounds are cast as the column is, and compared in that type
+            let (col, lit, op, via) = match (left.as_ref(), right.as_ref()) {
+                (Expr::Column(c), Expr::Literal(s)) => (c, s, *op, None),
+                (Expr::Literal(s), Expr::Column(c)) => (c, s, op.swap(), None),
                 (Expr::Cast { expr, to, .. }, Expr::Literal(s)) => match expr.as_ref() {
-                    // numeric -> numeric casts preserve order (the literal is cast back exactly)
                     Expr::Column(c) => {
                         let ft = schema.field_with_name(&c.name).ok()?.data_type();
-                        if !(crate::types::is_numeric(ft) && crate::types::is_numeric(to)) {
-                            return None;
+                        if keeps_order(ft, to) {
+                            (c, s, *op, Some(to))
+                        } else {
+                            // numeric -> numeric casts preserve order (the literal is cast back exactly)
+                            if !(crate::types::is_numeric(ft) && crate::types::is_numeric(to)) {
+                                return None;
+                            }
+                            // fractional -> integer rounds, so the column's own range doesn't bound it
+                            if to.is_integer() && !ft.is_integer() {
+                                return None;
+                            }
+                            (c, s, *op, None)
                         }
-                        // fractional -> integer rounds, so the column's own range doesn't bound it
-                        if to.is_integer() && !ft.is_integer() {
-                            return None;
-                        }
-                        (c, s, *op)
                     }
                     _ => return None,
                 },
                 _ => return None,
             };
-            let mins = b.mins(&col.name)?;
-            let maxs = b.maxs(&col.name)?;
+            let (mut mins, mut maxs) = (b.mins(&col.name)?, b.maxs(&col.name)?);
+            if let Some(to) = via {
+                mins = arrow::compute::cast(&mins, to).ok()?;
+                maxs = arrow::compute::cast(&maxs, to).ok()?;
+            }
             let lit: Scalar = lit.cast_exact(mins.data_type())?;
             if lit.is_null() {
                 return None;
