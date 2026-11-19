@@ -1,7 +1,10 @@
 name: Release
 
-# Pushing a tag like v0.1.0 builds the wheels and sdist and publishes them to PyPI.
-# Publishing uses Trusted Publishing (OIDC): no token is stored in the repository.
+# Pushing a tag like v0.2.0 builds the wheels, installs and tests each one on its own
+# runner, and publishes them to PyPI. Publishing uses Trusted Publishing (OIDC): no token
+# is stored in the repository. Run it by hand (workflow_dispatch) to build and test only.
+#
+# No sdist: the repository is private and an sdist would publish the Rust source.
 on:
   push:
     tags: ["v*"]
@@ -18,12 +21,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, target: x86_64, manylinux: auto }
+          - { os: ubuntu-latest, target: x86_64, manylinux: "2014" }
           # jemalloc for 64 KB pages too: a build for 4 KB pages crashes on ARM kernels with 64 KB pages
-          - { os: ubuntu-24.04-arm, target: aarch64, manylinux: auto, docker_options: "-e JEMALLOC_SYS_WITH_LG_PAGE=16" }
-          - { os: macos-13, target: x86_64 }
+          - { os: ubuntu-24.04-arm, target: aarch64, manylinux: "2014", docker_options: "-e JEMALLOC_SYS_WITH_LG_PAGE=16" }
+          - { os: macos-15-intel, target: x86_64 }
           - { os: macos-14, target: aarch64 }
           - { os: windows-latest, target: x64 }
+    env:
+      # replaces .cargo/config.toml's target-cpu=native, which would tie the wheel to the runner's CPU
+      RUSTFLAGS: ""
     steps:
       - uses: actions/checkout@v4
       - uses: PyO3/maturin-action@v1
@@ -31,35 +37,44 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux || 'auto' }}
           docker-options: ${{ matrix.docker_options }}
-          args: --release --out dist
+          args: --release --strip --out dist
+      # the oldest Python the abi3 wheel supports, so a wheel that needs a newer one fails here
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: install and test the wheel
+        shell: bash
+        run: |
+          python -m pip install dist/*.whl
+          cd "$RUNNER_TEMP"   # import the installed package, not ./python
+          python -c "
+          import iara
+          t = iara.from_dict({'k': [1, 1, 2], 'v': [1, 2, 3]})
+          r = iara.sql('select k, sum(v) as s from t group by k order by k', t=t).collect()
+          assert r.to_pydict() == {'k': [1, 2], 's': [3, 3]}, r.to_pydict()
+          print('ok', iara.__file__)
+          "
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}-${{ matrix.target }}
           path: dist
 
-  sdist:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: PyO3/maturin-action@v1
-        with:
-          command: sdist
-          args: --out dist
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sdist
-          path: dist
-
   publish:
-    needs: [wheels, sdist]
+    needs: [wheels]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
       id-token: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+      - name: tag matches the package version
+        run: |
+          version=$(grep -m1 '^version' pyproject.toml | cut -d'"' -f2)
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME, pyproject $version"; exit 1; }
+          ls dist
       - uses: pypa/gh-action-pypi-publish@release/v1
