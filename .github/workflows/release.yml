@@ -25,13 +25,13 @@ jobs:
           # jemalloc for 64 KB pages too: a build for 4 KB pages crashes on ARM kernels with 64 KB pages
           - { os: ubuntu-24.04-arm, target: aarch64, manylinux: "2014", docker_options: "-e JEMALLOC_SYS_WITH_LG_PAGE=16" }
           - { os: macos-15-intel, target: x86_64 }
-          - { os: macos-14, target: aarch64 }
+          - { os: macos-15, target: aarch64 }
           - { os: windows-latest, target: x64 }
     env:
       # replaces .cargo/config.toml's target-cpu=native, which would tie the wheel to the runner's CPU
       RUSTFLAGS: ""
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
@@ -39,7 +39,7 @@ jobs:
           docker-options: ${{ matrix.docker_options }}
           args: --release --strip --out dist
       # the oldest Python the abi3 wheel supports, so a wheel that needs a newer one fails here
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.10"
       - name: install and test the wheel
@@ -54,7 +54,7 @@ jobs:
           assert r.to_pydict() == {'k': [1, 2], 's': [3, 3]}, r.to_pydict()
           print('ok', iara.__file__)
           "
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: wheels-${{ matrix.os }}-${{ matrix.target }}
           path: dist
@@ -67,8 +67,8 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v6
         with:
           path: dist
           merge-multiple: true
