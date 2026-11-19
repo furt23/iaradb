@@ -326,13 +326,26 @@ fn optimize_conflicts_with_removals_but_not_with_blind_appends() {
 }
 
 /// A table with version 0 (ids 0..10), 1 (+10..20) and 2 (overwritten by 100..105),
-/// and a few files in places VACUUM looks at.
+/// each committed in a later millisecond than the one before, so every version
+/// can be found by its commit time.
 fn vacuum_table(dir: &TempDir) -> String {
     let path = dir.join("t");
-    write(&path, 0..10, WriteMode::Create, &[]);
-    write(&path, 10..20, WriteMode::Append, &[]);
+    let v0 = write(&path, 0..10, WriteMode::Create, &[]);
+    wait_past_commit(&path, v0);
+    let v1 = write(&path, 10..20, WriteMode::Append, &[]);
+    wait_past_commit(&path, v1);
     write(&path, 100..105, WriteMode::Overwrite, &[]);
     path
+}
+
+/// Wait until the clock is past the commit time of `version`, so the next commit
+/// gets a later time. Quick writes can share a millisecond, and time travel to
+/// that time gives the newest of them.
+fn wait_past_commit(path: &str, version: u64) {
+    let committed = snapshot_at(path, version).timestamp;
+    while now_ms() <= committed {
+        std::thread::sleep(Duration::from_millis(1));
+    }
 }
 
 #[test]
@@ -439,8 +452,9 @@ fn restore_goes_back_to_an_older_version() {
     assert_eq!(content(&path, Some(1)), v1);
     assert_eq!(history(&path, &storage(), Some(1)).unwrap()[0].operation.as_deref(), Some("RESTORE"));
 
-    // by time: the commit time of version 1
+    // by time: the commit time of version 1, which version 2 came after
     let t1 = snapshot_at(&path, 1).timestamp;
+    assert!(t1 < snapshot_at(&path, 2).timestamp);
     let r = restore(&path, &storage(), VersionSpec::Timestamp(t1)).unwrap();
     assert_eq!((r.version, r.restored_version), (4, 1));
     assert_eq!(content(&path, None), v1);
