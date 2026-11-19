@@ -18,7 +18,7 @@ import { GetParameterCommand, SSMClient } from "@aws-sdk/client-ssm";
 import { GetCallerIdentityCommand, STSClient } from "@aws-sdk/client-sts";
 
 import type { AwsSettings } from "../awsSettings";
-import { TAG_CLUSTER, TAG_COMPONENT, type CloudApi, type InstanceStatus, type LaunchSpec } from "./api";
+import { NOT_FOUND, TAG_CLUSTER, TAG_COMPONENT, type CloudApi, type InstanceStatus, type LaunchSpec } from "./api";
 import { AMI_PARAM } from "./policies";
 import { notSetUp, requiredTeam, roleName, securityGroupName, teamTags } from "./team";
 
@@ -179,10 +179,10 @@ export class AwsCloud implements CloudApi {
         for (const i of r.Instances ?? []) out[i.InstanceId!] = { state: i.State?.Name ?? "unknown", publicIp: i.PublicIpAddress, reason: i.StateReason?.Code };
       }
     } catch (e) {
-      if (errorName(e) !== "InvalidInstanceID.NotFound") throw e;
+      if (errorName(e) !== NOT_FOUND) throw e;
     }
-    // instances EC2 no longer knows are long terminated
-    for (const id of instanceIds) out[id] ??= { state: "terminated" };
+    // instances EC2 does not list are long terminated, unless just launched (EC2 lists them a moment later)
+    for (const id of instanceIds) out[id] ??= { state: "terminated", reason: NOT_FOUND };
     return out;
   }
 

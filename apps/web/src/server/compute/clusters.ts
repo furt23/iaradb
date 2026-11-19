@@ -1,4 +1,4 @@
-import type { CloudApi } from "./cloud/api";
+import { type CloudApi, NOT_FOUND } from "./cloud/api";
 import { ClusterError } from "./clusterError";
 import { checkedEnv, checkedInitScript, checkedLibraries, checkedMaxHours, checkedTags } from "./clusterSettings";
 import type { ClusterEvent, ClusterEventKind, ClusterEventLog } from "./events";
@@ -468,7 +468,9 @@ export class ClusterService {
     for (;;) {
       if (this.now() > deadline) throw new ClusterError("BootTimeout", "the machine did not become ready in time");
       const status = (await cloud.describe([instanceId]))[instanceId];
-      if (status.state === "terminated" || status.state === "shutting-down") throw new ClusterError("BootFailed", "the machine stopped while starting");
+      // a machine EC2 does not list yet was just launched: wait for it (the deadline still applies)
+      const gone = status.state === "shutting-down" || (status.state === "terminated" && status.reason !== NOT_FOUND);
+      if (gone) throw new ClusterError("BootFailed", "the machine stopped while starting");
       if (status.state === "running" && status.publicIp) {
         this.d.store.updateCluster(id, (x) => void (x.runtime.publicIp = status.publicIp));
         if (await this.engineReady(id)) break;

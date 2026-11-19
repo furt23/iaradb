@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { CloudApi, InstanceStatus, LaunchSpec } from "./cloud/api";
+import { type CloudApi, type InstanceStatus, type LaunchSpec, NOT_FOUND } from "./cloud/api";
 import { ClusterService, copyName, type StoreApi } from "./clusters";
 import { ClusterEventLog, type EventFiles } from "./events";
 import type { StudioState } from "./store";
@@ -128,6 +128,19 @@ describe("clusters", () => {
     expect(cloud.launched[0].userData).toContain("s3://artifacts/engine/0.1.0/iara.whl");
     // the machine's watchdog waits a little longer than the Studio's reaper
     expect(cloud.launched[0].userData).toContain(`-ge ${20 * 60} ]`);
+  });
+
+  it("waits for a machine EC2 does not list yet instead of terminating it", async () => {
+    const { svc, cloud, store } = setup();
+    const describe = cloud.describe.bind(cloud);
+    let calls = 0;
+    // EC2 lists a new instance a moment after RunInstances returns
+    cloud.describe = async (ids) => (++calls === 1 ? { [ids[0]]: { state: "terminated", reason: NOT_FOUND } } : describe(ids));
+    const c = svc.create({ name: "dev" });
+    svc.start(c.id);
+    await svc.settled(c.id);
+    expect(store.cluster(c.id)!.runtime.state).toBe("running");
+    expect(cloud.instances["i-1"].state).toBe("running");
   });
 
   it("installs the team bucket's proxy on the machine when the Studio has a bucket, without keys", async () => {

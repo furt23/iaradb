@@ -46,6 +46,9 @@ export interface CloudApi {
   studioCidrs(): Promise<string[]>;
 }
 
+/** The state reason of an instance EC2 does not list: long gone, or launched a moment ago and not visible yet. */
+export const NOT_FOUND = "InvalidInstanceID.NotFound";
+
 export const TAG_COMPONENT = "iara:component";
 export const TAG_CLUSTER = "iara:cluster";
 /** set on everything created for a team (when `IARA_TEAM` is set); names: see ./team.ts */
