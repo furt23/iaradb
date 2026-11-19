@@ -658,8 +658,9 @@ impl AggregateSink {
         };
         if !self.spilling.load(Ordering::Relaxed) {
             let mut sorted = cols.iter().map(|c| take(c, &perm, None)).collect::<Result<Vec<_>, _>>()?;
-            // one key hashed alone: its interner hashes it the same way, and need not again
-            if self.group_exprs.len() == 1 && self.part_cols.get().is_none_or(|pc| pc[..] == [0]) {
+            // the whole key hashed: a key column's interner, or keys kept as rows, hash it the
+            // same way, and need not again
+            if self.part_cols.get().is_none_or(|pc| pc.len() == self.group_exprs.len()) {
                 let hashes: Vec<u64> = perm.values().iter().map(|&i| local.hashes[i as usize]).collect();
                 sorted.push(Arc::new(UInt64Array::from(hashes)));
             }
@@ -897,9 +898,8 @@ impl AggregateSink {
         if !any_radix && (locals.len() == 1 || total <= SEQUENTIAL_MERGE_LIMIT || whole_merges) {
             let mut first = locals.remove(0);
             for other in &locals {
-                let other_keys = other.keys.as_ref().unwrap().emit()?;
                 let mut gids = vec![];
-                first.keys.as_mut().unwrap().intern(&other_keys, &mut gids)?;
+                first.keys.as_mut().unwrap().intern_from(other.keys.as_ref().unwrap(), None, &mut gids)?;
                 let ng = first.num_groups();
                 let src: Vec<u32> = (0..other.num_groups() as u32).collect();
                 first.accs.merge(&other.accs, &src, &gids, ng)?;
@@ -914,20 +914,32 @@ impl AggregateSink {
         }
         let nparts = parts.len();
         let shift = 64 - nparts.trailing_zeros();
-        // pre-aggregated tables: emit keys once, in the order of their groups' partitions (one
-        // `take` per column: a partition's keys are then a slice), with the groups of each
-        let prepared: Vec<Option<(Vec<ArrayRef>, Vec<u32>, Vec<usize>)>> = locals
+        // tables that keep each group's hash (see `GroupKeys::hashes`) are partitioned by it, when
+        // rows are partitioned by the whole key: their groups' rows are then copied
+        let k = self.group_exprs.len();
+        let by_stored = self.part_cols.get().is_none_or(|pc| pc.len() == k);
+        // pre-aggregated tables: the order of their groups by partition, and where each
+        // partition's start. Other tables emit their keys once, in that order (one `take` per
+        // column: a partition's keys are then a slice)
+        let prepared: Vec<Option<(Option<Vec<ArrayRef>>, Vec<u32>, Vec<usize>)>> = locals
             .par_iter()
             .map(|l| -> Result<_> {
                 if l.num_groups() == 0 {
                     return Ok(None);
                 }
-                let keys = l.keys.as_ref().unwrap().emit()?;
-                let mut hashes = vec![];
-                self.partition_hashes(&keys, &mut hashes)?;
+                let table = l.keys.as_ref().unwrap();
+                let (keys, hashes) = match table.hashes().filter(|_| by_stored) {
+                    Some(stored) => (None, std::borrow::Cow::Borrowed(stored)),
+                    None => {
+                        let keys = table.emit()?;
+                        let mut hashes = vec![];
+                        self.partition_hashes(&keys, &mut hashes)?;
+                        (Some(keys), std::borrow::Cow::Owned(hashes))
+                    }
+                };
                 // a counting sort of the groups by partition
                 let mut starts = vec![0usize; nparts + 1];
-                for &h in &hashes {
+                for &h in hashes.iter() {
                     starts[partition_of(h, shift) + 1] += 1;
                 }
                 for p in 0..nparts {
@@ -940,8 +952,13 @@ impl AggregateSink {
                     order[at[p]] = g as u32;
                     at[p] += 1;
                 }
-                let sel = UInt32Array::from(order.clone());
-                let keys = keys.iter().map(|k| take(k, &sel, None)).collect::<Result<Vec<_>, _>>()?;
+                let keys = match keys {
+                    Some(keys) => {
+                        let sel = UInt32Array::from(order.clone());
+                        Some(keys.iter().map(|k| take(k, &sel, None)).collect::<Result<Vec<_>, _>>()?)
+                    }
+                    None => None,
+                };
                 Ok(Some((keys, order, starts)))
             })
             .collect::<Result<_>>()?;
@@ -981,8 +998,13 @@ impl AggregateSink {
                     if src.is_empty() {
                         continue;
                     }
-                    let part_keys: Vec<ArrayRef> = lkeys.iter().map(|k| k.slice(from, to - from)).collect();
-                    t.keys.intern(&part_keys, &mut t.gids)?;
+                    match lkeys {
+                        Some(lkeys) => {
+                            let part_keys: Vec<ArrayRef> = lkeys.iter().map(|k| k.slice(from, to - from)).collect();
+                            t.keys.intern(&part_keys, &mut t.gids)?;
+                        }
+                        None => t.keys.intern_from(l.keys.as_ref().unwrap(), Some(src), &mut t.gids)?,
+                    }
                     let ng = t.keys.len();
                     t.accs.merge(&l.accs, src, &t.gids, ng)?;
                 }

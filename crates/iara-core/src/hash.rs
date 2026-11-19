@@ -124,6 +124,15 @@ where
     }
 }
 
+/// Hash the values of an array of byte strings given by `offsets` into `data`.
+fn hash_offsets<O: arrow::array::OffsetSizeTrait>(offsets: &[O], data: &[u8], nulls: Option<&arrow::buffer::NullBuffer>, out: &mut [u64], first: bool) {
+    let nulls = nulls.filter(|n| n.null_count() > 0);
+    for (i, (o, w)) in out.iter_mut().zip(offsets.windows(2)).enumerate() {
+        let h = if nulls.is_some_and(|n| n.is_null(i)) { NULL_HASH } else { hash_bytes(&data[w[0].as_usize()..w[1].as_usize()]) };
+        *o = if first { h } else { combine(*o, h) };
+    }
+}
+
 fn hash_byte_iter<'a>(it: impl Iterator<Item = Option<&'a [u8]>>, out: &mut [u64], first: bool) {
     for (o, v) in out.iter_mut().zip(it) {
         let h = match v {
@@ -159,15 +168,25 @@ pub fn hash_array(array: &ArrayRef, out: &mut [u64], first: bool) -> Result<()> 
         DataType::Timestamp(TimeUnit::Microsecond, _) => prim!(TimestampMicrosecondType),
         DataType::Timestamp(TimeUnit::Nanosecond, _) => prim!(TimestampNanosecondType),
         DataType::Decimal128(_, _) => prim!(Decimal128Type),
-        DataType::Utf8 => hash_byte_iter(array.as_string::<i32>().iter().map(|v| v.map(|s| s.as_bytes())), out, first),
+        DataType::Utf8 => {
+            let a = array.as_string::<i32>();
+            hash_offsets(a.value_offsets(), a.value_data(), a.nulls(), out, first)
+        }
         DataType::LargeUtf8 => {
-            hash_byte_iter(array.as_string::<i64>().iter().map(|v| v.map(|s| s.as_bytes())), out, first)
+            let a = array.as_string::<i64>();
+            hash_offsets(a.value_offsets(), a.value_data(), a.nulls(), out, first)
         }
         DataType::Utf8View => {
             hash_byte_iter(array.as_string_view().iter().map(|v| v.map(|s| s.as_bytes())), out, first)
         }
-        DataType::Binary => hash_byte_iter(array.as_binary::<i32>().iter(), out, first),
-        DataType::LargeBinary => hash_byte_iter(array.as_binary::<i64>().iter(), out, first),
+        DataType::Binary => {
+            let a = array.as_binary::<i32>();
+            hash_offsets(a.value_offsets(), a.value_data(), a.nulls(), out, first)
+        }
+        DataType::LargeBinary => {
+            let a = array.as_binary::<i64>();
+            hash_offsets(a.value_offsets(), a.value_data(), a.nulls(), out, first)
+        }
         DataType::Boolean => {
             let b = array.as_boolean();
             for (i, o) in out.iter_mut().enumerate() {

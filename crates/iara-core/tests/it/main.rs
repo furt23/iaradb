@@ -17,6 +17,7 @@ mod datasets;
 mod delta_read;
 mod distinct_agg;
 mod functions_p1;
+mod group_rows;
 mod join_filter;
 mod join_order;
 mod join_residual;
