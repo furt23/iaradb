@@ -3,6 +3,7 @@ finding and removing everything Iara created in an account."""
 
 from __future__ import annotations
 
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -42,11 +43,36 @@ def studio_resources(sess) -> str:
     return run["Instances"][0]["InstanceId"]
 
 
+def fake_wheel(path: Path, marker: str = "wheel") -> Path:
+    """A wheel with a package file and a RECORD, as maturin writes them."""
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("iara/__init__.py", marker)
+        z.writestr("iaradb-0.dist-info/RECORD", "iara/__init__.py,,\niaradb-0.dist-info/RECORD,,\n")
+    return path
+
+
+def test_the_cluster_wheel_carries_the_kernel(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    (root / "python/iara/kernel/runtime").mkdir(parents=True)
+    (root / "python/iara/kernel/__main__.py").write_text("main")
+    (root / "python/iara/kernel/runtime/spool.py").write_text("spool")
+    (root / "python/iara/kernel/__pycache__").mkdir()
+    (root / "python/iara/kernel/__pycache__/x.pyc").write_bytes(b"pyc")
+    wheel = publish.with_kernel(fake_wheel(tmp_path / "w.whl"), root)
+    with zipfile.ZipFile(wheel) as z:
+        names = z.namelist()
+        assert "iara/kernel/__main__.py" in names and "iara/kernel/runtime/spool.py" in names
+        assert not any("__pycache__" in n for n in names)
+        record = z.read("iaradb-0.dist-info/RECORD").decode().splitlines()
+        assert any(r.startswith("iara/kernel/runtime/spool.py,sha256=") and r.endswith(",5") for r in record)
+        assert z.read("iara/__init__.py") == b"wheel"
+    assert publish.with_kernel(wheel, root).read_bytes() == wheel.read_bytes()  # once only
+
+
 def test_publish_uploads_the_engine_for_its_version(sess, tmp_path: Path) -> None:
     import iara
 
-    wheel = tmp_path / f"iara-{iara.__version__}-cp310-abi3-manylinux_2_28_x86_64.whl"
-    wheel.write_bytes(b"wheel")
+    wheel = fake_wheel(tmp_path / f"iara-{iara.__version__}-cp310-abi3-manylinux_2_28_x86_64.whl")
     first = publish.publish(sess, wheel)
     again = publish.publish(sess, wheel)
     bucket = artifacts_bucket(sess)
@@ -60,8 +86,7 @@ def test_publish_uploads_the_engine_for_its_version(sess, tmp_path: Path) -> Non
 def test_publish_uploads_the_proxy_next_to_the_wheel(sess, tmp_path: Path) -> None:
     import iara
 
-    wheel = tmp_path / f"iara-{iara.__version__}-cp310-abi3-manylinux_2_28_x86_64.whl"
-    wheel.write_bytes(b"wheel")
+    wheel = fake_wheel(tmp_path / f"iara-{iara.__version__}-cp310-abi3-manylinux_2_28_x86_64.whl")
     proxy = tmp_path / "built-proxy"
     proxy.write_bytes(b"proxy")
     publish.publish(sess, wheel, proxy)
@@ -72,16 +97,13 @@ def test_publish_uploads_the_proxy_next_to_the_wheel(sess, tmp_path: Path) -> No
     assert sorted(o["Key"] for o in s3.list_objects_v2(Bucket=bucket)["Contents"]) == sorted([prefix + "iara-s3-proxy-x86_64", prefix + wheel.name])
     assert s3.get_object(Bucket=bucket, Key=prefix + "iara-s3-proxy-x86_64")["Body"].read() == b"proxy"
     # publishing a wheel alone leaves the proxy where it is
-    newer = tmp_path / f"iara-{iara.__version__}-cp311-abi3-manylinux_2_28_x86_64.whl"
-    newer.write_bytes(b"newer")
+    newer = fake_wheel(tmp_path / f"iara-{iara.__version__}-cp311-abi3-manylinux_2_28_x86_64.whl", "newer")
     publish.publish(sess, newer)
     assert sorted(o["Key"] for o in s3.list_objects_v2(Bucket=bucket)["Contents"]) == sorted([prefix + "iara-s3-proxy-x86_64", prefix + newer.name])
 
 
 def test_cleanup_removes_everything(sess, tmp_path: Path) -> None:
-    wheel = tmp_path / "iara-0.1.0-cp310-abi3-manylinux_2_28_x86_64.whl"
-    wheel.write_bytes(b"wheel")
-    publish.publish(sess, wheel)
+    publish.publish(sess, fake_wheel(tmp_path / "iara-0.1.0-cp310-abi3-manylinux_2_28_x86_64.whl"))
     machine = studio_resources(sess)
     left = resources.leftovers(sess)
     assert f"instance {machine}" in left and any(x.startswith("security group") for x in left)

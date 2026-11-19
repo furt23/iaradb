@@ -5,10 +5,13 @@ to ``s3://iara-artifacts-<account>-<region>/engine/<version>/``."""
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import os
 import shutil
 import subprocess
 import sys
+import zipfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -59,6 +62,33 @@ def build(out: Path) -> Path:
     if not wheels:
         raise SystemExit("maturin produced no wheel")
     return wheels[-1]
+
+
+def with_kernel(wheel: Path, root: Path | None = None) -> Path:
+    """The wheel clusters install: the package plus the Studio's kernel (``iara/kernel``),
+    which the PyPI package leaves out (pyproject's ``exclude``). Rewritten in place, with
+    the new files in its RECORD."""
+    src = (root or repo_root()) / "python" / "iara" / "kernel"
+    files = [p for p in sorted(src.rglob("*")) if p.is_file() and "__pycache__" not in p.parts]
+    with zipfile.ZipFile(wheel) as z:
+        if any(n.startswith("iara/kernel/") for n in z.namelist()):
+            return wheel  # published before
+    tmp = wheel.with_name(wheel.name + ".tmp")
+    with zipfile.ZipFile(wheel) as zin, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
+        record = next(n for n in zin.namelist() if n.endswith(".dist-info/RECORD"))
+        for item in zin.infolist():
+            if item.filename != record:
+                zout.writestr(item, zin.read(item.filename))
+        lines = zin.read(record).decode().splitlines()
+        for f in files:
+            name = "iara/kernel/" + f.relative_to(src).as_posix()
+            data = f.read_bytes()
+            zout.writestr(name, data)
+            digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
+            lines.append(f"{name},sha256={digest},{len(data)}")
+        zout.writestr(record, "\n".join(lines) + "\n")
+    tmp.replace(wheel)
+    return wheel
 
 
 def cargo_zigbuild_binary() -> str:
@@ -135,4 +165,4 @@ def publish(sess: Any, wheel: Path | None = None, proxy: Path | None = None) -> 
     if wheel is None:
         wheel = build(repo_root() / "target" / "wheels-linux")
         proxy = proxy or build_proxy(repo_root() / "target" / "proxy-linux")
-    return upload(sess, wheel, iara.__version__, proxy)
+    return upload(sess, with_kernel(wheel), iara.__version__, proxy)
