@@ -12,6 +12,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from iara import set_storage_options
 from iara.kernel import PROTOCOL_VERSION, catalog
 from iara.kernel.analyze import analyze_query
 from iara.kernel.assist.service import AssistService
@@ -108,6 +109,9 @@ class KernelSession:
         self.ws.name, self.ws.tables, self.ws.storage, self.ws._session = fresh.name, fresh.tables, fresh.storage, None
         self.ws.warehouse, self.ws.declared_schemas = fresh.warehouse, fresh.declared_schemas
         self.ws.schema_locations, self.ws.discovered, self.ws.catalogs = fresh.schema_locations, [], fresh.catalogs
+        # now, not when a SQL session is first built: system.publish and others write to the bucket without one
+        for prefix, options in fresh.storage.items():
+            set_storage_options(prefix, options)
         return self.info()
 
     def report_catalog(self, emit: Emit) -> None:

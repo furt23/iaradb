@@ -539,3 +539,11 @@ def test_cells_describe_the_frames_they_make(session: KernelSession):
     assert [(f["name"], f["kind"]) for f in states["p"]["frames"]] == [("a", "LazyFrame"), (None, "DataFrame")]
     assert states["p"]["frames"][1]["columns"] == [{"name": "id", "type": "Int64"}]
     assert [(f["name"], f["rows"]) for f in states["s"]["frames"]] == [("g", 1000)]
+
+
+def test_configure_registers_the_bucket_storage_at_once(session: KernelSession, monkeypatch: pytest.MonkeyPatch):
+    # system.publish writes to the bucket without building a SQL session, so the endpoint must be set by configure
+    seen: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr("iara.kernel.session.set_storage_options", lambda prefix, options: seen.append((prefix, options)))
+    session.configure('[storage."s3://team"]\nendpoint = "https://r2.example"\nregion = "auto"\n')
+    assert seen == [("s3://team", {"endpoint": "https://r2.example", "region": "auto"})]
