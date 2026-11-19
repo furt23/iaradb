@@ -81,6 +81,9 @@ RUN --mount=type=bind,from=wheel,source=/wheels,target=/wheels \
     uv pip install --python /opt/venv/bin/python \
       /wheels/iaradb-*.whl \
       "pyarrow==25.0.1" "marimo==0.25.1" "jedi==0.20.0" "boto3==1.43.111"
+# the PyPI wheel leaves out the Studio's kernel and cloud tooling; the Studio runs both
+COPY python/iara/kernel /opt/venv/lib/python${PYTHON_VERSION}/site-packages/iara/kernel
+COPY python/iara/cloud /opt/venv/lib/python${PYTHON_VERSION}/site-packages/iara/cloud
 
 # the built workspace: the web app with the node_modules it needs at run time
 COPY --from=web /app /app
