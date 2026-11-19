@@ -18,4 +18,4 @@ export const PROTOCOL_VERSION = 2;
  * Version of the iara engine (Python package) this Studio runs on
  * clusters: they install the wheel published for it.
  */
-export const ENGINE_VERSION = "0.1.0";
+export const ENGINE_VERSION = "0.2.0";

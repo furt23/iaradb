@@ -1044,7 +1044,7 @@ dependencies = [
 
 [[package]]
 name = "iara-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1073,7 +1073,7 @@ dependencies = [
 
 [[package]]
 name = "iara-node"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "arrow",
  "chrono",
@@ -1089,7 +1089,7 @@ dependencies = [
 
 [[package]]
 name = "iara-python"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "arrow",
  "chrono",
@@ -1103,7 +1103,7 @@ dependencies = [
 
 [[package]]
 name = "iara-s3-proxy"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytes",
  "futures-util",

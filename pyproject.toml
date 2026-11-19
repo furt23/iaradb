@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "iaradb"
-version = "0.1.0"
+version = "0.2.0"
 description = "Iara: a parallel, vectorized query engine (Rust + Apache Arrow) with a Python API and SQL"
 readme = "README.md"
 requires-python = ">=3.10"
